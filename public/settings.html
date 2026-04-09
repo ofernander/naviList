@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Settings - naviList</title>
+  <link rel="stylesheet" href="/css/main.css" />
+</head>
+<body>
+  <nav>
+    <a href="/playlists" class="nav-brand">naviList</a>
+    <ul>
+      <li><a href="/playlists">Playlists</a></li>
+      <li><a href="/status">Services</a></li>
+      <li><a href="/settings" class="active">Settings</a></li>
+      <li><a href="/logs">Logs</a></li>
+    </ul>
+  </nav>
+  <main>
+    <div class="status-header">
+      <h1>Settings</h1>
+    </div>
+
+    <form method="POST" action="/settings">
+      <div class="status-history">
+
+        <!-- ── Navidrome ──────────────────────────────────────────────── -->
+        <div class="status-history-source">
+          <div class="history-source-header">
+            <span class="history-source-name">Navidrome</span>
+            <span class="history-source-status" id="navidromeStatus"></span>
+            <button type="button" class="btn btn-secondary btn-sm" id="testNavidrome">Test Connection</button>
+          </div>
+          <div class="svc-jobs">
+            <div class="svc-job svc-field">
+              <span class="svc-job-label">URL</span>
+              <input type="text" name="navidrome_url" id="navidrome_url" placeholder="http://localhost:4533" />
+            </div>
+            <div class="svc-job svc-field">
+              <span class="svc-job-label">Username</span>
+              <input type="text" name="navidrome_user" id="navidrome_user" />
+            </div>
+            <div class="svc-job svc-field">
+              <span class="svc-job-label">Password</span>
+              <input type="password" name="navidrome_password" id="navidrome_password" />
+            </div>
+          </div>
+          <div class="folder-section">
+            <div class="folder-header">
+              <span class="folder-label">Music Folders to Sync</span>
+              <button type="button" class="btn btn-secondary btn-sm" id="loadFolders">Load Folders</button>
+              <span id="folderStatus"></span>
+            </div>
+            <div id="folderList" class="folder-list">
+              <p class="folder-hint" id="folderHint">Loading folder settings...</p>
+            </div>
+            <input type="hidden" name="music_folder_ids" id="musicFolderIds" value="" />
+          </div>
+        </div>
+
+        <!-- ── Last.fm ───────────────────────────────────────────────── -->
+        <div class="status-history-source">
+          <div class="history-source-header">
+            <span class="history-source-name">Last.fm</span>
+            <span class="history-source-status" id="lastfmStatus"></span>
+          </div>
+          <div class="svc-jobs">
+            <div class="svc-job svc-field">
+              <span class="svc-job-label">API Key</span>
+              <input type="text" name="lastfm_api_key" id="lastfm_api_key" />
+            </div>
+            <div class="svc-job svc-field">
+              <span class="svc-job-label">Username</span>
+              <input type="text" name="lastfm_username" id="lastfm_username" />
+            </div>
+          </div>
+        </div>
+
+        <!-- ── ListenBrainz ──────────────────────────────────────────── -->
+        <div class="status-history-source">
+          <div class="history-source-header">
+            <span class="history-source-name">ListenBrainz</span>
+            <span class="history-source-status" id="listenbrainzStatus"></span>
+          </div>
+          <div class="svc-jobs">
+            <div class="svc-job svc-field">
+              <span class="svc-job-label">Token</span>
+              <input type="text" name="listenbrainz_token" id="listenbrainz_token" />
+            </div>
+            <div class="svc-job svc-field">
+              <span class="svc-job-label">Username</span>
+              <input type="text" name="listenbrainz_username" id="listenbrainz_username" />
+            </div>
+            <div class="svc-job">
+              <span class="svc-job-label"></span>
+              <label class="rb-toggle" style="flex-direction:row; align-items:center; gap:0.5rem; margin:0; font-size:0.8rem; color:#888;">
+                <input type="checkbox" name="lb_lidarr_enabled" id="lb_lidarr_enabled" value="true" style="accent-color:#5b6af0;" />
+                Auto-send missing playlist artists to Lidarr
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <!-- ── Lidarr ────────────────────────────────────────────────── -->
+        <div class="status-history-source">
+          <div class="history-source-header">
+            <span class="history-source-name">Lidarr</span>
+            <span class="history-source-status" id="lidarrStatus"></span>
+            <button type="button" class="btn btn-secondary btn-sm" id="testLidarr">Connect</button>
+          </div>
+          <div class="svc-jobs">
+            <div class="svc-job svc-field">
+              <span class="svc-job-label">URL</span>
+              <input type="text" name="lidarr_url" id="lidarr_url" placeholder="http://localhost:8686" />
+            </div>
+            <div class="svc-job svc-field">
+              <span class="svc-job-label">API Key</span>
+              <input type="text" name="lidarr_api_key" id="lidarr_api_key" />
+            </div>
+          </div>
+          <div class="folder-section" id="lidarrProfiles" style="display:none">
+            <div class="folder-header"><span class="folder-label">Root Folder</span></div>
+            <select id="lidarr_root_folder" style="width:100%; margin-bottom:0.75rem;"></select>
+            <div class="folder-header"><span class="folder-label">Quality Profile</span></div>
+            <select id="lidarr_quality_profile_id" style="width:100%; margin-bottom:0.75rem;"></select>
+            <div class="folder-header"><span class="folder-label">Metadata Profile</span></div>
+            <select id="lidarr_metadata_profile_id" style="width:100%;"></select>
+          </div>
+          <input type="hidden" id="lidarr_root_folder_h" name="lidarr_root_folder" />
+          <input type="hidden" id="lidarr_quality_profile_id_h" name="lidarr_quality_profile_id" />
+          <input type="hidden" id="lidarr_metadata_profile_id_h" name="lidarr_metadata_profile_id" />
+        </div>
+
+        <!-- ── Library ───────────────────────────────────────────────── -->
+        <div class="status-history-source">
+          <div class="history-source-header">
+            <span class="history-source-name">Library</span>
+          </div>
+          <div class="svc-jobs">
+            <div class="svc-job">
+              <span class="svc-job-label"></span>
+              <label class="rb-toggle" style="flex-direction:row; align-items:center; gap:0.5rem; margin:0; font-size:0.8rem; color:#888;">
+                <input type="checkbox" name="deezer_artist_images" id="deezer_artist_images" value="true" style="accent-color:#5b6af0;" />
+                Fetch artist images from Deezer during library sync
+              </label>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <div style="margin-top: 1.5rem;">
+        <button type="submit" class="btn">Save Settings</button>
+      </div>
+
+    </form>
+  </main>
+  <script>
+    // ── Load saved settings into form fields ──────────────────────────────
+    async function loadSettings() {
+      try {
+        const res  = await fetch('/settings/api');
+        const data = await res.json();
+        if (!data.ok) return;
+        const s = data.settings;
+
+        const fields = [
+          'navidrome_url', 'navidrome_user', 'navidrome_password',
+          'lastfm_api_key', 'lastfm_username',
+          'listenbrainz_token', 'listenbrainz_username',
+          'lidarr_url', 'lidarr_api_key'
+        ];
+        fields.forEach(f => {
+          const el = document.getElementById(f);
+          if (el) el.value = s[f] || '';
+        });
+
+        const imgCb = document.getElementById('deezer_artist_images');
+        if (imgCb) imgCb.checked = s.deezer_artist_images === 'true';
+
+        const lbLidarrCb = document.getElementById('lb_lidarr_enabled');
+        if (lbLidarrCb) lbLidarrCb.checked = s.lb_lidarr_enabled === 'true';
+
+        // Set status indicators
+        const naviEl = document.getElementById('navidromeStatus');
+        if (naviEl) {
+          naviEl.textContent = s.navidrome_url ? '✓ Configured' : '— Not set';
+          naviEl.className = 'history-source-status ' + (s.navidrome_url ? 'status-ok' : '');
+        }
+        const lfEl = document.getElementById('lastfmStatus');
+        if (lfEl) {
+          lfEl.textContent = s.lastfm_api_key ? `✓ ${s.lastfm_username || 'Configured'}` : '— Not set';
+          lfEl.className = 'history-source-status ' + (s.lastfm_api_key ? 'status-ok' : '');
+        }
+        const lbEl = document.getElementById('listenbrainzStatus');
+        if (lbEl) {
+          lbEl.textContent = s.listenbrainz_token ? `✓ ${s.listenbrainz_username || 'Configured'}` : '— Not set';
+          lbEl.className = 'history-source-status ' + (s.listenbrainz_token ? 'status-ok' : '');
+        }
+        const liEl = document.getElementById('lidarrStatus');
+        if (liEl) {
+          liEl.textContent = s.lidarr_url ? '✓ Configured' : '— Not set';
+          liEl.className = 'history-source-status ' + (s.lidarr_url ? 'status-ok' : '');
+        }
+
+        // If Lidarr is configured, load profiles
+        if (s.lidarr_url && s.lidarr_api_key) {
+          loadLidarrProfiles(s);
+        }
+
+        const savedIds = document.getElementById('musicFolderIds');
+        savedIds.value = s.music_folder_ids || '';
+
+        const hint = document.getElementById('folderHint');
+        if (s.music_folder_ids) {
+          hint.textContent = `Saved folder IDs: ${s.music_folder_ids} — click Load Folders to update`;
+        } else {
+          hint.textContent = 'No folders selected — all folders will be synced. Click Load Folders to restrict.';
+        }
+      } catch (e) {
+        console.error('Failed to load settings', e);
+      }
+    }
+
+    // ── Test Navidrome connection ──────────────────────────────────────────
+    document.getElementById('testNavidrome').addEventListener('click', async () => {
+      const el = document.getElementById('navidromeStatus');
+      el.textContent = 'Testing...';
+      el.className = 'history-source-status status-pending';
+      try {
+        const res = await fetch('/settings/test-navidrome', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            navidrome_url:      document.getElementById('navidrome_url').value,
+            navidrome_user:     document.getElementById('navidrome_user').value,
+            navidrome_password: document.getElementById('navidrome_password').value
+          })
+        });
+        const data = await res.json();
+        el.textContent = data.ok ? '✓ Connected' : `✗ ${data.error}`;
+        el.className = 'history-source-status ' + (data.ok ? 'status-ok' : 'status-err');
+      } catch (e) {
+        el.textContent = '✗ Request failed';
+        el.className = 'history-source-status status-err';
+      }
+    });
+
+    // ── Load music folders ─────────────────────────────────────────────────
+    document.getElementById('loadFolders').addEventListener('click', async () => {
+      const statusEl = document.getElementById('folderStatus');
+      const listEl   = document.getElementById('folderList');
+      const savedIds = (document.getElementById('musicFolderIds').value || '')
+        .split(',').map(s => s.trim()).filter(Boolean);
+
+      statusEl.textContent = 'Loading...';
+      statusEl.className = 'status-pending';
+
+      try {
+        const res  = await fetch('/settings/music-folders');
+        const data = await res.json();
+
+        if (!data.ok || data.folders.length === 0) {
+          statusEl.textContent = '✗ No folders found';
+          statusEl.className = 'status-err';
+          return;
+        }
+
+        statusEl.textContent = '';
+        listEl.innerHTML = '';
+
+        data.folders.forEach(folder => {
+          const checked = savedIds.includes(String(folder.id)) ? 'checked' : '';
+          const row = document.createElement('label');
+          row.className = 'folder-row';
+          row.innerHTML = `<input type="checkbox" class="folder-checkbox" value="${folder.id}" ${checked} />${folder.name}`;
+          listEl.appendChild(row);
+        });
+
+        function updateHidden() {
+          const checked = [...document.querySelectorAll('.folder-checkbox:checked')].map(el => el.value);
+          document.getElementById('musicFolderIds').value = checked.join(',');
+        }
+        document.querySelectorAll('.folder-checkbox').forEach(cb => cb.addEventListener('change', updateHidden));
+        updateHidden();
+
+      } catch (e) {
+        statusEl.textContent = '✗ Request failed';
+        statusEl.className = 'status-err';
+      }
+    });
+
+    // ── Lidarr connect + profile dropdowns ───────────────────────────────
+    function populateSelect(id, items, valueKey, labelKey, savedValue) {
+      const sel = document.getElementById(id);
+      if (!sel) return;
+      sel.innerHTML = '';
+      items.forEach(item => {
+        const opt = document.createElement('option');
+        opt.value = item[valueKey];
+        opt.textContent = item[labelKey];
+        if (String(item[valueKey]) === String(savedValue)) opt.selected = true;
+        sel.appendChild(opt);
+      });
+      const hidden = document.getElementById(id + '_h');
+      if (hidden) {
+        hidden.value = sel.value;
+        sel.addEventListener('change', () => { hidden.value = sel.value; });
+      }
+    }
+
+    async function loadLidarrProfiles(savedSettings) {
+      const statusEl = document.getElementById('lidarrStatus');
+      try {
+        const res  = await fetch('/settings/lidarr-profiles');
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error);
+
+        populateSelect('lidarr_root_folder',        data.rootFolders,      'path', 'path', savedSettings?.lidarr_root_folder);
+        populateSelect('lidarr_quality_profile_id',  data.qualityProfiles,  'id',   'name', savedSettings?.lidarr_quality_profile_id);
+        populateSelect('lidarr_metadata_profile_id', data.metadataProfiles, 'id',   'name', savedSettings?.lidarr_metadata_profile_id);
+
+        document.getElementById('lidarrProfiles').style.display = '';
+        if (statusEl) { statusEl.textContent = '✓ Connected'; statusEl.className = 'history-source-status status-ok'; }
+      } catch (e) {
+        if (statusEl) { statusEl.textContent = `✗ ${e.message}`; statusEl.className = 'history-source-status status-err'; }
+      }
+    }
+
+    document.getElementById('testLidarr').addEventListener('click', async () => {
+      const statusEl = document.getElementById('lidarrStatus');
+      statusEl.textContent = 'Connecting...';
+      statusEl.className = 'history-source-status status-pending';
+      const url = document.getElementById('lidarr_url').value;
+      const key = document.getElementById('lidarr_api_key').value;
+      try {
+        const res  = await fetch('/settings/test-lidarr', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ lidarr_url: url, lidarr_api_key: key })
+        });
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error);
+        await fetch('/settings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({ lidarr_url: url, lidarr_api_key: key }).toString()
+        });
+        await loadLidarrProfiles({});
+      } catch (e) {
+        statusEl.textContent = `✗ ${e.message}`;
+        statusEl.className = 'history-source-status status-err';
+      }
+    });
+
+    loadSettings();
+  </script>
+</body>
+</html>

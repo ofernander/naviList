@@ -1,0 +1,25 @@
+services:
+  navilist:
+    build: .
+    container_name: navilist
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./data:/app/data
+    environment:
+      - PORT=${PORT:-3000}
+      - DB_PATH=${DB_PATH:-/app/data/navilist.db}
+      - NAVIDROME_URL=${NAVIDROME_URL:-}
+      - NAVIDROME_USER=${NAVIDROME_USER:-}
+      - NAVIDROME_PASSWORD=${NAVIDROME_PASSWORD:-}
+      - MUSIC_FOLDER_IDS=${MUSIC_FOLDER_IDS:-}
+      - LASTFM_API_KEY=${LASTFM_API_KEY:-}
+      - LASTFM_USERNAME=${LASTFM_USERNAME:-}
+      - LISTENBRAINZ_TOKEN=${LISTENBRAINZ_TOKEN:-}
+      - LISTENBRAINZ_USERNAME=${LISTENBRAINZ_USERNAME:-}
+      - LIDARR_URL=${LIDARR_URL:-}
+      - LIDARR_API_KEY=${LIDARR_API_KEY:-}
+      - LIDARR_ROOT_FOLDER=${LIDARR_ROOT_FOLDER:-}
+      - LIDARR_QUALITY_PROFILE_ID=${LIDARR_QUALITY_PROFILE_ID:-}
+      - LIDARR_METADATA_PROFILE_ID=${LIDARR_METADATA_PROFILE_ID:-}

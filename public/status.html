@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Services - naviList</title>
+  <link rel="stylesheet" href="/css/main.css" />
+</head>
+<body>
+  <nav>
+    <a href="/playlists" class="nav-brand">naviList</a>
+    <ul>
+      <li><a href="/playlists">Playlists</a></li>
+      <li><a href="/status" class="active">Services</a></li>
+      <li><a href="/settings">Settings</a></li>
+      <li><a href="/logs">Logs</a></li>
+    </ul>
+  </nav>
+  <main>
+    <section class="status-page">
+      <div class="status-header">
+        <h1>Services</h1>
+        <div class="status-actions">
+          <button class="btn btn-secondary" id="refreshBtn">Refresh</button>
+          <span id="syncStatus"></span>
+        </div>
+      </div>
+      <p class="status-updated">Last checked: <span id="lastChecked">—</span><span id="syncRunning"></span></p>
+
+      <!-- ── Service cards ──────────────────────────────────────────────── -->
+      <div class="status-history">
+
+        <!-- Navidrome -->
+        <div class="status-history-source">
+          <div class="history-source-header">
+            <span class="history-source-name">Navidrome</span>
+            <span class="history-source-status" id="naviConnStatus"></span>
+            <button class="btn btn-secondary btn-sm" id="syncNaviBtn">Sync Library</button>
+          </div>
+          <div class="svc-sub" id="naviUrl"></div>
+          <div class="svc-jobs">
+            <div class="svc-job"><span class="svc-job-label">Library</span><span id="naviLibMeta">—</span></div>
+            <div class="svc-job"><span class="svc-job-label">Last sync</span><span id="naviSyncMeta">—</span></div>
+          </div>
+        </div>
+
+        <!-- Last.fm -->
+        <div class="status-history-source">
+          <div class="history-source-header">
+            <span class="history-source-name">Last.fm</span>
+            <span class="history-source-status" id="lastfmConnStatus"></span>
+            <button class="btn btn-secondary btn-sm" id="syncLastfmAllBtn">Sync All</button>
+            <span class="history-source-status" id="lastfmAllStatus"></span>
+          </div>
+          <div class="svc-jobs">
+            <div class="svc-job"><span class="svc-job-label">History</span><span id="lastfmMeta">—</span></div>
+            <div class="svc-job"><span class="svc-job-label">Loved tracks</span><span id="lastfmLovedMeta">—</span></div>
+            <div class="svc-job"><span class="svc-job-label">Top artists</span><span id="lastfmTopArtistsMeta">—</span></div>
+            <div class="svc-job"><span class="svc-job-label">Top tracks</span><span id="lastfmTopTracksMeta">—</span></div>
+            <div class="svc-job"><span class="svc-job-label">Artist tags</span><span id="lastfmArtistTagsMeta">—</span></div>
+          </div>
+        </div>
+
+        <!-- ListenBrainz -->
+        <div class="status-history-source">
+          <div class="history-source-header">
+            <span class="history-source-name">ListenBrainz</span>
+            <span class="history-source-status" id="lbConnStatus"></span>
+            <button class="btn btn-secondary btn-sm" id="syncLbAllBtn">Sync All</button>
+            <span class="history-source-status" id="lbAllStatus"></span>
+          </div>
+          <div class="svc-jobs">
+            <div class="svc-job"><span class="svc-job-label">History</span><span id="lbMeta">—</span></div>
+            <div class="svc-job"><span class="svc-job-label">Loved tracks</span><span id="lbLovedMeta">—</span></div>
+            <div class="svc-job"><span class="svc-job-label">Top artists</span><span id="lbTopArtistsMeta">—</span></div>
+            <div class="svc-job"><span class="svc-job-label">Top tracks</span><span id="lbTopTracksMeta">—</span></div>
+            <div class="svc-job"><span class="svc-job-label">Playlists</span><span id="lbPlaylistsMeta">—</span></div>
+          </div>
+        </div>
+
+        <!-- Lidarr -->
+        <div class="status-history-source">
+          <div class="history-source-header">
+            <span class="history-source-name">Lidarr</span>
+            <span class="history-source-status" id="lidarrConnStatus"></span>
+          </div>
+          <div class="svc-sub" id="lidarrUrl"></div>
+          <div class="svc-jobs">
+            <div class="svc-job"><span class="svc-job-label">Discovery</span><span id="discoveryMeta">—</span></div>
+          </div>
+        </div>
+
+      </div>
+    </section>
+  </main>
+
+  <script>
+    let autoRefresh = null;
+    let syncCheckInterval = null;
+    let lbSyncRunning = false;
+
+    function formatDate(unix) {
+      return unix ? new Date(unix * 1000).toLocaleString() : null;
+    }
+
+    function timeAgo(unix) {
+      if (!unix) return null;
+      const diff = Math.floor(Date.now() / 1000) - unix;
+      if (diff < 60)    return `${diff}s ago`;
+      if (diff < 3600)  return `${Math.floor(diff / 60)}m ago`;
+      if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+      return `${Math.floor(diff / 86400)}d ago`;
+    }
+
+    async function loadStatus() {
+      try {
+        const res  = await fetch('/status/api');
+        const data = await res.json();
+        if (!data.ok) return;
+        document.getElementById('lastChecked').textContent = new Date().toLocaleTimeString();
+        document.getElementById('syncRunning').textContent = data.syncState.running ? ' · Sync in progress...' : '';
+        document.getElementById('syncRunning').className   = data.syncState.running ? 'status-pending' : '';
+
+        // Navidrome
+        document.getElementById('naviConnStatus').textContent = data.ping.ok ? '✓ Connected' : '✗ Unreachable';
+        document.getElementById('naviConnStatus').className   = `history-source-status ${data.ping.ok ? 'status-ok' : 'status-err'}`;
+        document.getElementById('naviUrl').textContent        = data.navidromeUrl || '';
+        document.getElementById('naviLibMeta').textContent    = `${data.trackCount.toLocaleString()} tracks · ${data.albumCount.toLocaleString()} albums · ${data.artistCount.toLocaleString()} artists · ${data.genreCount.toLocaleString()} genres`;
+        document.getElementById('naviSyncMeta').textContent   = data.lastSync ? `${formatDate(data.lastSync)} · ${timeAgo(data.lastSync)}` : 'Never';
+
+        // Gate other Sync All buttons on Navidrome library state
+        const syncRunning = data.syncState.running;
+        const hasLibrary  = data.trackCount > 0;
+        const canSync     = !syncRunning && hasLibrary;
+        document.getElementById('syncLastfmAllBtn').disabled = !canSync;
+        document.getElementById('syncLbAllBtn').disabled     = !canSync || lbSyncRunning;
+        if (syncRunning) {
+          if (!syncCheckInterval) {
+            syncCheckInterval = setInterval(loadStatus, 3000);
+          }
+          document.getElementById('lastfmAllStatus').textContent = 'Waiting for Navidrome sync…';
+          document.getElementById('lastfmAllStatus').className   = 'history-source-status status-pending';
+          document.getElementById('lbAllStatus').textContent     = 'Waiting for Navidrome sync…';
+          document.getElementById('lbAllStatus').className       = 'history-source-status status-pending';
+        } else if (!hasLibrary) {
+          if (syncCheckInterval) { clearInterval(syncCheckInterval); syncCheckInterval = null; }
+          document.getElementById('lastfmAllStatus').textContent = 'Sync Navidrome library first';
+          document.getElementById('lastfmAllStatus').className   = 'history-source-status status-pending';
+          document.getElementById('lbAllStatus').textContent     = 'Sync Navidrome library first';
+          document.getElementById('lbAllStatus').className       = 'history-source-status status-pending';
+        } else {
+          if (syncCheckInterval) { clearInterval(syncCheckInterval); syncCheckInterval = null; }
+        }
+
+        // Last.fm
+        const lf = data.services?.lastfm;
+        document.getElementById('lastfmConnStatus').textContent = lf?.configured ? `@${lf.username}` : 'Not configured';
+        document.getElementById('lastfmConnStatus').className   = `history-source-status ${lf?.configured ? 'status-ok' : 'status-err'}`;
+
+        // ListenBrainz
+        const lb = data.services?.listenbrainz;
+        document.getElementById('lbConnStatus').textContent = lb?.configured ? `@${lb.username}` : 'Not configured';
+        document.getElementById('lbConnStatus').className   = `history-source-status ${lb?.configured ? 'status-ok' : 'status-err'}`;
+
+        // Lidarr
+        const li = data.services?.lidarr;
+        document.getElementById('lidarrConnStatus').textContent = li?.configured ? '✓ Configured' : 'Not configured';
+        document.getElementById('lidarrConnStatus').className   = `history-source-status ${li?.configured ? 'status-ok' : 'status-err'}`;
+        document.getElementById('lidarrUrl').textContent        = li?.url || '';
+      } catch (e) {
+        console.error('Failed to load status', e);
+      }
+    }
+
+    // ── Navidrome sync ─────────────────────────────────────────────────────
+    const syncNaviBtn = document.getElementById('syncNaviBtn');
+    let pollInterval  = null;
+
+    function stopPolling() {
+      if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
+    }
+
+    function formatSyncResult(r) {
+      let msg = `✓ ${r.total.toLocaleString()} tracks (${r.inserted} new, ${r.updated} updated`;
+      if (r.removed > 0) msg += `, ${r.removed} removed`;
+      return msg + ')';
+    }
+
+    async function pollSyncStatus() {
+      try {
+        const res  = await fetch('/sync/status');
+        const data = await res.json();
+        if (!data.running) {
+          stopPolling();
+          syncNaviBtn.disabled    = false;
+          syncNaviBtn.textContent = 'Sync Library';
+          if (data.lastResult?.ok) {
+            document.getElementById('naviLibMeta').textContent = formatSyncResult(data.lastResult);
+            setTimeout(() => loadStatus(), 500);
+          } else if (data.lastResult?.ok === false) {
+            document.getElementById('naviLibMeta').textContent = `✗ ${data.lastResult.error}`;
+          }
+        } else {
+          document.getElementById('naviLibMeta').textContent = `Syncing… ${data.trackCount.toLocaleString()} tracks in library`;
+        }
+      } catch (e) {
+        stopPolling();
+        document.getElementById('naviLibMeta').textContent = '✗ Status check failed';
+        syncNaviBtn.disabled    = false;
+        syncNaviBtn.textContent = 'Sync Library';
+      }
+    }
+
+    syncNaviBtn.addEventListener('click', async () => {
+      syncNaviBtn.disabled    = true;
+      syncNaviBtn.textContent = 'Starting...';
+      document.getElementById('naviLibMeta').textContent = '';
+      try {
+        const res  = await fetch('/sync/library', { method: 'POST' });
+        const data = await res.json();
+        if (!data.ok) {
+          document.getElementById('naviLibMeta').textContent = `✗ ${data.error}`;
+          syncNaviBtn.disabled    = false;
+          syncNaviBtn.textContent = 'Sync Library';
+          return;
+        }
+        document.getElementById('naviLibMeta').textContent = 'Syncing…';
+        pollInterval = setInterval(pollSyncStatus, 2000);
+      } catch (e) {
+        document.getElementById('naviLibMeta').textContent = '✗ Request failed';
+        syncNaviBtn.disabled    = false;
+        syncNaviBtn.textContent = 'Sync Library';
+      }
+    });
+
+    // ── Counts / job meta ──────────────────────────────────────────────────
+    function formatHistoryResult(result) {
+      if (!result) return '—';
+      try {
+        const r = typeof result === 'string' ? JSON.parse(result) : result;
+        if (r.error) return `✗ ${r.error.includes('aborted') ? 'Request timed out' : r.error}`;
+        return `${r.written} written · ${r.matched} matched · ${r.unmatched} unmatched`;
+      } catch (e) { return '—'; }
+    }
+
+    async function loadAllStatus() {
+      try {
+        const [histRes, countsRes] = await Promise.all([
+          fetch('/sync/history/status').then(r => r.json()),
+          fetch('/status/api/counts').then(r => r.json())
+        ]);
+
+        const lf = histRes.lastfm;
+        document.getElementById('lastfmMeta').textContent = lf
+          ? `${formatHistoryResult(lf.result)} · Last run: ${lf.last_run_at ? timeAgo(lf.last_run_at) : 'never'}`
+          : 'Never imported';
+
+        const lb = histRes.listenbrainz;
+        document.getElementById('lbMeta').textContent = lb
+          ? `${formatHistoryResult(lb.result)} · Last run: ${lb.last_run_at ? timeAgo(lb.last_run_at) : 'never'}`
+          : 'Never imported';
+
+        const loved      = countsRes.loved            || 0;
+        const disliked   = countsRes.disliked         || 0;
+        const topArtists = countsRes.topArtists       || 0;
+        const topTracks  = countsRes.topTracks        || 0;
+        const tagsLfm    = countsRes.artistTagsLastfm || 0;
+
+        document.getElementById('lastfmLovedMeta').textContent      = `${loved} loved · ${disliked} disliked`;
+        document.getElementById('lastfmTopArtistsMeta').textContent  = `${topArtists} artist-period rows`;
+        document.getElementById('lastfmTopTracksMeta').textContent   = `${topTracks} track-period rows`;
+        document.getElementById('lastfmArtistTagsMeta').textContent  = `${tagsLfm} artists tagged`;
+        document.getElementById('lbLovedMeta').textContent           = `${loved} loved · ${disliked} disliked`;
+        document.getElementById('lbTopArtistsMeta').textContent      = `${topArtists} artist-period rows`;
+        document.getElementById('lbTopTracksMeta').textContent       = `${topTracks} track-period rows`;
+
+        const lbPl = countsRes.lbPlaylists || 0;
+        if (!lbSyncRunning) {
+          document.getElementById('lbPlaylistsMeta').innerHTML =
+            `${lbPl} playlist${lbPl !== 1 ? 's' : ''} · <a href="/playlists?lb=1" class="status-ok" style="font-size:0.8rem;">Manage →</a>`;
+        }
+
+        const pending = countsRes.missingPending || 0;
+        const sent    = countsRes.missingSent    || 0;
+        const found   = countsRes.missingFound   || 0;
+        document.getElementById('discoveryMeta').textContent =
+          `${pending} pending · ${sent} sent to Lidarr · ${found} found in library`;
+      } catch (e) { /* silent */ }
+    }
+
+    // ── Sync All ───────────────────────────────────────────────────────────
+    async function runAllJobs(jobs, btn, statusEl) {
+      btn.disabled    = true;
+      btn.textContent = 'Syncing...';
+      statusEl.textContent = '';
+      statusEl.className   = 'history-source-status status-pending';
+      try {
+        for (const route of jobs) {
+          await fetch(`/sync/${route}`, { method: 'POST' });
+          await new Promise(r => setTimeout(r, 300));
+        }
+        statusEl.textContent = '✓ All jobs started';
+        statusEl.className   = 'history-source-status status-ok';
+        setTimeout(() => loadAllStatus(), 2000);
+      } catch (e) {
+        statusEl.textContent = '✗ Request failed';
+        statusEl.className   = 'history-source-status status-err';
+      } finally {
+        btn.disabled    = false;
+        btn.textContent = 'Sync All';
+      }
+    }
+
+    document.getElementById('syncLastfmAllBtn').addEventListener('click', () =>
+      runAllJobs(
+        ['history/lastfm?force=true', 'loved/lastfm', 'top-artists/lastfm', 'top-tracks/lastfm', 'artist-tags/lastfm'],
+        document.getElementById('syncLastfmAllBtn'),
+        document.getElementById('lastfmAllStatus')
+      )
+    );
+
+    document.getElementById('syncLbAllBtn').addEventListener('click', async () => {
+      const btn      = document.getElementById('syncLbAllBtn');
+      const statusEl = document.getElementById('lbAllStatus');
+      lbSyncRunning        = true;
+      btn.disabled         = true;
+      btn.textContent      = 'Syncing...';
+      statusEl.textContent = '';
+      statusEl.className   = 'history-source-status status-pending';
+      try {
+        // Fire-and-forget jobs — respond immediately on server
+        for (const route of ['history/listenbrainz?force=true', 'loved/listenbrainz', 'top-artists/listenbrainz', 'top-tracks/listenbrainz']) {
+          await fetch(`/sync/${route}`, { method: 'POST' });
+          await new Promise(r => setTimeout(r, 300));
+        }
+        // Blocking job — holds open until all playlists are fetched and cached
+        document.getElementById('lbPlaylistsMeta').textContent = 'Building cache…';
+        statusEl.textContent = 'Syncing playlists…';
+        await fetch('/sync/lb-playlists', { method: 'POST' });
+        statusEl.textContent = '✓ Done';
+        statusEl.className   = 'history-source-status status-ok';
+        setTimeout(() => loadAllStatus(), 500);
+      } catch (e) {
+        statusEl.textContent = '✗ Request failed';
+        statusEl.className   = 'history-source-status status-err';
+      } finally {
+        lbSyncRunning   = false;
+        btn.disabled    = false;
+        btn.textContent = 'Sync All';
+      }
+    });
+
+    // ── Auto refresh ───────────────────────────────────────────────────────
+    function startAutoRefresh() {
+      if (autoRefresh) clearTimeout(autoRefresh);
+      autoRefresh = setTimeout(() => {
+        if (lbSyncRunning) { startAutoRefresh(); return; }
+        window.location.reload();
+      }, 30000);
+    }
+
+    document.getElementById('refreshBtn').addEventListener('click', () => window.location.reload());
+
+    loadStatus();
+    loadAllStatus();
+    startAutoRefresh();
+  </script>
+</body>
+</html>

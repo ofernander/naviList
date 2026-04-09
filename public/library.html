@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Library - naviList</title>
+  <link rel="stylesheet" href="/css/main.css" />
+</head>
+<body>
+  <nav>
+    <a href="/" class="nav-brand">naviList</a>
+    <ul>
+      <li><a href="/playlists">Playlists</a></li>
+      <li><a href="/status">Status</a></li>
+      <li><a href="/settings">Settings</a></li>
+    </ul>
+  </nav>
+  <main class="full-width">
+    <div class="library-page">
+
+      <!-- Toolbar -->
+      <div class="library-toolbar">
+        <div class="library-filters">
+          <input type="text" id="searchInput" placeholder="Search artists..." />
+          <select id="genreFilter">
+            <option value="">All Genres</option>
+            <!-- Populated by JS via /playlists/api/genres -->
+          </select>
+          <select id="sortSelect">
+            <option value="artist" selected>Artist A-Z</option>
+            <option value="play_count_desc">Most Played</option>
+            <option value="album_count_desc">Most Albums</option>
+          </select>
+        </div>
+        <div class="library-meta">
+          <span id="artistCount">—</span> artists
+        </div>
+      </div>
+
+      <!-- Selection bar — inner actions rendered by JS depending on addTo mode -->
+      <div class="selection-bar" id="selectionBar" style="display:none">
+        <span id="selectionCount">0 selected</span>
+        <span id="selectionActions"></span>
+        <button class="btn btn-sm btn-secondary" id="clearSelectionBtn">Clear selection</button>
+        <span id="addStatus"></span>
+      </div>
+
+      <!-- Artist grid -->
+      <div class="album-grid-container" id="gridContainer">
+        <div class="album-grid" id="albumGrid"></div>
+        <div class="grid-loading" id="gridLoading" style="display:none">Loading...</div>
+      </div>
+
+    </div>
+  </main>
+  <script>
+    // ADD_TO read from URL instead of EJS template var
+    const ADD_TO = new URLSearchParams(window.location.search).get('addTo') || '';
+
+    let state = {
+      loading:          false,
+      search:           '',
+      genre:            '',
+      sort:             'artist',
+      selected:         new Set(),
+      expandedArtistId: null
+    };
+
+    // ── Helpers ──────────────────────────────────────────────────────────────
+    function esc(str) {
+      if (!str) return '';
+      return String(str)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    function fmtDur(s) {
+      if (!s) return '—';
+      return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+    }
+
+    // ── Selection bar actions — rendered once on init ────────────────────────
+    function initSelectionActions() {
+      const el = document.getElementById('selectionActions');
+      if (ADD_TO) {
+        el.innerHTML = `<button class="btn btn-sm" id="addSelectedBtn">Add to playlist</button>`;
+      } else {
+        el.innerHTML = `
+          <select id="playlistSelect" class="playlist-select">
+            <option value="">— Add to playlist —</option>
+          </select>
+          <button class="btn btn-sm" id="addSelectedBtn">Add</button>
+          <button class="btn btn-sm btn-secondary" id="newFromSelectedBtn">New playlist from selection</button>
+        `;
+      }
+
+      document.getElementById('addSelectedBtn').addEventListener('click', async () => {
+        const ids    = [...state.selected];
+        const status = document.getElementById('addStatus');
+        if (!ids.length) return;
+
+        const playlistId = ADD_TO || document.getElementById('playlistSelect')?.value;
+        if (!playlistId) { status.textContent = 'Select a playlist'; status.className = 'status-err'; return; }
+
+        status.textContent = 'Adding...'; status.className = 'status-pending';
+        const res  = await fetch(`/playlists/${playlistId}/tracks/add`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ trackIds: ids })
+        });
+        const data = await res.json();
+        if (data.ok) {
+          status.textContent = `✓ Added ${ids.length} tracks`; status.className = 'status-ok';
+          state.selected.clear(); updateSelectionBar();
+          if (ADD_TO) setTimeout(() => window.location.href = `/playlists?id=${ADD_TO}`, 800);
+        } else {
+          status.textContent = `✗ ${data.error}`; status.className = 'status-err';
+        }
+      });
+
+      document.getElementById('newFromSelectedBtn')?.addEventListener('click', async () => {
+        const ids    = [...state.selected];
+        const status = document.getElementById('addStatus');
+        if (!ids.length) return;
+        const name = prompt('New playlist name:');
+        if (!name?.trim()) return;
+        status.textContent = 'Creating...'; status.className = 'status-pending';
+        const res  = await fetch('/playlists/create', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: name.trim(), trackIds: ids })
+        });
+        const data = await res.json();
+        if (data.ok) {
+          status.textContent = `✓ Created "${name.trim()}"`; status.className = 'status-ok';
+          setTimeout(() => window.location.href = '/playlists', 800);
+        } else {
+          status.textContent = `✗ ${data.error}`; status.className = 'status-err';
+        }
+      });
+    }
+
+    // ── Load genres into dropdown ────────────────────────────────────────────
+    async function loadGenres() {
+      try {
+        const res  = await fetch('/playlists/api/genres');
+        const data = await res.json();
+        const sel  = document.getElementById('genreFilter');
+        (data.genres || []).forEach(g => {
+          const opt = document.createElement('option');
+          opt.value = g; opt.textContent = g;
+          sel.appendChild(opt);
+        });
+      } catch (e) {
+        console.error('Failed to load genres', e);
+      }
+    }
+
+    // ── Load playlists into dropdown (non-addTo mode) ────────────────────────
+    async function loadPlaylists() {
+      if (ADD_TO) return;
+      try {
+        const res  = await fetch('/playlists/api/list');
+        const data = await res.json();
+        const sel  = document.getElementById('playlistSelect');
+        if (sel) (data.playlists || []).forEach(p => {
+          const opt = document.createElement('option');
+          opt.value = p.id; opt.textContent = p.name;
+          sel.appendChild(opt);
+        });
+      } catch (_) {}
+    }
+
+    // ── Artist card ──────────────────────────────────────────────────────────
+    function renderArtistCard(artist) {
+      const card = document.createElement('div');
+      card.className = 'album-card artist-card';
+      card.dataset.artistId = artist.artist_id;
+      card.innerHTML = `
+        <div class="album-cover-wrap">
+          <img class="album-cover artist-img"
+            src="/library/artistart/${esc(artist.artist_id)}"
+            alt="" loading="lazy"
+            onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"
+          />
+          <div class="album-cover-placeholder" style="display:none"><span>👤</span></div>
+          <div class="album-card-overlay">
+            <button class="btn-select-album" data-artist-id="${esc(artist.artist_id)}" title="Select all tracks">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                <rect x="1" y="1" width="14" height="14" rx="2" stroke="currentColor" stroke-width="1.5"/>
+                <path d="M4 8l3 3 5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+        <div class="album-info">
+          <div class="album-name">${esc(artist.artist || 'Unknown Artist')}</div>
+          <div class="album-meta">${artist.album_count} album${artist.album_count !== 1 ? 's' : ''} · ${artist.track_count} tracks</div>
+        </div>
+      `;
+      card.querySelector('.album-cover-wrap').addEventListener('click', (e) => {
+        if (e.target.closest('.btn-select-album')) return;
+        toggleArtistExpand(artist);
+      });
+      card.querySelector('.btn-select-album').addEventListener('click', async (e) => {
+        e.stopPropagation();
+        await selectArtistTracks(artist);
+      });
+      return card;
+    }
+
+    // ── Expand / collapse artist ─────────────────────────────────────────────
+    async function toggleArtistExpand(artist) {
+      const grid     = document.getElementById('albumGrid');
+      const existing = document.getElementById('artist-expand-panel');
+
+      if (state.expandedArtistId === artist.artist_id) {
+        existing?.remove();
+        state.expandedArtistId = null;
+        document.querySelectorAll('.album-card.expanded').forEach(c => c.classList.remove('expanded'));
+        return;
+      }
+
+      existing?.remove();
+      document.querySelectorAll('.album-card.expanded').forEach(c => c.classList.remove('expanded'));
+      state.expandedArtistId = artist.artist_id;
+
+      const card = document.querySelector(`.album-card[data-artist-id="${artist.artist_id}"]`);
+      card?.classList.add('expanded');
+
+      const panel = document.createElement('div');
+      panel.id = 'artist-expand-panel'; panel.className = 'album-expand-panel';
+      panel.innerHTML = `<div class="expand-loading">Loading albums...</div>`;
+      insertPanelAfterCardRow(card, panel, grid);
+
+      const res  = await fetch(`/library/api/albums?artist_id=${encodeURIComponent(artist.artist_id)}`);
+      const data = await res.json();
+      if (!data.ok || !data.albums.length) { panel.innerHTML = `<div class="expand-empty">No albums found.</div>`; return; }
+      renderArtistPanel(panel, artist, data.albums);
+    }
+
+    function insertPanelAfterCardRow(card, panel, grid) {
+      const cards    = [...grid.querySelectorAll('.album-card')];
+      const idx      = cards.indexOf(card);
+      const gridStyle = getComputedStyle(grid);
+      const colGap   = parseFloat(gridStyle.columnGap) || 20;
+      const cardW    = card.offsetWidth + colGap;
+      const perRow   = Math.max(1, Math.floor((grid.offsetWidth + colGap) / cardW));
+      const rowEnd   = Math.min(cards.length - 1, Math.ceil((idx + 1) / perRow) * perRow - 1);
+      cards[rowEnd].after(panel);
+    }
+
+    function renderArtistPanel(panel, artist, albums) {
+      let html = `
+        <div class="expand-header">
+          <div class="expand-title">
+            <img class="expand-cover artist-img" src="/library/artistart/${esc(artist.artist_id)}" alt=""
+                 onerror="this.style.display='none'" />
+            <div>
+              <div class="expand-album-name">${esc(artist.artist)}</div>
+              <div class="expand-album-artist">${artist.album_count} albums · ${artist.track_count} tracks</div>
+            </div>
+          </div>
+          <div class="expand-actions">
+            <button class="btn btn-sm" id="selectAllArtistBtn">Select all tracks</button>
+            <button class="btn-icon expand-close" id="expandClose">✕</button>
+          </div>
+        </div>
+        <div class="artist-album-grid">`;
+
+      albums.forEach(album => {
+        html += `
+          <div class="artist-album-card" data-album-id="${esc(album.album_id)}">
+            <div class="artist-album-cover-wrap">
+              <img class="artist-album-cover"
+                src="/library/coverart/${esc(album.album_id)}"
+                alt="" loading="lazy"
+                onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"
+              />
+              <div class="album-cover-placeholder" style="display:none"><span>♪</span></div>
+            </div>
+            <div class="artist-album-info">
+              <div class="artist-album-title">${esc(album.album || 'Unknown Album')}</div>
+              <div class="artist-album-meta">${album.year || '—'} · ${album.track_count} tracks</div>
+            </div>
+          </div>`;
+      });
+
+      html += `</div>`;
+      panel.innerHTML = html;
+
+      document.getElementById('selectAllArtistBtn').addEventListener('click', async () => {
+        await selectArtistTracks(artist);
+        document.getElementById('selectAllArtistBtn').textContent = `✓ ${state.selected.size} selected`;
+      });
+      panel.querySelectorAll('.artist-album-card').forEach(ac => {
+        ac.addEventListener('click', () => toggleAlbumInPanel(ac, panel));
+      });
+      document.getElementById('expandClose').addEventListener('click', () => {
+        panel.remove();
+        state.expandedArtistId = null;
+        document.querySelectorAll('.album-card.expanded').forEach(c => c.classList.remove('expanded'));
+      });
+    }
+
+    // ── Album tracks inline ──────────────────────────────────────────────────
+    async function toggleAlbumInPanel(albumCard, panel) {
+      const albumId  = albumCard.dataset.albumId;
+      const existing = panel.querySelector('.inline-track-list');
+
+      if (existing && existing.dataset.albumId === albumId) {
+        existing.remove(); albumCard.classList.remove('expanded'); return;
+      }
+
+      existing?.remove();
+      panel.querySelectorAll('.artist-album-card').forEach(c => c.classList.remove('expanded'));
+      albumCard.classList.add('expanded');
+
+      const placeholder = document.createElement('div');
+      placeholder.className       = 'inline-track-list';
+      placeholder.dataset.albumId = albumId;
+      placeholder.innerHTML       = '<div class="expand-loading">Loading...</div>';
+      albumCard.after(placeholder);
+
+      const res  = await fetch(`/library/api/albums/${albumId}/tracks`);
+      const data = await res.json();
+
+      if (!data.ok || !data.tracks.length) {
+        placeholder.innerHTML = '<div class="expand-empty">No tracks.</div>'; return;
+      }
+
+      const allSelected = data.tracks.every(t => state.selected.has(t.id));
+      let html = `
+        <div class="itl-header">
+          <label class="expand-select-all">
+            <input type="checkbox" class="itl-select-all" ${allSelected ? 'checked' : ''} />
+            Select all
+          </label>
+          <button class="btn-icon itl-close">✕</button>
+        </div>`;
+
+      data.tracks.forEach((t, i) => {
+        const checked = state.selected.has(t.id);
+        html += `
+          <div class="expand-track-row ${checked ? 'selected' : ''}" data-track-id="${esc(t.id)}">
+            <span class="et-check"><input type="checkbox" class="expand-cb" value="${esc(t.id)}" ${checked ? 'checked' : ''}/></span>
+            <span class="et-num">${i + 1}</span>
+            <span class="et-title">${esc(t.title || '—')}</span>
+            <span class="et-dur">${fmtDur(t.duration)}</span>
+            <span class="et-plays">${t.play_count || 0} plays</span>
+          </div>`;
+      });
+
+      placeholder.innerHTML = html;
+
+      placeholder.querySelector('.itl-select-all').addEventListener('change', (e) => {
+        data.tracks.forEach(t => { e.target.checked ? state.selected.add(t.id) : state.selected.delete(t.id); });
+        placeholder.querySelectorAll('.expand-cb').forEach(cb => { cb.checked = e.target.checked; });
+        placeholder.querySelectorAll('.expand-track-row').forEach(r => r.classList.toggle('selected', e.target.checked));
+        updateSelectionBar();
+      });
+      placeholder.querySelectorAll('.expand-cb').forEach(cb => {
+        cb.addEventListener('change', (e) => {
+          e.target.checked ? state.selected.add(cb.value) : state.selected.delete(cb.value);
+          cb.closest('.expand-track-row').classList.toggle('selected', e.target.checked);
+          updateSelectionBar();
+        });
+      });
+      placeholder.querySelector('.itl-close').addEventListener('click', () => {
+        placeholder.remove(); albumCard.classList.remove('expanded');
+      });
+    }
+
+    // ── Select all tracks for an artist ─────────────────────────────────────
+    async function selectArtistTracks(artist) {
+      const res  = await fetch(`/library/api/albums?artist_id=${encodeURIComponent(artist.artist_id)}`);
+      const data = await res.json();
+      if (!data.ok) return;
+      for (const album of data.albums) {
+        const r2 = await fetch(`/library/api/albums/${album.album_id}/tracks`);
+        const d2 = await r2.json();
+        if (d2.ok) d2.tracks.forEach(t => state.selected.add(t.id));
+      }
+      updateSelectionBar();
+    }
+
+    // ── Fetch + render artists ───────────────────────────────────────────────
+    async function fetchArtists() {
+      if (state.loading) return;
+      state.loading = true;
+      document.getElementById('gridLoading').style.display = 'flex';
+      const params = new URLSearchParams({ search: state.search, genre: state.genre, sort: state.sort, limit: 2000 });
+      try {
+        const res  = await fetch(`/library/api/artists?${params}`);
+        const data = await res.json();
+        if (!data.ok) throw new Error();
+        const grid = document.getElementById('albumGrid');
+        grid.innerHTML = '';
+        data.artists.forEach(a => grid.appendChild(renderArtistCard(a)));
+        document.getElementById('artistCount').textContent = data.total.toLocaleString();
+      } catch (e) { console.error('Artist fetch failed', e); }
+      document.getElementById('gridLoading').style.display = 'none';
+      state.loading = false;
+    }
+
+    function resetAndFetch() {
+      state.expandedArtistId = null;
+      document.getElementById('artist-expand-panel')?.remove();
+      fetchArtists();
+    }
+
+    // ── Selection bar ────────────────────────────────────────────────────────
+    function updateSelectionBar() {
+      const count = state.selected.size;
+      document.getElementById('selectionCount').textContent = `${count} track${count !== 1 ? 's' : ''} selected`;
+      document.getElementById('selectionBar').style.display = count > 0 ? 'flex' : 'none';
+    }
+
+    document.getElementById('clearSelectionBtn').addEventListener('click', () => {
+      state.selected.clear();
+      document.querySelectorAll('.expand-cb').forEach(cb => cb.checked = false);
+      document.querySelectorAll('.expand-track-row').forEach(r => r.classList.remove('selected'));
+      updateSelectionBar();
+    });
+
+    // ── Filters ──────────────────────────────────────────────────────────────
+    let searchTimer;
+    document.getElementById('searchInput').addEventListener('input', (e) => {
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(() => { state.search = e.target.value; resetAndFetch(); }, 300);
+    });
+    document.getElementById('genreFilter').addEventListener('change', (e) => { state.genre = e.target.value; resetAndFetch(); });
+    document.getElementById('sortSelect').addEventListener('change',  (e) => { state.sort  = e.target.value; resetAndFetch(); });
+
+    // ── Init ─────────────────────────────────────────────────────────────────
+    initSelectionActions();
+    loadGenres();
+    loadPlaylists();
+    fetchArtists();
+  </script>
+</body>
+</html>

@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Logs - naviList</title>
+  <link rel="stylesheet" href="/css/main.css" />
+</head>
+<body>
+  <nav>
+    <a href="/playlists" class="nav-brand">naviList</a>
+    <ul>
+      <li><a href="/playlists">Playlists</a></li>
+      <li><a href="/status">Services</a></li>
+      <li><a href="/settings">Settings</a></li>
+      <li><a href="/logs" class="active">Logs</a></li>
+    </ul>
+  </nav>
+  <main>
+    <div class="status-header">
+      <h1>Logs</h1>
+      <div class="status-actions">
+        <label class="log-level-label" for="levelSelect">Level</label>
+        <select id="levelSelect" class="log-level-select">
+          <option value="debug">Debug</option>
+          <option value="info" selected>Info</option>
+          <option value="warn">Warn</option>
+          <option value="error">Error</option>
+        </select>
+        <button class="btn btn-secondary" id="autoRefreshBtn">⏸ Pause</button>
+        <button class="btn btn-secondary" id="refreshBtn">Refresh</button>
+        <button class="btn btn-secondary" id="clearBtn">Clear log</button>
+      </div>
+    </div>
+    <p class="status-updated" id="logMeta">—</p>
+
+    <div class="log-viewer" id="logViewer">
+      <div class="log-empty" id="logEmpty">Loading...</div>
+    </div>
+  </main>
+  <script>
+    let autoRefreshTimer = null;
+    let autoRefreshRunning = true;
+    const AUTO_REFRESH_MS = 2000;
+
+    function levelClass(line) {
+      if (line.includes('[ERROR]')) return 'log-error';
+      if (line.includes('[WARN ]')) return 'log-warn';
+      if (line.includes('[DEBUG]')) return 'log-debug';
+      return 'log-info';
+    }
+
+    function esc(str) {
+      return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }
+
+    async function loadLogs() {
+      const level = document.getElementById('levelSelect').value;
+      try {
+        const res  = await fetch(`/logs/api/tail?lines=300&level=${level}`);
+        const data = await res.json();
+
+        const viewer = document.getElementById('logViewer');
+        const empty  = document.getElementById('logEmpty');
+        const meta   = document.getElementById('logMeta');
+
+        if (!data.ok || !data.lines.length) {
+          empty.style.display = '';
+          empty.textContent   = data.lines?.length === 0 ? 'No log entries.' : `Error: ${data.error}`;
+          meta.textContent    = '—';
+          return;
+        }
+
+        empty.style.display = 'none';
+        meta.textContent = `${data.lines.length} of ${data.total} entries · ${new Date().toLocaleTimeString()}`;
+
+        const atBottom = viewer.scrollHeight - viewer.scrollTop - viewer.clientHeight < 40;
+
+        viewer.innerHTML = data.lines.map(line =>
+          `<div class="log-line ${levelClass(line)}">${esc(line)}</div>`
+        ).join('');
+
+        if (atBottom) viewer.scrollTop = viewer.scrollHeight;
+      } catch (e) {
+        document.getElementById('logEmpty').textContent = '✗ Request failed';
+      }
+    }
+
+    async function loadLevel() {
+      try {
+        const res  = await fetch('/logs/api/level');
+        const data = await res.json();
+        if (data.ok) document.getElementById('levelSelect').value = data.level;
+      } catch (e) {}
+    }
+
+    function startAutoRefresh() {
+      stopAutoRefresh();
+      autoRefreshRunning = true;
+      document.getElementById('autoRefreshBtn').textContent = '⏸ Pause';
+      autoRefreshTimer = setInterval(loadLogs, AUTO_REFRESH_MS);
+    }
+
+    function stopAutoRefresh() {
+      if (autoRefreshTimer) { clearInterval(autoRefreshTimer); autoRefreshTimer = null; }
+      autoRefreshRunning = false;
+      document.getElementById('autoRefreshBtn').textContent = '▶ Resume';
+    }
+
+    document.getElementById('levelSelect').addEventListener('change', async (e) => {
+      const level = e.target.value;
+      try {
+        await fetch('/logs/api/level', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ level })
+        });
+      } catch (err) {}
+      loadLogs();
+    });
+
+    document.getElementById('autoRefreshBtn').addEventListener('click', () => {
+      autoRefreshRunning ? stopAutoRefresh() : startAutoRefresh();
+    });
+
+    document.getElementById('refreshBtn').addEventListener('click', () => loadLogs());
+
+    document.getElementById('clearBtn').addEventListener('click', async () => {
+      if (!confirm('Clear the log file? This cannot be undone.')) return;
+      await fetch('/logs/api/clear', { method: 'DELETE' });
+      loadLogs();
+    });
+
+    window.addEventListener('beforeunload', () => stopAutoRefresh());
+
+    // Init
+    loadLevel().then(() => {
+      loadLogs();
+      startAutoRefresh();
+    });
+  </script>
+</body>
+</html>
