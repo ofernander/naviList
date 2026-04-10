@@ -8,7 +8,10 @@
 </head>
 <body>
   <nav>
-    <a href="/playlists" class="nav-brand">naviList</a>
+    <a href="/playlists" class="nav-brand">
+      <img src="/assets/navidrome.webp" class="nav-brand-icon" alt="" />
+      naviList
+    </a>
     <ul>
       <li><a href="/playlists" class="active">Playlists</a></li>
       <li><a href="/status">Services</a></li>
@@ -33,6 +36,7 @@
       <button class="pl-filter-btn" data-filter="navilist">naviList</button>
       <button class="pl-filter-btn" data-filter="listenbrainz">ListenBrainz</button>
       <button class="pl-filter-btn" data-filter="manual">Manual</button>
+      <button class="pl-filter-btn" data-filter="deactivated">Deactivated</button>
       <div class="pl-view-toggle">
         <button class="pl-view-btn active" id="viewBtnList" title="List view">☰</button>
         <button class="pl-view-btn" id="viewBtnCards" title="Card view">⊞</button>
@@ -40,6 +44,24 @@
     </div>
 
     <button class="pl-new-wide btn" id="newPlaylistWideBtn">+ New Playlist</button>
+
+    <div id="plListHeader" style="display:none">
+      <div class="pl-list-col-header">
+        <input type="checkbox" id="selectAllChk" style="accent-color:#0084ff; cursor:pointer;" />
+        <span class="pl-col-hdr" style="text-align:center;" data-sort="type">Type</span>
+        <span class="pl-col-hdr" data-sort="name">Name</span>
+        <span class="pl-col-hdr pl-col-hdr-r" data-sort="tracks">Tracks</span>
+        <span class="pl-col-hdr pl-col-hdr-r" data-sort="duration">Duration</span>
+        <span class="pl-col-hdr pl-col-hdr-r" data-sort="added">Added</span>
+      </div>
+    </div>
+    <div id="plSelectionBar" style="display:none" class="pl-selection-bar-multi">
+      <span id="selCount" class="pl-sel-count"></span>
+      <button class="btn btn-secondary btn-sm" id="selActivateBtn">Activate</button>
+      <button class="btn btn-secondary btn-sm" id="selDeactivateBtn">Deactivate</button>
+      <button class="btn btn-danger btn-sm" id="selDeleteBtn">Delete</button>
+      <button class="btn btn-secondary btn-sm" id="selClearBtn">Clear</button>
+    </div>
 
     <div class="pl-cards" id="plCards">
       <!-- Populated by JS -->
@@ -160,6 +182,10 @@
 
     let viewMode = localStorage.getItem('navilist_pl_view') || 'list';
 
+    let sortField = localStorage.getItem('navilist_pl_sort')     || 'name';
+    let sortDir   = localStorage.getItem('navilist_pl_sort_dir') || 'asc';
+    let selected  = new Set();
+
     // Rule builder state
     let rbPlaylistId   = null;  // playlist being edited
     let rbPlaylistName = '';
@@ -181,12 +207,21 @@
       return h > 0 ? `${h}h ${m}m` : `${m}m`;
     }
 
+    function fmtDate(unix) {
+      if (!unix) return '—';
+      return new Date(unix * 1000).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+    }
+
     function isSmartPlaylist(p) {
       return p.comment?.startsWith('navilist:navilist') || false;
     }
 
     function isLbPlaylist(p) {
       return p.comment?.startsWith('navilist:lb') || false;
+    }
+
+    function isInactive(p) {
+      return p.active === 0;
     }
 
     function getPlaylistType(p) {
@@ -221,6 +256,31 @@
       } catch (e) {
         return null;
       }
+    }
+
+    function updateSortArrows() {
+      document.querySelectorAll('.pl-col-hdr').forEach(el => {
+        const base = el.dataset.sort === 'type' ? 'Type'
+          : el.dataset.sort === 'name' ? 'Name'
+          : el.dataset.sort === 'tracks' ? 'Tracks'
+          : el.dataset.sort === 'duration' ? 'Duration'
+          : 'Added';
+        const arrow = el.dataset.sort === sortField ? (sortDir === 'asc' ? ' ↑' : ' ↓') : '';
+        el.textContent = base + arrow;
+        el.classList.toggle('pl-col-hdr-active', el.dataset.sort === sortField);
+      });
+    }
+
+    function updateSelectionBar() {
+      const bar = document.getElementById('plSelectionBar');
+      bar.style.display = selected.size > 0 ? '' : 'none';
+      document.getElementById('selCount').textContent = `${selected.size} selected`;
+      document.querySelectorAll('.pl-row-chk').forEach(chk => {
+        chk.checked = selected.has(chk.dataset.id);
+      });
+      const allChks = document.querySelectorAll('.pl-row-chk');
+      document.getElementById('selectAllChk').checked =
+        allChks.length > 0 && allChks.length === selected.size;
     }
 
     // ── Views ──────────────────────────────────────────────────────────────
@@ -273,36 +333,59 @@
       const filtered = allPlaylists.filter(p => {
         const matchSearch = !q || p.name.toLowerCase().includes(q);
         const type = getPlaylistType(p);
+        const inactive = isInactive(p);
         const matchFilter =
-          activeFilter === 'all' ||
-          activeFilter === type ||
-          (activeFilter === 'navilist' && type === 'navilist') ||
-          (activeFilter === 'manual' && type === 'manual');
+          (activeFilter === 'deactivated' && inactive) ||
+          (activeFilter === 'all' && !inactive) ||
+          (!inactive && (
+            activeFilter === type ||
+            (activeFilter === 'navilist' && type === 'navilist') ||
+            (activeFilter === 'manual' && type === 'manual')
+          ));
         return matchSearch && matchFilter;
       });
 
       if (!filtered.length) {
+        document.getElementById('plListHeader').style.display = 'none';
         container.innerHTML = `<div class="pl-empty"><p>${allPlaylists.length === 0 ? 'No playlists yet. Create one to get started.' : 'No playlists match your filter.'}</p></div>`;
         return;
       }
 
+      // Sort
+      filtered.sort((a, b) => {
+        let av, bv;
+        switch (sortField) {
+          case 'type':     av = getPlaylistType(a);       bv = getPlaylistType(b);       break;
+          case 'tracks':   av = a.songCount  || 0;        bv = b.songCount  || 0;        break;
+          case 'duration': av = a.duration   || 0;        bv = b.duration   || 0;        break;
+          case 'added':    av = a.created_at || 0;        bv = b.created_at || 0;        break;
+          default:         av = (a.name || '').toLowerCase(); bv = (b.name || '').toLowerCase();
+        }
+        if (av < bv) return sortDir === 'asc' ? -1 : 1;
+        if (av > bv) return sortDir === 'asc' ?  1 : -1;
+        return 0;
+      });
+
       container.innerHTML = '';
       if (viewMode === 'list') {
+        document.getElementById('plListHeader').style.display = '';
+        updateSortArrows();
         container.classList.remove('pl-cards');
         container.classList.add('pl-list');
         filtered.forEach(p => container.appendChild(renderListRow(p)));
       } else {
+        document.getElementById('plListHeader').style.display = 'none';
         container.classList.remove('pl-list');
         container.classList.add('pl-cards');
         filtered.forEach(p => container.appendChild(renderCard(p)));
       }
+      updateSelectionBar();
     }
 
     function renderCard(p) {
       const type = getPlaylistType(p);
       const dur  = fmtDur(p.duration);
       const meta = [p.songCount ? `${p.songCount} tracks` : null, dur || null].filter(Boolean).join(' · ');
-
       const card = document.createElement('div');
       card.className = 'pl-card';
       card.innerHTML = `
@@ -338,16 +421,26 @@
       const row = document.createElement('div');
       row.className = 'pl-list-row';
       row.dataset.id = p.id;
+      if (isInactive(p)) row.classList.add('is-inactive');
 
       const header = document.createElement('div');
       header.className = 'pl-list-row-header';
       header.innerHTML = `
+        <input type="checkbox" class="pl-row-chk" data-id="${esc(p.id)}" ${selected.has(p.id) ? 'checked' : ''} style="accent-color:#0084ff; cursor:pointer; flex-shrink:0;" />
         <span class="pl-badge ${badgeClass(type)}">${badgeLabel(type)}</span>
         <span class="pl-list-row-name">${esc(p.name)}</span>
-        <span class="pl-list-row-meta">${esc(meta)}</span>
+        <span class="pl-list-row-meta">${p.songCount || '—'}</span>
+        <span class="pl-list-row-meta">${dur || '—'}</span>
+        <span class="pl-list-row-added">${fmtDate(p.created_at)}</span>
         <button class="pl-card-menu" title="Options">⋯</button>
         <span class="pl-list-row-chevron">›</span>
       `;
+
+      header.querySelector('.pl-row-chk').addEventListener('click', e => {
+        e.stopPropagation();
+        if (e.target.checked) selected.add(p.id); else selected.delete(p.id);
+        updateSelectionBar();
+      });
 
       header.querySelector('.pl-card-menu').addEventListener('click', e => {
         e.stopPropagation();
@@ -424,6 +517,20 @@
       renameBtn.textContent = 'Rename';
       renameBtn.addEventListener('click', () => renamePlaylist(p));
       actions.appendChild(renameBtn);
+
+      if (isInactive(p)) {
+        const activateBtn = document.createElement('button');
+        activateBtn.className = 'btn btn-secondary btn-sm';
+        activateBtn.textContent = '▶ Activate';
+        activateBtn.addEventListener('click', () => activatePlaylist(p, activateBtn));
+        actions.appendChild(activateBtn);
+      } else {
+        const deactivateBtn = document.createElement('button');
+        deactivateBtn.className = 'btn btn-secondary btn-sm';
+        deactivateBtn.textContent = 'Deactivate';
+        deactivateBtn.addEventListener('click', () => deactivatePlaylist(p, deactivateBtn));
+        actions.appendChild(deactivateBtn);
+      }
 
       const deleteBtn = document.createElement('button');
       deleteBtn.className = 'btn btn-danger btn-sm';
@@ -526,6 +633,10 @@
       const items = [
         { label: 'Open',   action: () => openDetail(p) },
         { label: 'Rename', action: () => renamePlaylist(p) },
+        ...(isInactive(p)
+          ? [{ label: '▶ Activate', action: () => activatePlaylist(p, { disabled: false, textContent: '' }) }]
+          : [{ label: 'Deactivate', action: () => deactivatePlaylist(p, { disabled: false, textContent: '' }) }]
+        ),
         { label: 'Delete', action: () => deletePlaylist(p), danger: true },
       ];
 
@@ -710,6 +821,27 @@
         await loadPlaylists();
         showListView();
       }
+    }
+
+    async function deactivatePlaylist(p, btn) {
+      if (!confirm(`Remove "${p.name}" from Navidrome? It will stay in naviList and can be reactivated.`)) return;
+      btn.disabled = true; btn.textContent = 'Deactivating...';
+      try {
+        const res  = await fetch(`/playlists/${p.id}/deactivate`, { method: 'POST' });
+        const data = await res.json();
+        if (data.ok) { await loadPlaylists(); }
+        else { btn.disabled = false; btn.textContent = 'Deactivate'; alert(`✗ ${data.error}`); }
+      } catch (e) { btn.disabled = false; btn.textContent = 'Deactivate'; }
+    }
+
+    async function activatePlaylist(p, btn) {
+      btn.disabled = true; btn.textContent = 'Activating...';
+      try {
+        const res  = await fetch(`/playlists/${p.id}/activate`, { method: 'POST' });
+        const data = await res.json();
+        if (data.ok) { await loadPlaylists(); }
+        else { btn.disabled = false; btn.textContent = '▶ Activate'; alert(`✗ ${data.error}`); }
+      } catch (e) { btn.disabled = false; btn.textContent = '▶ Activate'; }
     }
 
     async function deletePlaylist(p) {
@@ -1512,6 +1644,54 @@
         status.className = 'history-source-status status-err';
       }
     }
+
+    // ── Sort + select event listeners ────────────────────────────────────────
+    document.getElementById('plListHeader').addEventListener('click', e => {
+      const col = e.target.closest('.pl-col-hdr');
+      if (!col) return;
+      const field = col.dataset.sort;
+      sortDir = sortField === field ? (sortDir === 'asc' ? 'desc' : 'asc') : 'asc';
+      sortField = field;
+      localStorage.setItem('navilist_pl_sort', sortField);
+      localStorage.setItem('navilist_pl_sort_dir', sortDir);
+      renderCards();
+    });
+
+    document.getElementById('selectAllChk').addEventListener('change', e => {
+      document.querySelectorAll('.pl-row-chk').forEach(chk => {
+        chk.checked = e.target.checked;
+        if (e.target.checked) selected.add(chk.dataset.id);
+        else selected.delete(chk.dataset.id);
+      });
+      updateSelectionBar();
+    });
+
+    document.getElementById('selClearBtn').addEventListener('click', () => {
+      selected.clear(); renderCards();
+    });
+
+    document.getElementById('selActivateBtn').addEventListener('click', async () => {
+      for (const id of [...selected]) {
+        const p = allPlaylists.find(pl => pl.id === id);
+        if (p && isInactive(p)) await fetch(`/playlists/${id}/activate`, { method: 'POST' });
+      }
+      selected.clear(); await loadPlaylists();
+    });
+
+    document.getElementById('selDeactivateBtn').addEventListener('click', async () => {
+      if (!confirm(`Deactivate ${selected.size} playlist(s)?`)) return;
+      for (const id of [...selected]) {
+        const p = allPlaylists.find(pl => pl.id === id);
+        if (p && !isInactive(p)) await fetch(`/playlists/${id}/deactivate`, { method: 'POST' });
+      }
+      selected.clear(); await loadPlaylists();
+    });
+
+    document.getElementById('selDeleteBtn').addEventListener('click', async () => {
+      if (!confirm(`Delete ${selected.size} playlist(s)? This cannot be undone.`)) return;
+      for (const id of [...selected]) await fetch(`/playlists/${id}/delete`, { method: 'POST' });
+      selected.clear(); await loadPlaylists();
+    });
 
     // ── Init ───────────────────────────────────────────────────────────────
     const openId = new URLSearchParams(window.location.search).get('id');

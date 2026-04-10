@@ -248,6 +248,55 @@ async function deletePlaylist(db, id) {
   }
 }
 
+// ── Local playlist registry sync ──────────────────────────────────────────────────────────────────
+
+async function syncPlaylistsToLocal(db) {
+  const playlists = await getPlaylists(db);
+  if (!playlists.length) return { ok: true, synced: 0 };
+
+  const now = Math.floor(Date.now() / 1000);
+  const upsertPl = db.prepare(`
+    INSERT INTO navilist_playlists (navidrome_id, name, comment, active, track_count, duration, created_at)
+    VALUES (@navidrome_id, @name, @comment, 1, @track_count, @duration, @created_at)
+    ON CONFLICT(navidrome_id) DO UPDATE SET
+      name        = excluded.name,
+      comment     = excluded.comment,
+      track_count = excluded.track_count,
+      duration    = excluded.duration,
+      active      = 1
+  `);
+  const deleteTracks = db.prepare('DELETE FROM navilist_playlist_tracks WHERE playlist_id = ?');
+  const insertTrack  = db.prepare(`
+    INSERT OR IGNORE INTO navilist_playlist_tracks (playlist_id, track_id, position)
+    VALUES (?, ?, ?)
+  `);
+
+  let synced = 0;
+  for (const p of playlists) {
+    const detail = await getPlaylist(db, p.id);
+    if (!detail) continue;
+    const tracks = Array.isArray(detail.entry) ? detail.entry : (detail.entry ? [detail.entry] : []);
+
+    db.transaction(() => {
+      upsertPl.run({
+        navidrome_id: p.id,
+        name:         p.name,
+        comment:      p.comment || null,
+        track_count:  tracks.length,
+        duration:     p.duration || null,
+        created_at:   now
+      });
+      deleteTracks.run(p.id);
+      tracks.forEach((t, i) => insertTrack.run(p.id, t.id, i));
+    })();
+    synced++;
+    logger.debug('navidrome', `synced playlist "${p.name}" to local (${tracks.length} tracks)`);
+  }
+
+  logger.info('navidrome', `playlist sync: ${synced} playlists stored locally`);
+  return { ok: true, synced };
+}
+
 // ── Sync functions ────────────────────────────────────────────────────────────
 
 async function syncFolderPage(db, folderId, offset, upsertMany, seenIds, syncedAt) {
@@ -431,6 +480,9 @@ async function syncLibrary(db) {
       logger.warn('navidrome', `close-the-loop check failed: ${e.message}`);
     }
   }
+
+  // ── Sync playlists to local registry ──────────────────────────────────────────────────────
+  await syncPlaylistsToLocal(db);
 
   return { ok: true, total, inserted, updated, removed };
 }
@@ -620,5 +672,5 @@ module.exports = {
   request, ping, getMusicFolders,
   getPlaylists, getPlaylist, createPlaylist,
   updatePlaylist, addTracksToPlaylist, removeTracksFromPlaylist, deletePlaylist,
-  replacePlaylistTracks, syncLibrary, syncSimilarArtists, syncArtistTags
+  replacePlaylistTracks, syncLibrary, syncPlaylistsToLocal, syncSimilarArtists, syncArtistTags
 };

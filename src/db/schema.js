@@ -163,5 +163,28 @@ module.exports = function (db) {
     );
 
     CREATE INDEX IF NOT EXISTS idx_lb_playlist_tracks_mbid ON lb_playlist_tracks(lb_mbid);
+
+    -- naviList playlist registry — local copies of all known playlists
+    CREATE TABLE IF NOT EXISTS navilist_playlists (
+      navidrome_id    TEXT PRIMARY KEY,
+      name            TEXT NOT NULL,
+      comment         TEXT,
+      active          INTEGER NOT NULL DEFAULT 1,
+      track_count     INTEGER,
+      duration        INTEGER,
+      created_at      INTEGER NOT NULL,
+      deactivated_at  INTEGER
+    );
+
+    -- naviList playlist track snapshots
+    CREATE TABLE IF NOT EXISTS navilist_playlist_tracks (
+      playlist_id  TEXT NOT NULL,
+      track_id     TEXT NOT NULL,
+      position     INTEGER NOT NULL,
+      PRIMARY KEY (playlist_id, track_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_navilist_playlist_tracks_playlist
+      ON navilist_playlist_tracks(playlist_id);
   `);
 };
