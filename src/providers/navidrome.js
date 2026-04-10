@@ -248,7 +248,7 @@ async function deletePlaylist(db, id) {
   }
 }
 
-// ── Local playlist registry sync ──────────────────────────────────────────────────────────────────
+// ── Local playlist registry sync ──────────────────────────────────────────────
 
 async function syncPlaylistsToLocal(db) {
   const playlists = await getPlaylists(db);
@@ -297,7 +297,7 @@ async function syncPlaylistsToLocal(db) {
   return { ok: true, synced };
 }
 
-// ── Sync functions ────────────────────────────────────────────────────────────
+// ── Library sync ──────────────────────────────────────────────────────────────
 
 async function syncFolderPage(db, folderId, offset, upsertMany, seenIds, syncedAt) {
   const extra = {
@@ -347,9 +347,9 @@ async function syncLibrary(db) {
   let inserted = 0;
   let updated = 0;
   let removed = 0;
-  const seenIds       = new Set();
-  const newArtistIds  = new Map(); // artistId → artistName, only for artists not yet imaged
-  const syncedAt = Math.floor(Date.now() / 1000);
+  const seenIds      = new Set();
+  const newArtistIds = new Map(); // artistId → artistName, only for artists not yet imaged
+  const syncedAt     = Math.floor(Date.now() / 1000);
 
   const settings = getSettings(db);
   const folderIds = settings.music_folder_ids
@@ -387,7 +387,6 @@ async function syncLibrary(db) {
       const existing = checkExisting.get(t.id);
       upsert.run({ ...t, syncedAt });
       existing ? updated++ : inserted++;
-      // Track artists we haven't imaged yet
       if (t.artistId && t.artist && !newArtistIds.has(t.artistId)) {
         const imgPath = path.join(IMAGE_DIR, `${t.artistId}.jpg`);
         if (!fs.existsSync(imgPath)) {
@@ -442,14 +441,14 @@ async function syncLibrary(db) {
   if (removed > 0) logger.info('navidrome', `removed ${removed} stale tracks`);
   logger.info('navidrome', `sync complete — ${total} tracks (${inserted} new, ${updated} updated, ${removed} removed)`);
 
-  // ── Close the loop: check if any 'sent' missing artists are now in the library ───────────────
+  // ── Close the loop: check if any 'sent' missing artists are now in the library
   if (inserted > 0) {
     try {
-      const sentArtists = db.prepare(`SELECT * FROM missing_artists WHERE status = 'sent'`).all();
-      const foundAt = Math.floor(Date.now() / 1000);
-      const markFound = db.prepare(`UPDATE missing_artists SET status = 'found', found_at = ? WHERE id = ?`);
-      const isInLibrary = db.prepare('SELECT 1 FROM tracks WHERE LOWER(artist) = LOWER(?) LIMIT 1');
-      let foundCount = 0;
+      const sentArtists  = db.prepare(`SELECT * FROM missing_artists WHERE status = 'sent'`).all();
+      const foundAt      = Math.floor(Date.now() / 1000);
+      const markFound    = db.prepare(`UPDATE missing_artists SET status = 'found', found_at = ? WHERE id = ?`);
+      const isInLibrary  = db.prepare('SELECT 1 FROM tracks WHERE LOWER(artist) = LOWER(?) LIMIT 1');
+      let foundCount     = 0;
 
       for (const a of sentArtists) {
         if (isInLibrary.get(a.artist_name)) {
@@ -459,15 +458,14 @@ async function syncLibrary(db) {
         }
       }
 
-      // Regenerate all smart playlists to pick up newly available tracks
       if (foundCount > 0) {
         logger.info('navidrome', `${foundCount} missing artist(s) found — triggering smart playlist regeneration`);
-        const engine = require('../lib/pl_engine');
+        const engine   = require('../lib/pl_engine');
         const playlists = await getPlaylists(db);
         for (const p of playlists) {
           if (!p.comment?.startsWith('navilist:smart')) continue;
           try {
-            const rules = JSON.parse(p.comment.replace(/^navilist:smart\s*/, ''));
+            const rules    = JSON.parse(p.comment.replace(/^navilist:smart\s*/, ''));
             const trackIds = await engine.generatePlaylist(db, rules);
             if (trackIds.length) await replacePlaylistTracks(db, p.id, trackIds);
             logger.info('navidrome', `regenerated smart playlist "${p.name}" (${trackIds.length} tracks)`);
@@ -481,196 +479,14 @@ async function syncLibrary(db) {
     }
   }
 
-  // ── Sync playlists to local registry ──────────────────────────────────────────────────────
   await syncPlaylistsToLocal(db);
 
   return { ok: true, total, inserted, updated, removed };
-}
-
-// ── Similar artists sync (Phase 2) ────────────────────────────────────────────
-
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-async function syncSimilarArtists(db) {
-  const lastfm   = require('./lastfm');
-  const settings = getSettings(db);
-  const apiKey   = settings.lastfm_api_key;
-
-  if (!apiKey) {
-    logger.warn('navidrome', 'syncSimilarArtists: no lastfm_api_key configured — skipping');
-    return { ok: false, error: 'Last.fm API key not configured' };
-  }
-
-  // All distinct artists in the local library
-  const artists = db.prepare(`
-    SELECT DISTINCT artist_id, artist FROM tracks
-    WHERE artist_id IS NOT NULL AND artist IS NOT NULL
-  `).all();
-
-  // Artists already fully cached — skip them
-  const cached = new Set(
-    db.prepare('SELECT DISTINCT artist_id FROM artist_similar').all().map(r => r.artist_id)
-  );
-
-  const todo = artists.filter(a => !cached.has(a.artist_id));
-  logger.info('navidrome', `similar artists sync: ${todo.length} artists to fetch (${cached.size} already cached)`);
-
-  if (todo.length === 0) {
-    return { ok: true, fetched: 0, failed: 0, total: 0 };
-  }
-
-  // Prepared statements
-  const upsert = db.prepare(`
-    INSERT INTO artist_similar (artist_id, similar_name, similar_artist_id, score, source, fetched_at)
-    VALUES (@artistId, @similarName, @similarArtistId, @score, 'lastfm', @fetchedAt)
-    ON CONFLICT(artist_id, similar_name) DO UPDATE SET
-      similar_artist_id = excluded.similar_artist_id,
-      score             = excluded.score,
-      fetched_at        = excluded.fetched_at
-  `);
-
-  const resolveArtistId = db.prepare(`
-    SELECT DISTINCT artist_id FROM tracks
-    WHERE LOWER(artist) = LOWER(?)
-    LIMIT 1
-  `);
-
-  const insertSentinel = db.prepare(`
-    INSERT OR IGNORE INTO artist_similar (artist_id, similar_name, similar_artist_id, score, source, fetched_at)
-    VALUES (?, '__none__', NULL, NULL, 'lastfm', ?)
-  `);
-
-  let fetched = 0;
-  let failed  = 0;
-  const fetchedAt = Math.floor(Date.now() / 1000);
-
-  for (const { artist_id, artist } of todo) {
-    try {
-      const data    = await lastfm.getSimilarArtists(apiKey, artist, 100);
-      const similar = data?.similarartists?.artist;
-
-      if (!Array.isArray(similar) || similar.length === 0) {
-        // Sentinel row prevents re-fetching artists with no Last.fm results
-        insertSentinel.run(artist_id, fetchedAt);
-        fetched++;
-        await sleep(1000);
-        continue;
-      }
-
-      const insertBatch = db.transaction((rows) => {
-        for (const row of rows) upsert.run(row);
-      });
-
-      const rows = similar.map(s => ({
-        artistId:        artist_id,
-        similarName:     s.name,
-        similarArtistId: resolveArtistId.get(s.name)?.artist_id ?? null,
-        score:           parseFloat(s.match) || 0,
-        fetchedAt
-      }));
-
-      insertBatch(rows);
-
-      // Write unresolved similar artists to missing_artists for Lidarr
-      const missing = rows.filter(r => r.similarArtistId === null).map(r => r.similarName);
-      if (missing.length) {
-        const { writeMissingArtists } = require('../lib/sync');
-        writeMissingArtists(db, missing, 'lastfm_similar');
-      }
-
-      fetched++;
-      logger.info('navidrome', `similar artists: "${artist}" → ${similar.length} results`);
-    } catch (e) {
-      failed++;
-      logger.warn('navidrome', `similar artists fetch failed for "${artist}": ${e.message}`);
-    }
-
-    await sleep(1000);
-  }
-
-  logger.info('navidrome', `similar artists sync complete — ${fetched} fetched, ${failed} failed`);
-  return { ok: true, fetched, failed, total: todo.length };
-}
-
-// ── Artist tags sync (Phase 3) ──────────────────────────────────────────────
-
-async function syncArtistTags(db) {
-  const mb      = require('./musicbrainz'); // inline to avoid circular dep at module load
-  const artists = db.prepare(`
-    SELECT DISTINCT artist_id, artist FROM tracks
-    WHERE artist_id IS NOT NULL AND artist IS NOT NULL
-  `).all();
-
-  const cached = new Set(
-    db.prepare('SELECT DISTINCT artist_id FROM artist_tags').all().map(r => r.artist_id)
-  );
-
-  const todo = artists.filter(a => !cached.has(a.artist_id));
-  logger.info('navidrome', `artist tags sync: ${todo.length} artists to fetch (${cached.size} already cached)`);
-
-  if (todo.length === 0) {
-    return { ok: true, fetched: 0, failed: 0, total: 0 };
-  }
-
-  const upsert = db.prepare(`
-    INSERT INTO artist_tags (artist_id, tag, weight, source, fetched_at)
-    VALUES (@artistId, @tag, @weight, 'musicbrainz', @fetchedAt)
-    ON CONFLICT(artist_id, tag) DO UPDATE SET
-      weight     = excluded.weight,
-      fetched_at = excluded.fetched_at
-  `);
-
-  const insertSentinel = db.prepare(`
-    INSERT OR IGNORE INTO artist_tags (artist_id, tag, weight, source, fetched_at)
-    VALUES (?, '__none__', 0, 'musicbrainz', ?)
-  `);
-
-  let fetched = 0;
-  let failed  = 0;
-  const fetchedAt = Math.floor(Date.now() / 1000);
-
-  for (const { artist_id, artist } of todo) {
-    try {
-      const tags = await mb.getArtistTags(artist);
-
-      if (!tags.length) {
-        // Sentinel row prevents re-fetching artists with no MusicBrainz results
-        insertSentinel.run(artist_id, fetchedAt);
-        fetched++;
-        await sleep(1000);
-        continue;
-      }
-
-      const insertBatch = db.transaction((rows) => {
-        for (const row of rows) upsert.run(row);
-      });
-
-      insertBatch(tags.map(t => ({
-        artistId: artist_id,
-        tag:      t.name.toLowerCase(),
-        weight:   t.count,
-        fetchedAt
-      })));
-
-      fetched++;
-      logger.info('navidrome', `artist tags: "${artist}" → ${tags.length} tags`);
-    } catch (e) {
-      failed++;
-      logger.warn('navidrome', `artist tags fetch failed for "${artist}": ${e.message}`);
-    }
-
-    await sleep(1000);
-  }
-
-  logger.info('navidrome', `artist tags sync complete — ${fetched} fetched, ${failed} failed`);
-  return { ok: true, fetched, failed, total: todo.length };
 }
 
 module.exports = {
   request, ping, getMusicFolders,
   getPlaylists, getPlaylist, createPlaylist,
   updatePlaylist, addTracksToPlaylist, removeTracksFromPlaylist, deletePlaylist,
-  replacePlaylistTracks, syncLibrary, syncPlaylistsToLocal, syncSimilarArtists, syncArtistTags
+  replacePlaylistTracks, syncLibrary, syncPlaylistsToLocal
 };
