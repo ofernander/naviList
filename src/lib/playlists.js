@@ -105,10 +105,9 @@ router.get('/api/:id', async (req, res) => {
   res.json({ ok: true, playlist });
 });
 
-// POST /playlists/create-radio
-router.post('/create-radio', async (req, res) => {
-  const { name, artists, depth, track_count, include_seed } = req.body;
-  if (!name?.trim())    return res.json({ ok: false, error: 'name required' });
+// POST /playlists/preview-radio — fetch/cache similar artists, resolve tracks, no ND writes
+router.post('/preview-radio', async (req, res) => {
+  const { artists, depth, track_count, include_seed } = req.body;
   if (!artists?.length) return res.json({ ok: false, error: 'at least one artist required' });
 
   const settings = db.prepare('SELECT key, value FROM settings').all()
@@ -208,45 +207,70 @@ router.post('/create-radio', async (req, res) => {
   engine.fisherYates(trackIds);
   const limited = trackIds.slice(0, limit);
 
-  const created = await navidrome.createPlaylist(db, name.trim(), limited);
-  if (!created.ok) return res.json(created);
+  const getTrack = db.prepare('SELECT id, title, artist, duration FROM tracks WHERE id = ?');
+  const tracks   = limited.map(id => getTrack.get(id) || { id, title: '—', artist: '—', duration: 0 });
+  const config   = { artists, artistIds: seedArtistIds, depth: scoreThreshold, track_count: limit, include_seed: includeSeed, source: 'lastfm' };
 
-  const playlistId = created.playlist?.id;
-  const config     = { artists, artistIds: seedArtistIds, depth: scoreThreshold, track_count: limit, include_seed: includeSeed, source: 'lastfm' };
-  const comment    = `navilist:radio ${JSON.stringify(config)}`;
-  await navidrome.updatePlaylist(db, playlistId, { comment });
-  snapshotPlaylist(db, playlistId, name.trim(), comment, limited, null);
-
-  logger.info('playlists', `radio playlist created: "${name.trim()}" (${limited.length} tracks, ${seedArtistIds.length} seed artists)`);
-  res.json({ ok: true, playlistId, count: limited.length });
+  logger.info('playlists', `radio preview: ${tracks.length} tracks for [${artists.join(', ')}]`);
+  res.json({ ok: true, tracks, count: tracks.length, config });
 });
 
-// POST /playlists/create-smart — create playlist then immediately generate tracks from rules
-router.post('/create-smart', async (req, res) => {
-  const { name, rules } = req.body;
-  if (!name?.trim()) return res.json({ ok: false, error: 'name required' });
-  if (!rules)        return res.json({ ok: false, error: 'rules required' });
+// POST /playlists/save-radio — create in ND from previewed radio track list
+router.post('/save-radio', async (req, res) => {
+  const { name, config, trackIds } = req.body;
+  if (!name?.trim())     return res.json({ ok: false, error: 'name required' });
+  if (!config)           return res.json({ ok: false, error: 'config required' });
+  if (!trackIds?.length) return res.json({ ok: false, error: 'trackIds required' });
 
-  const validation = engine.validateRules(rules);
-  if (!validation.ok) return res.json({ ok: false, errors: validation.errors });
-
-  const created = await navidrome.createPlaylist(db, name.trim(), []);
+  const created = await navidrome.createPlaylist(db, name.trim(), trackIds);
   if (!created.ok) return res.json(created);
 
   const playlistId = created.playlist?.id;
   if (!playlistId) return res.json({ ok: false, error: 'No playlist ID returned from Navidrome' });
 
-  const trackIds = await engine.generatePlaylist(db, rules);
-  if (!trackIds.length) return res.json({ ok: false, error: 'No tracks matched rules' });
+  const comment = `navilist:radio ${JSON.stringify(config)}`;
+  await navidrome.updatePlaylist(db, playlistId, { comment });
+  snapshotPlaylist(db, playlistId, name.trim(), comment, trackIds, null);
 
-  const result = await navidrome.replacePlaylistTracks(db, playlistId, trackIds);
-  if (!result.ok) return res.json(result);
+  logger.info('playlists', `radio playlist saved: "${name.trim()}" (${trackIds.length} tracks)`);
+  res.json({ ok: true, playlistId, count: trackIds.length });
+});
+
+// POST /playlists/preview-navilist — resolve tracks from rules, no ND writes
+router.post('/preview-navilist', async (req, res) => {
+  const { rules } = req.body;
+  if (!rules) return res.json({ ok: false, error: 'rules required' });
+
+  const validation = engine.validateRules(rules);
+  if (!validation.ok) return res.json({ ok: false, errors: validation.errors });
+
+  const trackIds = await engine.generatePlaylist(db, rules);
+  if (!trackIds.length) return res.json({ ok: false, error: 'No tracks matched these rules' });
+
+  const getTrack = db.prepare('SELECT id, title, artist, duration FROM tracks WHERE id = ?');
+  const tracks   = trackIds.map(id => getTrack.get(id) || { id, title: '—', artist: '—', duration: 0 });
+
+  res.json({ ok: true, tracks, count: tracks.length });
+});
+
+// POST /playlists/save-navilist — create in ND from previewed track list
+router.post('/save-navilist', async (req, res) => {
+  const { name, rules, trackIds } = req.body;
+  if (!name?.trim())     return res.json({ ok: false, error: 'name required' });
+  if (!rules)            return res.json({ ok: false, error: 'rules required' });
+  if (!trackIds?.length) return res.json({ ok: false, error: 'trackIds required' });
+
+  const created = await navidrome.createPlaylist(db, name.trim(), trackIds);
+  if (!created.ok) return res.json(created);
+
+  const playlistId = created.playlist?.id;
+  if (!playlistId) return res.json({ ok: false, error: 'No playlist ID returned from Navidrome' });
 
   const comment = `navilist:navilist ${JSON.stringify(rules)}`;
   await navidrome.updatePlaylist(db, playlistId, { comment });
   snapshotPlaylist(db, playlistId, name.trim(), comment, trackIds, null);
 
-  logger.info('playlists', `smart playlist created: "${name.trim()}" (${trackIds.length} tracks)`);
+  logger.info('playlists', `navilist playlist saved: "${name.trim()}" (${trackIds.length} tracks)`);
   res.json({ ok: true, playlistId, count: trackIds.length });
 });
 

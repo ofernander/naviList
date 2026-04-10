@@ -223,8 +223,8 @@ select:focus {
 
 .pl-search:focus { outline: none; border-color: #0084ff; }
 
-.pl-filter-btn {
-  padding: 0.45rem 0.9rem;
+.pl-filter-select {
+  padding: 0.45rem 0.6rem;
   background: #ffffff;
   border: 0.5px solid #ddddd8;
   border-radius: 6px;
@@ -232,8 +232,7 @@ select:focus {
   font-size: 0.88rem;
   cursor: pointer;
 }
-
-.pl-filter-btn.active { border-color: #0084ff; color: #0084ff; background: #e6f3ff; }
+.pl-filter-select:focus { outline: none; border-color: #0084ff; }
 
 .pl-filter-label {
   font-size: 0.78rem;
@@ -511,7 +510,122 @@ select:focus {
 .library-page {
   display: flex;
   flex-direction: column;
+  height: calc(100vh - 53px);
+  overflow: hidden;
 }
+
+.library-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.library-grid-area {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Playlist build panel (manual mode) ─────────────────────────────────── */
+.pl-build-panel {
+  width: 260px;
+  flex-shrink: 0;
+  background: #ffffff;
+  border-right: 0.5px solid #eeeee8;
+  display: none;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.pl-build-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.65rem 1rem;
+  border-bottom: 0.5px solid #eeeee8;
+  flex-shrink: 0;
+}
+
+.pl-build-title {
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: #aaa;
+}
+
+.pl-build-count { font-size: 0.72rem; color: #aaa; }
+
+.pl-build-tracks { flex: 1; overflow-y: auto; }
+
+.pl-build-empty {
+  padding: 1.5rem 1rem;
+  font-size: 0.82rem;
+  color: #bbb;
+  text-align: center;
+}
+
+.pl-build-track {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.75rem;
+  border-bottom: 0.5px solid #f5f5f3;
+}
+.pl-build-track:hover { background: #fafaf8; }
+
+.pl-build-num {
+  font-size: 0.7rem;
+  color: #ccc;
+  width: 16px;
+  text-align: right;
+  flex-shrink: 0;
+}
+
+.pl-build-info { flex: 1; min-width: 0; }
+
+.pl-build-track-title {
+  font-size: 0.78rem;
+  color: #1a1a1a;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pl-build-track-artist {
+  font-size: 0.7rem;
+  color: #aaa;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pl-build-remove {
+  background: none;
+  border: none;
+  color: #ccc;
+  cursor: pointer;
+  font-size: 0.72rem;
+  padding: 0.15rem 0.25rem;
+  border-radius: 3px;
+  flex-shrink: 0;
+  opacity: 0.6;
+}
+.pl-build-remove:hover { color: #c0392b; background: #fff5f5; opacity: 1; }
+
+.pl-build-footer {
+  padding: 0.75rem;
+  border-top: 0.5px solid #eeeee8;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.album-card.has-selected .album-cover-wrap { outline: 2px solid #0084ff; outline-offset: 2px; }
 
 .library-toolbar {
   display: flex;
@@ -550,12 +664,12 @@ select:focus {
 .playlist-select { min-width: 160px; }
 
 /* ── Album / artist grid (library page) ─────────────────────────────────── */
-.album-grid-container { padding: 1.25rem 1.5rem 2rem; }
+.album-grid-container { padding: 1.25rem 1.5rem 2rem; flex: 1; }
 
 .album-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-  gap: 1.25rem;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 0.75rem;
 }
 
 .album-card {
@@ -607,9 +721,9 @@ select:focus {
 .album-cover-wrap:hover .btn-select-album { opacity: 1; }
 .btn-select-album:hover { background: #e6f3ff; border-color: #0084ff; }
 
-.album-info { padding: 0.5rem 0.1rem 0; }
-.album-name { font-size: 0.85rem; font-weight: 600; color: #1a1a1a; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.album-meta { font-size: 0.72rem; color: #aaa; margin-top: 0.1rem; }
+.album-info { padding: 0.35rem 0.1rem 0; }
+.album-name { font-size: 0.78rem; font-weight: 600; color: #1a1a1a; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.album-meta { font-size: 0.68rem; color: #aaa; margin-top: 0.1rem; }
 
 .album-expand-panel {
   grid-column: 1 / -1;
@@ -657,8 +771,8 @@ select:focus {
 .et-dur   { color: #bbb; text-align: right; }
 .et-plays { color: #ccc; text-align: right; }
 
-.artist-img { border-radius: 50%; }
-.album-card.artist-card .album-cover-wrap { border-radius: 50%; }
+.artist-img { border-radius: 10px; }
+.album-card.artist-card .album-cover-wrap { border-radius: 10px; }
 .album-card.artist-card.expanded .album-cover-wrap { outline-offset: 3px; }
 
 .artist-album-grid {
@@ -1276,4 +1390,41 @@ select:focus {
 .radio-depth-option input[type="radio"] {
   accent-color: #0084ff;
   cursor: pointer;
+}
+
+/* ── Preview track panel ─────────────────────────────────── */
+.rb-preview-tracks {
+  background: #ffffff;
+  border: 0.5px solid #eeeee8;
+  border-radius: 6px;
+  overflow: hidden;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+/* ── Builder name input ───────────────────────────────── */
+.pl-builder-name-input {
+  font-size: 1.3rem;
+  font-weight: 600;
+  color: #1a1a1a;
+  background: none;
+  border: none;
+  border-bottom: 1.5px solid #ddddd8;
+  border-radius: 0;
+  padding: 0.2rem 0;
+  width: 100%;
+  outline: none;
+  margin-bottom: 0.25rem;
+}
+.pl-builder-name-input:focus { border-bottom-color: #0084ff; }
+.pl-builder-name-input::placeholder { color: #ccc; font-weight: 400; }
+
+/* ── Manual creation banner (library page) ────────────────── */
+.manual-create-banner {
+  padding: 1rem 1.5rem 0.75rem;
+  border-bottom: 0.5px solid #eeeee8;
+  background: #ffffff;
+}
+.manual-banner-body {
+  margin-top: 0.75rem;
 }

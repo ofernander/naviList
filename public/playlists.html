@@ -32,12 +32,14 @@
     <div class="pl-toolbar">
       <input type="text" class="pl-search" id="searchInput" placeholder="Search playlists..." />
       <span class="pl-filter-label">Filter:</span>
-      <button class="pl-filter-btn active" data-filter="all">All</button>
-      <button class="pl-filter-btn" data-filter="navilist">naviList</button>
-      <button class="pl-filter-btn" data-filter="listenbrainz">ListenBrainz</button>
-      <button class="pl-filter-btn" data-filter="radio">Radio</button>
-      <button class="pl-filter-btn" data-filter="manual">Manual</button>
-      <button class="pl-filter-btn" data-filter="deactivated">Deactivated</button>
+      <select id="filterSelect" class="pl-filter-select">
+        <option value="all">All</option>
+        <option value="navilist">naviList</option>
+        <option value="radio">Radio</option>
+        <option value="listenbrainz">ListenBrainz</option>
+        <option value="manual">Manual</option>
+        <option value="deactivated">Deactivated</option>
+      </select>
       <div class="pl-view-toggle">
         <button class="pl-view-btn active" id="viewBtnList" title="List view">☰</button>
         <button class="pl-view-btn" id="viewBtnCards" title="Card view">⊞</button>
@@ -64,9 +66,7 @@
       <button class="btn btn-secondary btn-sm" id="selClearBtn">Clear</button>
     </div>
 
-    <div class="pl-cards" id="plCards">
-      <!-- Populated by JS -->
-    </div>
+    <div class="pl-cards" id="plCards"></div>
   </main>
 
   <!-- ── Detail view ────────────────────────────────────────────────────── -->
@@ -91,13 +91,12 @@
     <button class="pl-detail-back" id="rulesBackBtn">← Back</button>
     <div class="pl-detail-header">
       <div>
-        <div class="pl-detail-title" id="rulesTitle"></div>
-        <div class="pl-detail-meta">Define rules to automatically generate this playlist</div>
+        <input type="text" id="rulesNameInput" class="pl-builder-name-input" placeholder="Playlist name..." />
+        <div class="pl-detail-meta" id="rulesSubtitle">Define rules to automatically generate this playlist</div>
       </div>
     </div>
     <hr style="border:none; border-top: 0.5px solid #eeeee8; margin-bottom: 1.5rem;" />
 
-    <!-- Global settings -->
     <div class="rb-section">
       <div class="rb-section-label">Settings</div>
       <div class="rb-globals">
@@ -117,18 +116,30 @@
       </div>
     </div>
 
-    <!-- Rules -->
     <div class="rb-section">
       <div class="rb-section-label">Rules</div>
       <div class="rb-rules-list" id="rbRulesList"></div>
       <button class="rb-add-rule" id="rbAddRule">+ Add rule</button>
     </div>
 
-    <!-- Actions -->
     <div class="rb-actions">
       <button class="btn btn-secondary" id="rulesCancelBtn">Cancel</button>
-      <button class="btn" id="rulesSaveBtn">Save &amp; Generate</button>
+      <button class="btn" id="rulesPreviewBtn">Preview →</button>
+      <button class="btn" id="rulesSaveBtn" style="display:none">Save &amp; Generate</button>
       <span class="rb-status" id="rbStatus"></span>
+    </div>
+
+    <div id="rbPreviewPanel" style="display:none; margin-top:1.5rem;">
+      <hr style="border:none; border-top: 0.5px solid #eeeee8; margin-bottom:1rem;" />
+      <div class="rb-section-label" style="margin-bottom:0.75rem;">
+        Preview <span id="rbPreviewCount" style="font-weight:400; color:#aaa;"></span>
+      </div>
+      <div class="rb-preview-tracks" id="rbPreviewTracks"></div>
+      <div class="rb-actions" style="margin-top:1rem;">
+        <button class="btn btn-secondary" id="rbPreviewCancelBtn">Discard</button>
+        <button class="btn" id="rbSaveBtn">Save Playlist</button>
+        <span class="rb-status" id="rbSaveStatus"></span>
+      </div>
     </div>
   </main>
 
@@ -137,7 +148,7 @@
     <button class="pl-detail-back" id="radioBackBtn">← Back</button>
     <div class="pl-detail-header">
       <div>
-        <div class="pl-detail-title" id="radioTitle"></div>
+        <input type="text" id="radioNameInput" class="pl-builder-name-input" placeholder="Station name..." />
         <div class="pl-detail-meta">Seed artists — naviList finds similar music from your library via Last.fm</div>
       </div>
     </div>
@@ -177,8 +188,21 @@
 
     <div class="rb-actions" style="margin-top:1.5rem;">
       <button class="btn btn-secondary" id="radioCancelBtn">Cancel</button>
-      <button class="btn" id="radioCreateBtn">Create Radio Playlist →</button>
+      <button class="btn" id="radioPreviewBtn">Preview →</button>
       <span class="rb-status" id="radioStatus"></span>
+    </div>
+
+    <div id="radioPreviewPanel" style="display:none; margin-top:1.5rem;">
+      <hr style="border:none; border-top: 0.5px solid #eeeee8; margin-bottom:1rem;" />
+      <div class="rb-section-label" style="margin-bottom:0.75rem;">
+        Preview <span id="radioPreviewCount" style="font-weight:400; color:#aaa;"></span>
+      </div>
+      <div class="rb-preview-tracks" id="radioPreviewTracks"></div>
+      <div class="rb-actions" style="margin-top:1rem;">
+        <button class="btn btn-secondary" id="radioPreviewCancelBtn">Discard</button>
+        <button class="btn" id="radioSaveBtn">Save Playlist</button>
+        <span class="rb-status" id="radioSaveStatus"></span>
+      </div>
     </div>
   </main>
 
@@ -205,26 +229,22 @@
           <div class="pl-type-title">naviList</div>
           <div class="pl-type-desc">Define rules — naviList generates and updates tracks automatically</div>
         </div>
-        <div class="pl-type-option" data-type="manual" id="typeManual">
-          <div class="pl-type-title">Manual</div>
-          <div class="pl-type-desc">Hand-pick tracks from your library yourself</div>
+        <div class="pl-type-option" data-type="radio" id="typeRadio">
+          <div class="pl-type-title">Radio</div>
+          <div class="pl-type-desc">Seed with artists — naviList finds similar music from your library</div>
         </div>
         <div class="pl-type-option" data-type="listenbrainz" id="typeLb">
           <div class="pl-type-title">ListenBrainz</div>
           <div class="pl-type-desc">Import and sync playlists from your ListenBrainz account</div>
         </div>
-        <div class="pl-type-option" data-type="radio" id="typeRadio">
-          <div class="pl-type-title">Radio</div>
-          <div class="pl-type-desc">Seed with artists — naviList finds similar music from your library</div>
+        <div class="pl-type-option" data-type="manual" id="typeManual">
+          <div class="pl-type-title">Manual</div>
+          <div class="pl-type-desc">Hand-pick tracks from your library yourself</div>
         </div>
       </div>
-      <input type="text" id="newPlaylistName" placeholder="Playlist name..." />
-      <p id="lbTypeNote" style="display:none; font-size:0.82rem; color:#aaa; margin-top:-0.5rem;">No name needed — playlists come from ListenBrainz</p>
-      <p id="radioTypeNote" style="display:none; font-size:0.82rem; color:#aaa; margin-top:-0.5rem;">Name your station, then add seed artists on the next screen</p>
       <div class="modal-actions">
         <button class="btn btn-secondary" id="cancelNewPlaylist">Cancel</button>
         <button class="btn" id="createPlaylistBtn">Continue →</button>
-        <span id="createStatus"></span>
       </div>
     </div>
   </div>
@@ -236,21 +256,23 @@
     let searchQuery  = '';
     let selectedType = 'navilist';
 
-    let viewMode = localStorage.getItem('navilist_pl_view') || 'list';
-
+    let viewMode  = localStorage.getItem('navilist_pl_view')     || 'list';
     let sortField = localStorage.getItem('navilist_pl_sort')     || 'name';
     let sortDir   = localStorage.getItem('navilist_pl_sort_dir') || 'asc';
     let selected  = new Set();
 
     // Rule builder state
-    let rbPlaylistId   = null;
-    let rbPlaylistName = '';
-    let rbReturnTo     = 'list';
-    let rbRules        = [];
+    let rbPlaylistName      = '';
+    let rbReturnTo          = 'list';
+    let rbRules             = [];
+    let rbMode              = 'create';
+    let rbEditingPlaylistId = null;
+    let rbPreviewTracks     = [];
 
     // Radio builder state
-    let radioPlaylistName = '';
-    let radioSeeds        = [];
+    let radioSeeds          = [];
+    let radioPreviewTracks  = [];
+    let radioPreviewConfig  = null;
 
     // ── Helpers ────────────────────────────────────────────────────────────
     function esc(str) {
@@ -272,21 +294,10 @@
       return new Date(unix * 1000).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
     }
 
-    function isSmartPlaylist(p) {
-      return p.comment?.startsWith('navilist:navilist') || false;
-    }
-
-    function isLbPlaylist(p) {
-      return p.comment?.startsWith('navilist:lb') || false;
-    }
-
-    function isRadioPlaylist(p) {
-      return p.comment?.startsWith('navilist:radio') || false;
-    }
-
-    function isInactive(p) {
-      return p.active === 0;
-    }
+    function isSmartPlaylist(p)  { return p.comment?.startsWith('navilist:navilist') || false; }
+    function isLbPlaylist(p)     { return p.comment?.startsWith('navilist:lb')       || false; }
+    function isRadioPlaylist(p)  { return p.comment?.startsWith('navilist:radio')    || false; }
+    function isInactive(p)       { return p.active === 0; }
 
     function getPlaylistType(p) {
       if (isSmartPlaylist(p))  return 'navilist';
@@ -319,9 +330,7 @@
       try {
         const json = p.comment?.replace(/^navilist:navilist\s*/, '');
         return json ? JSON.parse(json) : null;
-      } catch (e) {
-        return null;
-      }
+      } catch (e) { return null; }
     }
 
     function updateSortArrows() {
@@ -350,45 +359,22 @@
     }
 
     // ── Views ──────────────────────────────────────────────────────────────
-    function showListView() {
-      document.getElementById('viewList').style.display   = '';
-      document.getElementById('viewDetail').style.display = 'none';
-      document.getElementById('viewRules').style.display  = 'none';
-      document.getElementById('viewLb').style.display     = 'none';
-      document.getElementById('viewRadio').style.display  = 'none';
+    function hideAllViews() {
+      ['viewList','viewDetail','viewRules','viewLb','viewRadio'].forEach(id => {
+        document.getElementById(id).style.display = 'none';
+      });
     }
 
-    function showDetailView() {
-      document.getElementById('viewList').style.display   = 'none';
-      document.getElementById('viewDetail').style.display = '';
-      document.getElementById('viewRules').style.display  = 'none';
-      document.getElementById('viewLb').style.display     = 'none';
-      document.getElementById('viewRadio').style.display  = 'none';
-    }
-
-    function showRulesView() {
-      document.getElementById('viewList').style.display   = 'none';
-      document.getElementById('viewDetail').style.display = 'none';
-      document.getElementById('viewRules').style.display  = '';
-      document.getElementById('viewLb').style.display     = 'none';
-      document.getElementById('viewRadio').style.display  = 'none';
-    }
+    function showListView()   { hideAllViews(); document.getElementById('viewList').style.display   = ''; }
+    function showDetailView() { hideAllViews(); document.getElementById('viewDetail').style.display = ''; }
+    function showRulesView()  { hideAllViews(); document.getElementById('viewRules').style.display  = ''; }
+    function showRadioView()  { hideAllViews(); document.getElementById('viewRadio').style.display  = ''; }
+    function showManualView() { window.location.href = '/library?mode=manual'; }
 
     function showLbView() {
-      document.getElementById('viewList').style.display   = 'none';
-      document.getElementById('viewDetail').style.display = 'none';
-      document.getElementById('viewRules').style.display  = 'none';
-      document.getElementById('viewLb').style.display     = '';
-      document.getElementById('viewRadio').style.display  = 'none';
+      hideAllViews();
+      document.getElementById('viewLb').style.display = '';
       loadLbPlaylists();
-    }
-
-    function showRadioView() {
-      document.getElementById('viewList').style.display   = 'none';
-      document.getElementById('viewDetail').style.display = 'none';
-      document.getElementById('viewRules').style.display  = 'none';
-      document.getElementById('viewLb').style.display     = 'none';
-      document.getElementById('viewRadio').style.display  = '';
     }
 
     // ── Load playlists ─────────────────────────────────────────────────────
@@ -410,7 +396,7 @@
 
       const filtered = allPlaylists.filter(p => {
         const matchSearch = !q || p.name.toLowerCase().includes(q);
-        const type = getPlaylistType(p);
+        const type     = getPlaylistType(p);
         const inactive = isInactive(p);
         const matchFilter =
           (activeFilter === 'deactivated' && inactive) ||
@@ -418,8 +404,8 @@
           (!inactive && (
             activeFilter === type ||
             (activeFilter === 'navilist' && type === 'navilist') ||
-            (activeFilter === 'radio' && type === 'radio') ||
-            (activeFilter === 'manual' && type === 'manual')
+            (activeFilter === 'radio'    && type === 'radio')    ||
+            (activeFilter === 'manual'   && type === 'manual')
           ));
         return matchSearch && matchFilter;
       });
@@ -431,14 +417,13 @@
         return;
       }
 
-      // Sort
       filtered.sort((a, b) => {
         let av, bv;
         switch (sortField) {
-          case 'type':     av = getPlaylistType(a);       bv = getPlaylistType(b);       break;
-          case 'tracks':   av = a.songCount  || 0;        bv = b.songCount  || 0;        break;
-          case 'duration': av = a.duration   || 0;        bv = b.duration   || 0;        break;
-          case 'added':    av = a.created_at || 0;        bv = b.created_at || 0;        break;
+          case 'type':     av = getPlaylistType(a);           bv = getPlaylistType(b);           break;
+          case 'tracks':   av = a.songCount  || 0;            bv = b.songCount  || 0;            break;
+          case 'duration': av = a.duration   || 0;            bv = b.duration   || 0;            break;
+          case 'added':    av = a.created_at || 0;            bv = b.created_at || 0;            break;
           default:         av = (a.name || '').toLowerCase(); bv = (b.name || '').toLowerCase();
         }
         if (av < bv) return sortDir === 'asc' ? -1 : 1;
@@ -477,28 +462,17 @@
         <div class="pl-card-footer">
           <span class="pl-badge ${badgeClass(type)}">${badgeLabel(type)}</span>
           <span class="pl-card-meta">${esc(meta)}</span>
-        </div>
-      `;
-
-      card.addEventListener('click', (e) => {
-        if (e.target.closest('.pl-card-menu')) return;
-        openDetail(p);
-      });
-
-      card.querySelector('.pl-card-menu').addEventListener('click', (e) => {
-        e.stopPropagation();
-        showCardMenu(e, p);
-      });
-
+        </div>`;
+      card.addEventListener('click', e => { if (!e.target.closest('.pl-card-menu')) openDetail(p); });
+      card.querySelector('.pl-card-menu').addEventListener('click', e => { e.stopPropagation(); showCardMenu(e, p); });
       return card;
     }
 
     function renderListRow(p) {
       const type = getPlaylistType(p);
       const dur  = fmtDur(p.duration);
-
-      const row = document.createElement('div');
-      row.className = 'pl-list-row';
+      const row  = document.createElement('div');
+      row.className  = 'pl-list-row';
       row.dataset.id = p.id;
       if (isInactive(p)) row.classList.add('is-inactive');
 
@@ -512,29 +486,19 @@
         <span class="pl-list-row-meta">${dur || '—'}</span>
         <span class="pl-list-row-added">${fmtDate(p.created_at)}</span>
         <button class="pl-card-menu" title="Options">⋯</button>
-        <span class="pl-list-row-chevron">›</span>
-      `;
+        <span class="pl-list-row-chevron">›</span>`;
 
       header.querySelector('.pl-row-chk').addEventListener('click', e => {
         e.stopPropagation();
         if (e.target.checked) selected.add(p.id); else selected.delete(p.id);
         updateSelectionBar();
       });
-
-      header.querySelector('.pl-card-menu').addEventListener('click', e => {
-        e.stopPropagation();
-        showCardMenu(e, p);
-      });
-
-      header.addEventListener('click', e => {
-        if (e.target.closest('.pl-card-menu')) return;
-        toggleListRow(row, p);
-      });
+      header.querySelector('.pl-card-menu').addEventListener('click', e => { e.stopPropagation(); showCardMenu(e, p); });
+      header.addEventListener('click', e => { if (!e.target.closest('.pl-card-menu')) toggleListRow(row, p); });
 
       const body = document.createElement('div');
-      body.className = 'pl-list-row-body';
+      body.className     = 'pl-list-row-body';
       body.style.display = 'none';
-
       row.appendChild(header);
       row.appendChild(body);
       return row;
@@ -545,21 +509,13 @@
       const isOpen = row.classList.contains('is-open');
 
       document.querySelectorAll('.pl-list-row.is-open').forEach(r => {
-        if (r !== row) {
-          r.classList.remove('is-open');
-          r.querySelector('.pl-list-row-body').style.display = 'none';
-        }
+        if (r !== row) { r.classList.remove('is-open'); r.querySelector('.pl-list-row-body').style.display = 'none'; }
       });
 
-      if (isOpen) {
-        row.classList.remove('is-open');
-        body.style.display = 'none';
-        return;
-      }
+      if (isOpen) { row.classList.remove('is-open'); body.style.display = 'none'; return; }
 
       row.classList.add('is-open');
       body.style.display = '';
-
       if (body.dataset.loaded) return;
       body.dataset.loaded = '1';
       body.innerHTML = '<div class="detail-loading">Loading…</div>';
@@ -570,47 +526,40 @@
 
       if (type === 'navilist') {
         const editBtn = document.createElement('button');
-        editBtn.className = 'btn btn-secondary btn-sm';
-        editBtn.textContent = 'Edit rules';
+        editBtn.className = 'btn btn-secondary btn-sm'; editBtn.textContent = 'Edit rules';
         editBtn.addEventListener('click', () => editRules(p));
         actions.appendChild(editBtn);
 
         const regenBtn = document.createElement('button');
-        regenBtn.className = 'btn btn-secondary btn-sm';
-        regenBtn.textContent = 'Regenerate';
+        regenBtn.className = 'btn btn-secondary btn-sm'; regenBtn.textContent = 'Regenerate';
         regenBtn.addEventListener('click', () => regenerate(p.id, regenBtn));
         actions.appendChild(regenBtn);
       }
 
       const addBtn = document.createElement('button');
-      addBtn.className = 'btn btn-secondary btn-sm';
-      addBtn.textContent = '+ Add tracks';
+      addBtn.className = 'btn btn-secondary btn-sm'; addBtn.textContent = '+ Add tracks';
       addBtn.addEventListener('click', () => addTracks(p.id));
       actions.appendChild(addBtn);
 
       const renameBtn = document.createElement('button');
-      renameBtn.className = 'btn btn-secondary btn-sm';
-      renameBtn.textContent = 'Rename';
+      renameBtn.className = 'btn btn-secondary btn-sm'; renameBtn.textContent = 'Rename';
       renameBtn.addEventListener('click', () => renamePlaylist(p));
       actions.appendChild(renameBtn);
 
       if (isInactive(p)) {
         const activateBtn = document.createElement('button');
-        activateBtn.className = 'btn btn-secondary btn-sm';
-        activateBtn.textContent = '▶ Activate';
+        activateBtn.className = 'btn btn-secondary btn-sm'; activateBtn.textContent = '▶ Activate';
         activateBtn.addEventListener('click', () => activatePlaylist(p, activateBtn));
         actions.appendChild(activateBtn);
       } else {
         const deactivateBtn = document.createElement('button');
-        deactivateBtn.className = 'btn btn-secondary btn-sm';
-        deactivateBtn.textContent = 'Deactivate';
+        deactivateBtn.className = 'btn btn-secondary btn-sm'; deactivateBtn.textContent = 'Deactivate';
         deactivateBtn.addEventListener('click', () => deactivatePlaylist(p, deactivateBtn));
         actions.appendChild(deactivateBtn);
       }
 
       const deleteBtn = document.createElement('button');
-      deleteBtn.className = 'btn btn-danger btn-sm';
-      deleteBtn.textContent = 'Delete';
+      deleteBtn.className = 'btn btn-danger btn-sm'; deleteBtn.textContent = 'Delete';
       deleteBtn.addEventListener('click', () => deletePlaylist(p));
       actions.appendChild(deleteBtn);
 
@@ -619,10 +568,7 @@
         const data = await res.json();
         body.innerHTML = '';
         body.appendChild(actions);
-        if (!data.ok) {
-          body.insertAdjacentHTML('beforeend', '<div class="detail-empty">Failed to load.</div>');
-          return;
-        }
+        if (!data.ok) { body.insertAdjacentHTML('beforeend', '<div class="detail-empty">Failed to load.</div>'); return; }
         const trackDiv = document.createElement('div');
         trackDiv.className = 'pl-list-row-tracks';
         body.appendChild(trackDiv);
@@ -634,36 +580,19 @@
 
     function renderDetailInto(container, p, playlistId) {
       const tracks = Array.isArray(p.entry) ? p.entry : (p.entry ? [p.entry] : []);
+      if (!tracks.length) { container.innerHTML = '<div class="detail-empty">No tracks yet.</div>'; return; }
 
-      if (!tracks.length) {
-        container.innerHTML = '<div class="detail-empty">No tracks yet.</div>';
-        return;
-      }
-
-      let html = `
-        <div class="track-list">
-          <div class="track-list-header">
-            <span class="tc-num">#</span>
-            <span class="tc-title">Title / Artist</span>
-            <span class="tc-dur">Duration</span>
-            <span class="tc-action"></span>
-          </div>`;
-
+      let html = `<div class="track-list"><div class="track-list-header">
+        <span class="tc-num">#</span><span class="tc-title">Title / Artist</span>
+        <span class="tc-dur">Duration</span><span class="tc-action"></span></div>`;
       tracks.forEach((t, i) => {
-        html += `
-          <div class="track-row">
-            <span class="tc-num">${i + 1}</span>
-            <span class="tc-title">
-              <span class="tl-title">${esc(t.title || '—')}</span>
-              <span class="tl-artist">${esc(t.artist || '—')}</span>
-            </span>
-            <span class="tc-dur">${fmtDur(t.duration)}</span>
-            <span class="tc-action">
-              <button class="btn-icon remove-track" data-playlist="${esc(playlistId)}" data-index="${i}" title="Remove">✕</button>
-            </span>
-          </div>`;
+        html += `<div class="track-row">
+          <span class="tc-num">${i + 1}</span>
+          <span class="tc-title"><span class="tl-title">${esc(t.title || '—')}</span><span class="tl-artist">${esc(t.artist || '—')}</span></span>
+          <span class="tc-dur">${fmtDur(t.duration)}</span>
+          <span class="tc-action"><button class="btn-icon remove-track" data-playlist="${esc(playlistId)}" data-index="${i}" title="Remove">✕</button></span>
+        </div>`;
       });
-
       html += '</div>';
       container.innerHTML = html;
 
@@ -687,32 +616,40 @@
       });
     }
 
+    function renderPreviewTracks(containerId, tracks, onRemove) {
+      const el = document.getElementById(containerId);
+      if (!tracks.length) { el.innerHTML = '<div class="detail-empty">No tracks.</div>'; return; }
+      let html = `<div class="track-list"><div class="track-list-header">
+        <span class="tc-num">#</span><span class="tc-title">Title / Artist</span>
+        <span class="tc-dur">Duration</span><span class="tc-action"></span></div>`;
+      tracks.forEach((t, i) => {
+        html += `<div class="track-row">
+          <span class="tc-num">${i + 1}</span>
+          <span class="tc-title"><span class="tl-title">${esc(t.title || '—')}</span><span class="tl-artist">${esc(t.artist || '—')}</span></span>
+          <span class="tc-dur">${fmtDur(t.duration)}</span>
+          <span class="tc-action"><button class="btn-icon remove-preview-track" data-index="${i}" title="Remove">✕</button></span>
+        </div>`;
+      });
+      html += '</div>';
+      el.innerHTML = html;
+      el.querySelectorAll('.remove-preview-track').forEach(btn => {
+        btn.addEventListener('click', () => onRemove(parseInt(btn.dataset.index)));
+      });
+    }
+
     // ── Card context menu ──────────────────────────────────────────────────
     function showCardMenu(e, p) {
       document.getElementById('cardMenu')?.remove();
-
       const menu = document.createElement('div');
       menu.id = 'cardMenu';
-      menu.style.cssText = `
-        position: fixed;
-        background: #fff;
-        border: 0.5px solid #ddddd8;
-        border-radius: 6px;
-        padding: 0.4rem 0;
-        min-width: 140px;
-        z-index: 200;
-        box-shadow: 0 4px 16px rgba(0,0,0,0.1);
-        top: ${e.clientY}px;
-        left: ${e.clientX}px;
-      `;
+      menu.style.cssText = `position:fixed; background:#fff; border:0.5px solid #ddddd8; border-radius:6px; padding:0.4rem 0; min-width:140px; z-index:200; box-shadow:0 4px 16px rgba(0,0,0,0.1); top:${e.clientY}px; left:${e.clientX}px;`;
 
       const items = [
         { label: 'Open',   action: () => openDetail(p) },
         { label: 'Rename', action: () => renamePlaylist(p) },
         ...(isInactive(p)
           ? [{ label: '▶ Activate', action: () => activatePlaylist(p, { disabled: false, textContent: '' }) }]
-          : [{ label: 'Deactivate', action: () => deactivatePlaylist(p, { disabled: false, textContent: '' }) }]
-        ),
+          : [{ label: 'Deactivate', action: () => deactivatePlaylist(p, { disabled: false, textContent: '' }) }]),
         { label: 'Delete', action: () => deletePlaylist(p), danger: true },
       ];
 
@@ -734,47 +671,40 @@
     async function openDetail(p) {
       showDetailView();
       document.getElementById('detailName').textContent = p.name;
-
       const type  = getPlaylistType(p);
       const badge = document.getElementById('detailBadge');
       badge.className   = `pl-badge ${badgeClass(type)}`;
       badge.textContent = badgeLabel(type);
-
       document.getElementById('detailMeta').textContent = 'Loading...';
-      document.getElementById('detailBody').innerHTML = '<div class="detail-loading">Loading...</div>';
+      document.getElementById('detailBody').innerHTML   = '<div class="detail-loading">Loading...</div>';
 
       const actions = document.getElementById('detailActions');
       actions.innerHTML = '';
 
       if (type === 'navilist') {
         const editBtn = document.createElement('button');
-        editBtn.className = 'btn btn-secondary btn-sm';
-        editBtn.textContent = 'Edit rules';
+        editBtn.className = 'btn btn-secondary btn-sm'; editBtn.textContent = 'Edit rules';
         editBtn.addEventListener('click', () => editRules(p));
         actions.appendChild(editBtn);
 
         const regenBtn = document.createElement('button');
-        regenBtn.className = 'btn btn-secondary btn-sm';
-        regenBtn.textContent = 'Regenerate';
+        regenBtn.className = 'btn btn-secondary btn-sm'; regenBtn.textContent = 'Regenerate';
         regenBtn.addEventListener('click', () => regenerate(p.id, regenBtn));
         actions.appendChild(regenBtn);
       }
 
       const addBtn = document.createElement('button');
-      addBtn.className = 'btn btn-secondary btn-sm';
-      addBtn.textContent = '+ Add tracks';
+      addBtn.className = 'btn btn-secondary btn-sm'; addBtn.textContent = '+ Add tracks';
       addBtn.addEventListener('click', () => addTracks(p.id));
       actions.appendChild(addBtn);
 
       const renameBtn = document.createElement('button');
-      renameBtn.className = 'btn btn-secondary btn-sm';
-      renameBtn.textContent = 'Rename';
+      renameBtn.className = 'btn btn-secondary btn-sm'; renameBtn.textContent = 'Rename';
       renameBtn.addEventListener('click', () => renamePlaylist(p));
       actions.appendChild(renameBtn);
 
       const deleteBtn = document.createElement('button');
-      deleteBtn.className = 'btn btn-danger btn-sm';
-      deleteBtn.textContent = 'Delete';
+      deleteBtn.className = 'btn btn-danger btn-sm'; deleteBtn.textContent = 'Delete';
       deleteBtn.addEventListener('click', () => deletePlaylist(p));
       actions.appendChild(deleteBtn);
 
@@ -791,39 +721,21 @@
     function renderDetail(p) {
       const tracks   = Array.isArray(p.entry) ? p.entry : (p.entry ? [p.entry] : []);
       const totalDur = tracks.reduce((a, t) => a + (t.duration || 0), 0);
-      document.getElementById('detailMeta').textContent =
-        `${tracks.length} tracks · ${fmtDur(totalDur)}`;
+      document.getElementById('detailMeta').textContent = `${tracks.length} tracks · ${fmtDur(totalDur)}`;
 
-      if (!tracks.length) {
-        document.getElementById('detailBody').innerHTML =
-          '<div class="detail-empty">No tracks yet. Use &ldquo;Edit rules&rdquo; to define rules and generate tracks.</div>';
-        return;
-      }
+      if (!tracks.length) { document.getElementById('detailBody').innerHTML = '<div class="detail-empty">No tracks yet.</div>'; return; }
 
-      let html = `
-        <div class="track-list">
-          <div class="track-list-header">
-            <span class="tc-num">#</span>
-            <span class="tc-title">Title / Artist</span>
-            <span class="tc-dur">Duration</span>
-            <span class="tc-action"></span>
-          </div>`;
-
+      let html = `<div class="track-list"><div class="track-list-header">
+        <span class="tc-num">#</span><span class="tc-title">Title / Artist</span>
+        <span class="tc-dur">Duration</span><span class="tc-action"></span></div>`;
       tracks.forEach((t, i) => {
-        html += `
-          <div class="track-row">
-            <span class="tc-num">${i + 1}</span>
-            <span class="tc-title">
-              <span class="tl-title">${esc(t.title || '—')}</span>
-              <span class="tl-artist">${esc(t.artist || '—')}</span>
-            </span>
-            <span class="tc-dur">${fmtDur(t.duration)}</span>
-            <span class="tc-action">
-              <button class="btn-icon remove-track" data-playlist="${esc(p.id)}" data-index="${i}" title="Remove">✕</button>
-            </span>
-          </div>`;
+        html += `<div class="track-row">
+          <span class="tc-num">${i + 1}</span>
+          <span class="tc-title"><span class="tl-title">${esc(t.title || '—')}</span><span class="tl-artist">${esc(t.artist || '—')}</span></span>
+          <span class="tc-dur">${fmtDur(t.duration)}</span>
+          <span class="tc-action"><button class="btn-icon remove-track" data-playlist="${esc(p.id)}" data-index="${i}" title="Remove">✕</button></span>
+        </div>`;
       });
-
       html += '</div>';
       document.getElementById('detailBody').innerHTML = html;
 
@@ -850,16 +762,13 @@
     // ── Playlist actions ───────────────────────────────────────────────────
     function editRules(p) {
       const existing = parseRules(p);
-      openRuleBuilder(p.id, p.name, existing, 'detail');
+      openRuleBuilder(p.name, existing, 'detail', p.id);
     }
 
     async function regenerate(id, btn) {
-      const p = allPlaylists.find(pl => pl.id === id);
+      const p        = allPlaylists.find(pl => pl.id === id);
       const existing = parseRules(p);
-      if (!existing?.rules?.length) {
-        alert('No rules found for this playlist. Use "Edit rules" to define them first.');
-        return;
-      }
+      if (!existing?.rules?.length) { alert('No rules found. Use "Edit rules" first.'); return; }
       if (btn) { btn.disabled = true; btn.textContent = 'Regenerating...'; }
       try {
         const res  = await fetch(`/playlists/${id}/rules`, {
@@ -881,9 +790,7 @@
       }
     }
 
-    function addTracks(id) {
-      window.location.href = `/library?addTo=${id}`;
-    }
+    function addTracks(id) { window.location.href = `/library?addTo=${id}`; }
 
     async function renamePlaylist(p) {
       const name = prompt('New name:', p.name);
@@ -921,21 +828,16 @@
       if (!confirm(`Delete "${p.name}"? This cannot be undone.`)) return;
       const res  = await fetch(`/playlists/${p.id}/delete`, { method: 'POST' });
       const data = await res.json();
-      if (data.ok) {
-        allPlaylists = allPlaylists.filter(pl => pl.id !== p.id);
-        renderCards();
-        showListView();
-      }
+      if (data.ok) { allPlaylists = allPlaylists.filter(pl => pl.id !== p.id); renderCards(); showListView(); }
     }
 
     // ── Rule builder ───────────────────────────────────────────────────────
-
     const TERMS = {
-      stats:  { label: 'Stats',   valueType: 'stats-select' },
-      decade: { label: 'Decade',  valueType: 'text', placeholder: 'e.g. 1990s' },
-      tag:    { label: 'Tag',     valueType: 'text', placeholder: 'e.g. jazz' },
-      artist: { label: 'Artist',  valueType: 'text', placeholder: 'Artist name' },
-      mood:   { label: 'Mood',    valueType: 'text', placeholder: 'e.g. melancholic' },
+      stats:  { label: 'Stats',  valueType: 'stats-select' },
+      decade: { label: 'Decade', valueType: 'text', placeholder: 'e.g. 1990s' },
+      tag:    { label: 'Tag',    valueType: 'text', placeholder: 'e.g. jazz' },
+      artist: { label: 'Artist', valueType: 'text', placeholder: 'Artist name' },
+      mood:   { label: 'Mood',   valueType: 'text', placeholder: 'e.g. melancholic' },
     };
 
     const STATS_VALUES = [
@@ -960,12 +862,12 @@
     ];
 
     const PERIOD_OPTIONS = [
-      { value: '7day',    label: 'Last 7 days'   },
-      { value: '1month',  label: 'Last month'    },
-      { value: '3month',  label: 'Last 3 months' },
-      { value: '6month',  label: 'Last 6 months' },
+      { value: '7day',    label: 'Last 7 days'    },
+      { value: '1month',  label: 'Last month'     },
+      { value: '3month',  label: 'Last 3 months'  },
+      { value: '6month',  label: 'Last 6 months'  },
       { value: '12month', label: 'Last 12 months' },
-      { value: 'overall', label: 'All time'      },
+      { value: 'overall', label: 'All time'       },
     ];
 
     const SOURCE_OPTIONS = [
@@ -973,30 +875,18 @@
       { value: 'listenbrainz', label: 'ListenBrainz' },
     ];
 
-    let genreList = [];
-    async function loadGenres() {
-      try {
-        const res  = await fetch('/playlists/api/genres');
-        const data = await res.json();
-        genreList  = data.genres || [];
-      } catch (e) { /* silent fail */ }
-    }
-
+    let genreList  = [];
     let artistList = [];
-    async function loadArtists() {
-      try {
-        const res  = await fetch('/playlists/api/artists');
-        const data = await res.json();
-        artistList = data.artists || [];
-      } catch (e) { /* silent fail */ }
-    }
+    async function loadGenres()  { try { const d = await (await fetch('/playlists/api/genres')).json();  genreList  = d.genres  || []; } catch (e) {} }
+    async function loadArtists() { try { const d = await (await fetch('/playlists/api/artists')).json(); artistList = d.artists || []; } catch (e) {} }
 
-    function openRuleBuilder(playlistId, playlistName, existingRules, returnTo) {
-      loadGenres();
-      loadArtists();
-      rbPlaylistId   = playlistId;
-      rbPlaylistName = playlistName;
-      rbReturnTo     = returnTo;
+    function openRuleBuilder(playlistName, existingRules, returnTo, editingId = null) {
+      loadGenres(); loadArtists();
+      rbPlaylistName      = playlistName;
+      rbReturnTo          = returnTo;
+      rbMode              = editingId ? 'edit' : 'create';
+      rbEditingPlaylistId = editingId || null;
+      rbPreviewTracks     = [];
 
       if (existingRules?.rules?.length) {
         document.getElementById('rbLimit').value         = existingRules.limit          ?? 50;
@@ -1010,18 +900,21 @@
         rbRules = [defaultRule()];
       }
 
-      document.getElementById('rulesTitle').textContent = playlistName;
-      document.getElementById('rbStatus').textContent   = '';
-      const saveBtn = document.getElementById('rulesSaveBtn');
-      saveBtn.disabled    = false;
-      saveBtn.textContent = 'Save & Generate';
+      document.getElementById('rulesNameInput').value       = playlistName;
+      document.getElementById('rbStatus').textContent       = '';
+      document.getElementById('rbPreviewPanel').style.display = 'none';
+
+      document.getElementById('rulesPreviewBtn').style.display = rbMode === 'create' ? '' : 'none';
+      document.getElementById('rulesSaveBtn').style.display    = rbMode === 'edit'   ? '' : 'none';
+      document.getElementById('rulesSaveBtn').disabled    = false;
+      document.getElementById('rulesSaveBtn').textContent = 'Save & Generate';
+
       renderRuleRows();
       showRulesView();
+      if (rbMode === 'create') setTimeout(() => document.getElementById('rulesNameInput').focus(), 50);
     }
 
-    function defaultRule() {
-      return { term: 'decade', value: '', weight: 1, mode: 'easy', options: {} };
-    }
+    function defaultRule() { return { term: 'decade', value: '', weight: 1, mode: 'easy', options: {} }; }
 
     function renderRuleRows() {
       const list = document.getElementById('rbRulesList');
@@ -1031,15 +924,13 @@
 
     function buildRuleRow(rule, index) {
       const row = document.createElement('div');
-      row.className = 'rb-rule';
-      row.dataset.index = index;
+      row.className = 'rb-rule'; row.dataset.index = index;
 
       const termSel = document.createElement('select');
       termSel.setAttribute('aria-label', 'Term');
       Object.entries(TERMS).forEach(([key, def]) => {
         const opt = document.createElement('option');
-        opt.value = key;
-        opt.textContent = def.label;
+        opt.value = key; opt.textContent = def.label;
         if (key === rule.term) opt.selected = true;
         termSel.appendChild(opt);
       });
@@ -1048,68 +939,43 @@
       valueWrap.style.minWidth = '0';
       renderValueInput(valueWrap, rule);
 
-      const weightWrap  = document.createElement('div');
+      const weightWrap = document.createElement('div');
       weightWrap.className = 'rb-weight-wrap';
-      const weightLabel = document.createElement('span');
-      weightLabel.textContent = 'Weight';
+      const weightLabel = document.createElement('span'); weightLabel.textContent = 'Weight';
       const weightInput = document.createElement('input');
-      weightInput.type  = 'number';
-      weightInput.min   = '1';
-      weightInput.max   = '10';
-      weightInput.value = rule.weight ?? 1;
-      weightInput.setAttribute('aria-label', 'Weight');
-      weightWrap.appendChild(weightLabel);
-      weightWrap.appendChild(weightInput);
+      weightInput.type = 'number'; weightInput.min = '1'; weightInput.max = '10';
+      weightInput.value = rule.weight ?? 1; weightInput.setAttribute('aria-label', 'Weight');
+      weightWrap.appendChild(weightLabel); weightWrap.appendChild(weightInput);
 
       const modeSel = document.createElement('select');
       modeSel.setAttribute('aria-label', 'Mode');
       ['easy', 'medium', 'hard'].forEach(m => {
         const opt = document.createElement('option');
-        opt.value = m;
-        opt.textContent = m.charAt(0).toUpperCase() + m.slice(1);
+        opt.value = m; opt.textContent = m.charAt(0).toUpperCase() + m.slice(1);
         if (m === (rule.mode || 'easy')) opt.selected = true;
         modeSel.appendChild(opt);
       });
 
       const removeBtn = document.createElement('button');
-      removeBtn.className   = 'rb-rule-remove';
-      removeBtn.textContent = '✕';
-      removeBtn.title       = 'Remove rule';
+      removeBtn.className = 'rb-rule-remove'; removeBtn.textContent = '✕'; removeBtn.title = 'Remove rule';
 
       termSel.addEventListener('change', () => {
-        rbRules[index].term    = termSel.value;
-        rbRules[index].value   = termSel.value === 'stats' ? 'top_played' : '';
+        rbRules[index].term = termSel.value;
+        rbRules[index].value = termSel.value === 'stats' ? 'top_played' : '';
         rbRules[index].options = {};
         renderValueInput(valueWrap, rbRules[index]);
-        schedulePreview(index);
+        scheduleRuleCountPreview();
       });
-
-      weightInput.addEventListener('change', () => {
-        rbRules[index].weight = parseInt(weightInput.value) || 1;
-      });
-
-      modeSel.addEventListener('change', () => {
-        rbRules[index].mode = modeSel.value;
-        schedulePreview(index);
-      });
-
-      removeBtn.addEventListener('click', () => {
-        rbRules.splice(index, 1);
-        renderRuleRows();
-      });
+      weightInput.addEventListener('change', () => { rbRules[index].weight = parseInt(weightInput.value) || 1; });
+      modeSel.addEventListener('change', () => { rbRules[index].mode = modeSel.value; scheduleRuleCountPreview(); });
+      removeBtn.addEventListener('click', () => { rbRules.splice(index, 1); renderRuleRows(); });
 
       const previewSpan = document.createElement('span');
-      previewSpan.className = 'rb-preview-count';
-      previewSpan.textContent = '';
+      previewSpan.className = 'rb-preview-count'; previewSpan.textContent = '';
 
-      row.appendChild(termSel);
-      row.appendChild(valueWrap);
-      row.appendChild(weightWrap);
-      row.appendChild(modeSel);
-      row.appendChild(removeBtn);
-      row.appendChild(previewSpan);
-
-      schedulePreview(index);
+      row.appendChild(termSel); row.appendChild(valueWrap); row.appendChild(weightWrap);
+      row.appendChild(modeSel); row.appendChild(removeBtn); row.appendChild(previewSpan);
+      scheduleRuleCountPreview();
       return row;
     }
 
@@ -1123,48 +989,35 @@
         wrap.style.cssText = 'display:flex; gap:0.4rem; min-width:0; width:100%;';
 
         const sel = document.createElement('select');
-        sel.setAttribute('aria-label', 'Value');
-        sel.style.flex = '1';
+        sel.setAttribute('aria-label', 'Value'); sel.style.flex = '1';
         STATS_VALUES.forEach(sv => {
           const opt = document.createElement('option');
-          opt.value = sv.value;
-          opt.textContent = sv.label;
-          const currentVal = rule.options?.source === 'history' && rule.value === 'top_played'
-            ? 'top_played_history'
-            : rule.value;
+          opt.value = sv.value; opt.textContent = sv.label;
+          const currentVal = rule.options?.source === 'history' && rule.value === 'top_played' ? 'top_played_history' : rule.value;
           if (sv.value === currentVal) opt.selected = true;
           sel.appendChild(opt);
         });
 
         const windowSel = document.createElement('select');
-        windowSel.setAttribute('aria-label', 'Window');
-        windowSel.style.cssText = 'width:120px; flex-shrink:0;';
+        windowSel.setAttribute('aria-label', 'Window'); windowSel.style.cssText = 'width:120px; flex-shrink:0;';
         WINDOW_OPTIONS.forEach(wo => {
-          const opt = document.createElement('option');
-          opt.value = wo.value;
-          opt.textContent = wo.label;
+          const opt = document.createElement('option'); opt.value = wo.value; opt.textContent = wo.label;
           if (wo.value === (rule.options?.window || 'month')) opt.selected = true;
           windowSel.appendChild(opt);
         });
 
         const periodSel = document.createElement('select');
-        periodSel.setAttribute('aria-label', 'Period');
-        periodSel.style.cssText = 'width:130px; flex-shrink:0;';
+        periodSel.setAttribute('aria-label', 'Period'); periodSel.style.cssText = 'width:130px; flex-shrink:0;';
         PERIOD_OPTIONS.forEach(po => {
-          const opt = document.createElement('option');
-          opt.value = po.value;
-          opt.textContent = po.label;
+          const opt = document.createElement('option'); opt.value = po.value; opt.textContent = po.label;
           if (po.value === (rule.options?.period || 'overall')) opt.selected = true;
           periodSel.appendChild(opt);
         });
 
         const sourceSel = document.createElement('select');
-        sourceSel.setAttribute('aria-label', 'Source');
-        sourceSel.style.cssText = 'width:120px; flex-shrink:0;';
+        sourceSel.setAttribute('aria-label', 'Source'); sourceSel.style.cssText = 'width:120px; flex-shrink:0;';
         SOURCE_OPTIONS.forEach(so => {
-          const opt = document.createElement('option');
-          opt.value = so.value;
-          opt.textContent = so.label;
+          const opt = document.createElement('option'); opt.value = so.value; opt.textContent = so.label;
           if (so.value === (rule.options?.source || 'lastfm')) opt.selected = true;
           sourceSel.appendChild(opt);
         });
@@ -1179,125 +1032,73 @@
 
         sel.addEventListener('change', () => {
           if (sel.value === 'top_played_history') {
-            rule.value = 'top_played';
-            rule.options = { ...rule.options, source: 'history' };
+            rule.value = 'top_played'; rule.options = { ...rule.options, source: 'history' };
           } else {
-            rule.value = sel.value;
-            const opts = { ...rule.options };
-            delete opts.source;
-            rule.options = opts;
+            rule.value = sel.value; const opts = { ...rule.options }; delete opts.source; rule.options = opts;
           }
-          syncWindowVisibility();
-          schedulePreview(null);
+          syncWindowVisibility(); scheduleRuleCountPreview();
         });
+        windowSel.addEventListener('change', () => { rule.options = { ...rule.options, window: windowSel.value }; scheduleRuleCountPreview(); });
+        periodSel.addEventListener('change', () => { rule.options = { ...rule.options, period: periodSel.value }; scheduleRuleCountPreview(); });
+        sourceSel.addEventListener('change', () => { rule.options = { ...rule.options, source: sourceSel.value }; scheduleRuleCountPreview(); });
 
-        windowSel.addEventListener('change', () => {
-          rule.options = { ...rule.options, window: windowSel.value };
-          schedulePreview(null);
-        });
-
-        periodSel.addEventListener('change', () => {
-          rule.options = { ...rule.options, period: periodSel.value };
-          schedulePreview(null);
-        });
-
-        sourceSel.addEventListener('change', () => {
-          rule.options = { ...rule.options, source: sourceSel.value };
-          schedulePreview(null);
-        });
-
-        wrap.appendChild(sel);
-        wrap.appendChild(windowSel);
-        wrap.appendChild(periodSel);
-        wrap.appendChild(sourceSel);
+        wrap.appendChild(sel); wrap.appendChild(windowSel); wrap.appendChild(periodSel); wrap.appendChild(sourceSel);
         container.appendChild(wrap);
       } else {
         const input = document.createElement('input');
-        input.type        = 'text';
-        input.placeholder = def.placeholder || '';
-        input.value       = rule.value || '';
+        input.type = 'text'; input.placeholder = def.placeholder || ''; input.value = rule.value || '';
         input.setAttribute('aria-label', 'Value');
 
         if (rule.term === 'decade') {
           const listId = `decade-list-${Date.now()}`;
-          const dl = document.createElement('datalist');
-          dl.id = listId;
-          const currentYear = new Date().getFullYear();
-          const startDecade = Math.floor(currentYear / 10) * 10;
-          for (let d = startDecade; d >= 1950; d -= 10) {
-            const opt = document.createElement('option');
-            opt.value = `${d}s`;
-            dl.appendChild(opt);
-          }
-          input.setAttribute('list', listId);
-          container.appendChild(dl);
+          const dl = document.createElement('datalist'); dl.id = listId;
+          const sy = Math.floor(new Date().getFullYear() / 10) * 10;
+          for (let d = sy; d >= 1950; d -= 10) { const o = document.createElement('option'); o.value = `${d}s`; dl.appendChild(o); }
+          input.setAttribute('list', listId); container.appendChild(dl);
         }
-
         if (rule.term === 'tag' && genreList.length) {
           const listId = `genre-list-${Date.now()}`;
-          const dl = document.createElement('datalist');
-          dl.id = listId;
-          genreList.forEach(g => {
-            const opt = document.createElement('option');
-            opt.value = g;
-            dl.appendChild(opt);
-          });
-          input.setAttribute('list', listId);
-          container.appendChild(dl);
+          const dl = document.createElement('datalist'); dl.id = listId;
+          genreList.forEach(g => { const o = document.createElement('option'); o.value = g; dl.appendChild(o); });
+          input.setAttribute('list', listId); container.appendChild(dl);
         }
-
         if (rule.term === 'artist' && artistList.length) {
           const listId = `artist-list-${Date.now()}`;
-          const dl = document.createElement('datalist');
-          dl.id = listId;
-          artistList.forEach(a => {
-            const opt = document.createElement('option');
-            opt.value = a;
-            dl.appendChild(opt);
-          });
-          input.setAttribute('list', listId);
-          container.appendChild(dl);
+          const dl = document.createElement('datalist'); dl.id = listId;
+          artistList.forEach(a => { const o = document.createElement('option'); o.value = a; dl.appendChild(o); });
+          input.setAttribute('list', listId); container.appendChild(dl);
         }
 
         let debounce;
         input.addEventListener('input', () => {
-          rule.value = input.value;
-          clearTimeout(debounce);
-          debounce = setTimeout(() => schedulePreview(null), 400);
+          rule.value = input.value; clearTimeout(debounce);
+          debounce = setTimeout(() => scheduleRuleCountPreview(), 400);
         });
         container.appendChild(input);
       }
     }
 
-    let previewTimer = null;
-    function schedulePreview() {
-      clearTimeout(previewTimer);
-      previewTimer = setTimeout(runPreview, 500);
-    }
+    let ruleCountTimer = null;
+    function scheduleRuleCountPreview() { clearTimeout(ruleCountTimer); ruleCountTimer = setTimeout(runRuleCountPreview, 500); }
 
-    async function runPreview() {
-      if (!rbPlaylistId) return;
+    async function runRuleCountPreview() {
+      if (rbMode !== 'edit' || !rbEditingPlaylistId) return;
       const rules = buildRulesPayload();
       if (!rules.rules.length) return;
-
       try {
-        const res  = await fetch(`/playlists/${rbPlaylistId}/preview`, {
+        const res  = await fetch(`/playlists/${rbEditingPlaylistId}/preview`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ rules })
         });
         const data = await res.json();
         if (!data.ok) return;
-
-        const rows = document.querySelectorAll('.rb-rule');
-        rows.forEach((row, i) => {
-          const prev = data.preview[i];
-          if (!prev) return;
-          const span = row.querySelector('.rb-preview-count');
-          if (!span) return;
-          span.className   = `rb-preview-count ${prev.count > 0 ? 'has-tracks' : 'no-tracks'}`;
+        document.querySelectorAll('.rb-rule').forEach((row, i) => {
+          const prev = data.preview[i]; const span = row.querySelector('.rb-preview-count');
+          if (!prev || !span) return;
+          span.className = `rb-preview-count ${prev.count > 0 ? 'has-tracks' : 'no-tracks'}`;
           span.textContent = `${prev.count} tracks`;
         });
-      } catch (e) { /* silent fail */ }
+      } catch (e) {}
     }
 
     function buildRulesPayload() {
@@ -1307,93 +1108,111 @@
         shuffle:        document.getElementById('rbShuffle').checked,
         max_per_artist: parseInt(document.getElementById('rbMaxPerArtist').value) || null,
         rules: rbRules.filter(r => r.value !== '').map(r => ({
-          term:    r.term,
-          value:   r.value,
-          weight:  r.weight  || 1,
-          mode:    r.mode    || 'easy',
-          options: r.options || {}
+          term: r.term, value: r.value, weight: r.weight || 1, mode: r.mode || 'easy', options: r.options || {}
         }))
       };
     }
+
+    document.getElementById('rulesPreviewBtn').addEventListener('click', async () => {
+      const name      = document.getElementById('rulesNameInput').value.trim();
+      const rules     = buildRulesPayload();
+      const status    = document.getElementById('rbStatus');
+      const previewBtn = document.getElementById('rulesPreviewBtn');
+
+      if (!name)              { status.textContent = 'Add a playlist name'; status.className = 'rb-status status-err'; return; }
+      if (!rules.rules.length){ status.textContent = 'Add at least one rule'; status.className = 'rb-status status-err'; return; }
+
+      previewBtn.disabled = true; previewBtn.textContent = 'Previewing...'; status.textContent = '';
+
+      try {
+        const res  = await fetch('/playlists/preview-navilist', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ rules })
+        });
+        const data = await res.json();
+        if (data.ok) {
+          rbPreviewTracks = data.tracks;
+          rbPlaylistName  = name;
+          document.getElementById('rbPreviewCount').textContent = `— ${data.count} tracks`;
+          renderPreviewTracks('rbPreviewTracks', rbPreviewTracks, (idx) => {
+            rbPreviewTracks.splice(idx, 1);
+            renderPreviewTracks('rbPreviewTracks', rbPreviewTracks, arguments.callee);
+            document.getElementById('rbPreviewCount').textContent = `— ${rbPreviewTracks.length} tracks`;
+          });
+          document.getElementById('rbPreviewPanel').style.display = '';
+          document.getElementById('rbSaveStatus').textContent     = '';
+        } else {
+          status.textContent = `✗ ${data.error || data.errors?.join(', ')}`; status.className = 'rb-status status-err';
+        }
+      } catch (e) { status.textContent = '✗ Request failed'; status.className = 'rb-status status-err'; }
+      finally { previewBtn.disabled = false; previewBtn.textContent = 'Preview →'; }
+    });
+
+    document.getElementById('rbSaveBtn').addEventListener('click', async () => {
+      const status  = document.getElementById('rbSaveStatus');
+      const saveBtn = document.getElementById('rbSaveBtn');
+      if (!rbPreviewTracks.length) { status.textContent = 'Nothing to save — run Preview first'; status.className = 'rb-status status-err'; return; }
+      saveBtn.disabled = true; saveBtn.textContent = 'Saving...';
+      try {
+        const res  = await fetch('/playlists/save-navilist', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: rbPlaylistName, rules: buildRulesPayload(), trackIds: rbPreviewTracks.map(t => t.id) })
+        });
+        const data = await res.json();
+        if (data.ok) {
+          await loadPlaylists();
+          setTimeout(() => { const c = allPlaylists.find(p => p.id === data.playlistId); if (c) openDetail(c); else showListView(); }, 400);
+        } else {
+          status.textContent = `✗ ${data.error}`; status.className = 'rb-status status-err';
+          saveBtn.disabled = false; saveBtn.textContent = 'Save Playlist';
+        }
+      } catch (e) { status.textContent = '✗ Request failed'; status.className = 'rb-status status-err'; saveBtn.disabled = false; saveBtn.textContent = 'Save Playlist'; }
+    });
 
     document.getElementById('rulesSaveBtn').addEventListener('click', async () => {
       const rules   = buildRulesPayload();
       const status  = document.getElementById('rbStatus');
       const saveBtn = document.getElementById('rulesSaveBtn');
-
-      if (!rules.rules.length) {
-        status.textContent = 'Add at least one rule';
-        status.className   = 'rb-status status-err';
-        return;
-      }
-
-      saveBtn.disabled    = true;
-      saveBtn.textContent = 'Saving...';
-      status.textContent  = '';
-      status.className    = 'rb-status';
-
+      if (!rules.rules.length) { status.textContent = 'Add at least one rule'; status.className = 'rb-status status-err'; return; }
+      saveBtn.disabled = true; saveBtn.textContent = 'Saving...'; status.textContent = ''; status.className = 'rb-status';
       try {
-        const res  = await fetch(`/playlists/${rbPlaylistId}/rules`, {
+        const res  = await fetch(`/playlists/${rbEditingPlaylistId}/rules`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ rules })
         });
         const data = await res.json();
-
         if (data.ok) {
-          status.textContent  = `✓ Generated ${data.count} tracks`;
-          status.className    = 'rb-status status-ok';
+          status.textContent = `✓ ${data.count} tracks`; status.className = 'rb-status status-ok';
           await loadPlaylists();
-          setTimeout(async () => {
-            const updated = allPlaylists.find(p => p.id === rbPlaylistId);
-            if (updated) openDetail(updated);
-          }, 800);
+          setTimeout(() => { const u = allPlaylists.find(p => p.id === rbEditingPlaylistId); if (u) openDetail(u); }, 800);
         } else {
-          status.textContent  = `✗ ${data.error || data.errors?.join(', ')}`;
-          status.className    = 'rb-status status-err';
-          saveBtn.disabled    = false;
-          saveBtn.textContent = 'Save & Generate';
+          status.textContent = `✗ ${data.error || data.errors?.join(', ')}`; status.className = 'rb-status status-err';
+          saveBtn.disabled = false; saveBtn.textContent = 'Save & Generate';
         }
-      } catch (e) {
-        status.textContent  = '✗ Request failed';
-        status.className    = 'rb-status status-err';
-        saveBtn.disabled    = false;
-        saveBtn.textContent = 'Save & Generate';
-      }
+      } catch (e) { status.textContent = '✗ Request failed'; status.className = 'rb-status status-err'; saveBtn.disabled = false; saveBtn.textContent = 'Save & Generate'; }
+    });
+
+    document.getElementById('rbPreviewCancelBtn').addEventListener('click', () => {
+      rbPreviewTracks = []; document.getElementById('rbPreviewPanel').style.display = 'none';
     });
 
     document.getElementById('rulesCancelBtn').addEventListener('click', () => {
-      if (rbReturnTo === 'detail') {
-        const p = allPlaylists.find(pl => pl.id === rbPlaylistId);
-        if (p) { openDetail(p); return; }
-      }
+      if (rbReturnTo === 'detail' && rbEditingPlaylistId) { const p = allPlaylists.find(pl => pl.id === rbEditingPlaylistId); if (p) { openDetail(p); return; } }
       showListView();
     });
-
     document.getElementById('rulesBackBtn').addEventListener('click', () => {
-      if (rbReturnTo === 'detail') {
-        const p = allPlaylists.find(pl => pl.id === rbPlaylistId);
-        if (p) { openDetail(p); return; }
-      }
+      if (rbReturnTo === 'detail' && rbEditingPlaylistId) { const p = allPlaylists.find(pl => pl.id === rbEditingPlaylistId); if (p) { openDetail(p); return; } }
       showListView();
     });
-
-    document.getElementById('rbAddRule').addEventListener('click', () => {
-      rbRules.push(defaultRule());
-      renderRuleRows();
-    });
+    document.getElementById('rbAddRule').addEventListener('click', () => { rbRules.push(defaultRule()); renderRuleRows(); });
 
     // ── New playlist modal ─────────────────────────────────────────────────
     document.getElementById('newPlaylistWideBtn').addEventListener('click', () => {
       document.getElementById('newPlaylistModal').style.display = 'flex';
-      document.getElementById('newPlaylistName').value = '';
-      document.getElementById('createStatus').textContent = '';
-      document.getElementById('newPlaylistName').focus();
     });
-
     document.getElementById('cancelNewPlaylist').addEventListener('click', () => {
       document.getElementById('newPlaylistModal').style.display = 'none';
     });
-
     document.getElementById('newPlaylistModal').addEventListener('click', (e) => {
       if (e.target === e.currentTarget) e.currentTarget.style.display = 'none';
     });
@@ -1403,30 +1222,26 @@
         document.querySelectorAll('.pl-type-option').forEach(o => o.classList.remove('selected'));
         opt.classList.add('selected');
         selectedType = opt.dataset.type;
-        const isLb    = selectedType === 'listenbrainz';
-        const isRadio = selectedType === 'radio';
-        document.getElementById('newPlaylistName').style.display = isLb ? 'none' : '';
-        document.getElementById('lbTypeNote').style.display      = isLb    ? '' : 'none';
-        document.getElementById('radioTypeNote').style.display   = isRadio ? '' : 'none';
       });
     });
 
-    document.getElementById('createPlaylistBtn').addEventListener('click', async () => {
-      const status = document.getElementById('createStatus');
-      const name   = document.getElementById('newPlaylistName').value.trim();
+    document.getElementById('createPlaylistBtn').addEventListener('click', () => {
+      document.getElementById('newPlaylistModal').style.display = 'none';
 
-      // Radio type — go straight to radio builder (no pre-creation needed)
+      if (selectedType === 'navilist') {
+        openRuleBuilder('', null, 'list');
+        return;
+      }
       if (selectedType === 'radio') {
-        if (!name) { status.textContent = 'Name required'; status.className = 'status-err'; return; }
-        document.getElementById('newPlaylistModal').style.display = 'none';
-        radioPlaylistName = name;
-        radioSeeds        = [];
+        radioSeeds = []; radioPreviewTracks = []; radioPreviewConfig = null;
         renderRadioSeeds();
-        document.getElementById('radioTitle').textContent      = name;
-        document.getElementById('radioStatus').textContent     = '';
-        document.getElementById('radioCreateBtn').disabled     = false;
-        document.getElementById('radioCreateBtn').textContent  = 'Create Radio Playlist →';
+        document.getElementById('radioNameInput').value            = '';
+        document.getElementById('radioStatus').textContent         = '';
+        document.getElementById('radioPreviewPanel').style.display = 'none';
+        document.getElementById('radioPreviewBtn').disabled        = false;
+        document.getElementById('radioPreviewBtn').textContent     = 'Preview →';
         showRadioView();
+        setTimeout(() => document.getElementById('radioNameInput').focus(), 50);
         loadArtists().then(() => {
           const dl = document.getElementById('radioArtistList');
           dl.innerHTML = '';
@@ -1434,39 +1249,8 @@
         });
         return;
       }
-
-      // ListenBrainz type — go straight to LB view
-      if (selectedType === 'listenbrainz') {
-        document.getElementById('newPlaylistModal').style.display = 'none';
-        showLbView();
-        return;
-      }
-
-      if (!name) { status.textContent = 'Name required'; status.className = 'status-err'; return; }
-
-      status.textContent = 'Creating...';
-      status.className   = 'status-pending';
-
-      const res  = await fetch('/playlists/create', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name })
-      });
-      const data = await res.json();
-
-      if (data.ok) {
-        document.getElementById('newPlaylistModal').style.display = 'none';
-        await loadPlaylists();
-
-        if (selectedType === 'navilist') {
-          const created = allPlaylists.find(p => p.name === name);
-          if (created) openRuleBuilder(created.id, created.name, null, 'list');
-        } else {
-          showListView();
-        }
-      } else {
-        status.textContent = `✗ ${data.error}`;
-        status.className   = 'status-err';
-      }
+      if (selectedType === 'listenbrainz') { showLbView(); return; }
+      if (selectedType === 'manual')       { showManualView(); return; }
     });
 
     // ── View toggle ────────────────────────────────────────────────────────
@@ -1477,24 +1261,12 @@
       document.getElementById('viewBtnList').classList.toggle('active',  mode === 'list');
       renderCards();
     }
-
     document.getElementById('viewBtnCards').addEventListener('click', () => applyViewMode('cards'));
     document.getElementById('viewBtnList').addEventListener('click',  () => applyViewMode('list'));
-
-    if (viewMode === 'list') {
-      document.getElementById('viewBtnCards').classList.remove('active');
-      document.getElementById('viewBtnList').classList.add('active');
-    }
+    if (viewMode === 'list') { document.getElementById('viewBtnCards').classList.remove('active'); document.getElementById('viewBtnList').classList.add('active'); }
 
     // ── Filters & search ───────────────────────────────────────────────────
-    document.querySelectorAll('.pl-filter-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        document.querySelectorAll('.pl-filter-btn').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        activeFilter = btn.dataset.filter;
-        renderCards();
-      });
-    });
+    document.getElementById('filterSelect').addEventListener('change', e => { activeFilter = e.target.value; renderCards(); });
 
     let searchTimer;
     document.getElementById('searchInput').addEventListener('input', (e) => {
@@ -1502,11 +1274,7 @@
       searchTimer = setTimeout(() => { searchQuery = e.target.value; renderCards(); }, 200);
     });
 
-    // ── Back button (detail view) ──────────────────────────────────────────
-    document.getElementById('backBtn').addEventListener('click', () => {
-      showListView();
-      loadPlaylists();
-    });
+    document.getElementById('backBtn').addEventListener('click', () => { showListView(); loadPlaylists(); });
 
     // ── Radio builder ──────────────────────────────────────────────────────
     function renderRadioSeeds() {
@@ -1516,10 +1284,7 @@
         const chip = document.createElement('div');
         chip.className = 'radio-seed-chip';
         chip.innerHTML = `<span>${esc(name)}</span><button title="Remove">✕</button>`;
-        chip.querySelector('button').addEventListener('click', () => {
-          radioSeeds.splice(i, 1);
-          renderRadioSeeds();
-        });
+        chip.querySelector('button').addEventListener('click', () => { radioSeeds.splice(i, 1); renderRadioSeeds(); });
         chips.appendChild(chip);
       });
     }
@@ -1528,63 +1293,79 @@
       const input = document.getElementById('radioSeedInput');
       const name  = input.value.trim();
       if (!name || radioSeeds.includes(name)) { input.value = ''; return; }
-      radioSeeds.push(name);
-      input.value = '';
-      renderRadioSeeds();
+      radioSeeds.push(name); input.value = ''; renderRadioSeeds();
     }
 
     document.getElementById('radioAddSeedBtn').addEventListener('click', addRadioSeed);
-    document.getElementById('radioSeedInput').addEventListener('keydown', e => {
-      if (e.key === 'Enter') { e.preventDefault(); addRadioSeed(); }
-    });
-
+    document.getElementById('radioSeedInput').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addRadioSeed(); } });
     document.getElementById('radioCancelBtn').addEventListener('click', () => showListView());
     document.getElementById('radioBackBtn').addEventListener('click',   () => showListView());
 
-    document.getElementById('radioCreateBtn').addEventListener('click', async () => {
-      const status = document.getElementById('radioStatus');
-      if (!radioSeeds.length) {
-        status.textContent = 'Add at least one seed artist';
-        status.className   = 'rb-status status-err';
-        return;
-      }
+    document.getElementById('radioPreviewBtn').addEventListener('click', async () => {
+      const stationName = document.getElementById('radioNameInput').value.trim();
+      const status      = document.getElementById('radioStatus');
+      const previewBtn  = document.getElementById('radioPreviewBtn');
+
+      if (!stationName)       { status.textContent = 'Add a station name'; status.className = 'rb-status status-err'; return; }
+      if (!radioSeeds.length) { status.textContent = 'Add at least one seed artist'; status.className = 'rb-status status-err'; return; }
+
       const depth        = parseFloat(document.querySelector('input[name="radioDepth"]:checked')?.value || '0.25');
       const track_count  = parseInt(document.getElementById('radioTrackCount').value) || 50;
       const include_seed = document.getElementById('radioIncludeSeed').checked;
-      const btn          = document.getElementById('radioCreateBtn');
 
-      btn.disabled       = true;
-      btn.textContent    = 'Creating...';
-      status.textContent = '';
-      status.className   = 'rb-status';
+      previewBtn.disabled = true; previewBtn.textContent = 'Previewing...'; status.textContent = ''; status.className = 'rb-status';
 
       try {
-        const res  = await fetch('/playlists/create-radio', {
+        const res  = await fetch('/playlists/preview-radio', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: radioPlaylistName, artists: radioSeeds, depth, track_count, include_seed })
+          body: JSON.stringify({ artists: radioSeeds, depth, track_count, include_seed })
         });
         const data = await res.json();
         if (data.ok) {
-          status.textContent = `✓ Created with ${data.count} tracks`;
-          status.className   = 'rb-status status-ok';
-          await loadPlaylists();
-          setTimeout(() => {
-            const created = allPlaylists.find(p => p.id === data.playlistId);
-            if (created) openDetail(created); else showListView();
-          }, 600);
-        } else {
-          status.textContent = `✗ ${data.error}`;
-          status.className   = 'rb-status status-err';
-          btn.disabled       = false;
-          btn.textContent    = 'Create Radio Playlist →';
-        }
-      } catch (e) {
-        status.textContent = '✗ Request failed';
-        status.className   = 'rb-status status-err';
-        btn.disabled       = false;
-        btn.textContent    = 'Create Radio Playlist →';
-      }
+          radioPreviewTracks = data.tracks;
+          radioPreviewConfig = data.config;
+          document.getElementById('radioPreviewCount').textContent = `— ${data.count} tracks`;
+          renderPreviewTracks('radioPreviewTracks', radioPreviewTracks, (idx) => {
+            radioPreviewTracks.splice(idx, 1);
+            renderPreviewTracks('radioPreviewTracks', radioPreviewTracks, arguments.callee);
+            document.getElementById('radioPreviewCount').textContent = `— ${radioPreviewTracks.length} tracks`;
+          });
+          document.getElementById('radioPreviewPanel').style.display = '';
+          document.getElementById('radioSaveStatus').textContent     = '';
+        } else { status.textContent = `✗ ${data.error}`; status.className = 'rb-status status-err'; }
+      } catch (e) { status.textContent = '✗ Request failed'; status.className = 'rb-status status-err'; }
+      finally { previewBtn.disabled = false; previewBtn.textContent = 'Preview →'; }
     });
+
+    document.getElementById('radioSaveBtn').addEventListener('click', async () => {
+      const stationName = document.getElementById('radioNameInput').value.trim();
+      const status      = document.getElementById('radioSaveStatus');
+      const saveBtn     = document.getElementById('radioSaveBtn');
+      if (!radioPreviewTracks.length) { status.textContent = 'Nothing to save — run Preview first'; status.className = 'rb-status status-err'; return; }
+      saveBtn.disabled = true; saveBtn.textContent = 'Saving...';
+      try {
+        const res  = await fetch('/playlists/save-radio', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: stationName, config: radioPreviewConfig, trackIds: radioPreviewTracks.map(t => t.id) })
+        });
+        const data = await res.json();
+        if (data.ok) {
+          await loadPlaylists();
+          setTimeout(() => { const c = allPlaylists.find(p => p.id === data.playlistId); if (c) openDetail(c); else showListView(); }, 400);
+        } else {
+          status.textContent = `✗ ${data.error}`; status.className = 'rb-status status-err';
+          saveBtn.disabled = false; saveBtn.textContent = 'Save Playlist';
+        }
+      } catch (e) { status.textContent = '✗ Request failed'; status.className = 'rb-status status-err'; saveBtn.disabled = false; saveBtn.textContent = 'Save Playlist'; }
+    });
+
+    document.getElementById('radioPreviewCancelBtn').addEventListener('click', () => {
+      radioPreviewTracks = []; radioPreviewConfig = null;
+      document.getElementById('radioPreviewPanel').style.display = 'none';
+    });
+
+    // ── Manual builder ─────────────────────────────────────────────────────
+    // ── LB view
 
     // ── LB view ────────────────────────────────────────────────────────────
     let lbPlaylistData = [];
@@ -1592,10 +1373,7 @@
     function renderLbPlaylists(playlists) {
       lbPlaylistData = playlists;
       const container = document.getElementById('plLbList');
-      if (!playlists.length) {
-        container.innerHTML = '<div class="pl-empty"><p>No playlists found on your ListenBrainz account.</p></div>';
-        return;
-      }
+      if (!playlists.length) { container.innerHTML = '<div class="pl-empty">No playlists found on your ListenBrainz account.</div>'; return; }
       container.innerHTML = '';
       playlists.forEach(p => container.appendChild(buildLbCard(p)));
     }
@@ -1612,143 +1390,76 @@
       card.className = `lb-card${isEnabled ? ' is-enabled' : ''}${isSaved ? ' is-saved' : ''}`;
       card.dataset.mbid = p.lb_mbid;
 
-      const body = document.createElement('div');
-      body.className = 'lb-card-body';
-
-      const titleEl = document.createElement('div');
-      titleEl.className = 'lb-card-title';
-      titleEl.textContent = p.title;
-
+      const body = document.createElement('div'); body.className = 'lb-card-body';
+      const titleEl = document.createElement('div'); titleEl.className = 'lb-card-title'; titleEl.textContent = p.title;
       const badge = document.createElement('span');
       const isRotating = !!p.slot_key;
-      badge.className   = `lb-pl-badge ${isGenerated ? 'lb-pl-generated' : 'lb-pl-user'}`;
+      badge.className = `lb-pl-badge ${isGenerated ? 'lb-pl-generated' : 'lb-pl-user'}`;
       badge.textContent = isRotating ? '↻ Rotating' : (isGenerated ? 'Generated' : 'Mine');
       if (isRotating) badge.title = 'Updates automatically each week';
-
-      const stat = document.createElement('span');
-      stat.className   = 'lb-card-stat';
-      stat.textContent = statText;
-
-      const actions = document.createElement('div');
-      actions.className = 'lb-card-actions';
-
+      const stat = document.createElement('span'); stat.className = 'lb-card-stat'; stat.textContent = statText;
+      const actions = document.createElement('div'); actions.className = 'lb-card-actions';
       const addBtn = document.createElement('button');
-      addBtn.className   = 'btn btn-secondary btn-sm';
-      addBtn.textContent = isEnabled ? '✓ Enabled' : '+ Add';
+      addBtn.className = 'btn btn-secondary btn-sm'; addBtn.textContent = isEnabled ? '✓ Enabled' : '+ Add';
       if (isEnabled) addBtn.style.color = '#27ae60';
       addBtn.addEventListener('click', e => { e.stopPropagation(); importLbPlaylist(p, addBtn, card); });
-
       if (isGenerated) {
         const saveBtn = document.createElement('button');
-        saveBtn.className   = 'btn btn-secondary btn-sm';
-        saveBtn.textContent = isSaved ? '🔒' : 'Save';
-        saveBtn.title       = isSaved ? 'Saved this week' : 'Save this week';
+        saveBtn.className = 'btn btn-secondary btn-sm'; saveBtn.textContent = isSaved ? '🔒' : 'Save';
+        saveBtn.title = isSaved ? 'Saved this week' : 'Save this week';
         if (isSaved) saveBtn.style.color = '#27ae60';
         saveBtn.addEventListener('click', e => { e.stopPropagation(); saveLbWeek(p, saveBtn, card); });
         actions.appendChild(saveBtn);
       }
       actions.appendChild(addBtn);
-
-      const chevron = document.createElement('span');
-      chevron.className   = 'lb-card-chevron';
-      chevron.textContent = '›';
-
-      body.appendChild(titleEl);
-      body.appendChild(badge);
-      body.appendChild(stat);
-      body.appendChild(actions);
-      body.appendChild(chevron);
-      body.addEventListener('click', (e) => {
-        if (e.target.closest('.lb-card-actions')) return;
-        toggleLbCardTracks(card, tracks);
-      });
-
-      const tracksPanel = document.createElement('div');
-      tracksPanel.className    = 'lb-card-tracks';
-      tracksPanel.style.display = 'none';
-
-      card.appendChild(body);
-      card.appendChild(tracksPanel);
+      const chevron = document.createElement('span'); chevron.className = 'lb-card-chevron'; chevron.textContent = '›';
+      body.appendChild(titleEl); body.appendChild(badge); body.appendChild(stat); body.appendChild(actions); body.appendChild(chevron);
+      body.addEventListener('click', e => { if (!e.target.closest('.lb-card-actions')) toggleLbCardTracks(card, tracks); });
+      const tracksPanel = document.createElement('div'); tracksPanel.className = 'lb-card-tracks'; tracksPanel.style.display = 'none';
+      card.appendChild(body); card.appendChild(tracksPanel);
       return card;
     }
 
     function toggleLbCardTracks(card, tracks) {
-      const panel  = card.querySelector('.lb-card-tracks');
+      const panel = card.querySelector('.lb-card-tracks');
       const isOpen = panel.style.display !== 'none';
-
       if (isOpen) { panel.style.display = 'none'; card.classList.remove('is-open'); return; }
-
-      card.classList.add('is-open');
-      panel.style.display = '';
-
-      if (!tracks.length) {
-        panel.innerHTML = '<div class="lb-track-loading">No tracks cached. Run Sync All from Services.</div>';
-        return;
-      }
-
+      card.classList.add('is-open'); panel.style.display = '';
+      if (!tracks.length) { panel.innerHTML = '<div class="lb-track-loading">No tracks cached. Run Sync All from Services.</div>'; return; }
       const missingCount = tracks.filter(t => !t.matched).length;
-      let html = '';
-      if (missingCount > 0) {
-        html += `<div class="lb-track-loading">${tracks.filter(t => t.matched).length} of ${tracks.length} tracks in your library</div>`;
-      }
+      let html = missingCount > 0 ? `<div class="lb-track-loading">${tracks.filter(t => t.matched).length} of ${tracks.length} tracks in your library</div>` : '';
       html += tracks.map((t, i) => `
         <div class="lb-card-track${t.matched ? '' : ' is-missing'}">
           <span class="lb-track-num">${i + 1}</span>
-          <div class="lb-track-info">
-            <div class="lb-track-title">${esc(t.title)}</div>
-            <div class="lb-track-artist">${esc(t.artist)}</div>
-          </div>
+          <div class="lb-track-info"><div class="lb-track-title">${esc(t.title)}</div><div class="lb-track-artist">${esc(t.artist)}</div></div>
           ${t.matched ? '<span></span>' : '<span class="lb-track-missing-pill">Not in library</span>'}
-        </div>
-      `).join('');
+        </div>`).join('');
       panel.innerHTML = html;
     }
 
     async function importLbPlaylist(p, btn, card) {
-      btn.disabled    = true;
-      btn.textContent = 'Adding…';
+      btn.disabled = true; btn.textContent = 'Adding…';
       try {
         const res  = await fetch(`/sync/lb-playlists/${p.lb_mbid}/import`, { method: 'POST' });
         const data = await res.json();
-        if (data.ok) {
-          btn.textContent = `✓ Added (${data.count} tracks)`;
-          btn.style.color = '#27ae60';
-          card.classList.add('is-enabled');
-        } else {
-          btn.disabled    = false;
-          btn.textContent = '+ Add';
-          alert(`✗ ${data.error}`);
-        }
-      } catch (e) {
-        btn.disabled    = false;
-        btn.textContent = '+ Add';
-      }
+        if (data.ok) { btn.textContent = `✓ Added (${data.count} tracks)`; btn.style.color = '#27ae60'; card.classList.add('is-enabled'); }
+        else { btn.disabled = false; btn.textContent = '+ Add'; alert(`✗ ${data.error}`); }
+      } catch (e) { btn.disabled = false; btn.textContent = '+ Add'; }
     }
 
     async function saveLbWeek(p, btn, card) {
       const name = prompt('Save this week as:', p.title);
       if (!name?.trim()) return;
-      btn.disabled    = true;
-      btn.textContent = 'Saving…';
+      btn.disabled = true; btn.textContent = 'Saving…';
       try {
         const res  = await fetch(`/sync/lb-playlists/${p.lb_mbid}/snapshot`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ name: name.trim() })
         });
         const data = await res.json();
-        if (data.ok) {
-          btn.textContent = '🔒 Saved';
-          btn.style.color = '#27ae60';
-          btn.title       = `Saved as "${name.trim()}" (${data.count} tracks)`;
-        } else {
-          btn.disabled    = false;
-          btn.textContent = 'Save';
-          alert(`✗ ${data.error}`);
-        }
-      } catch (e) {
-        btn.disabled    = false;
-        btn.textContent = 'Save';
-      }
+        if (data.ok) { btn.textContent = '🔒 Saved'; btn.style.color = '#27ae60'; btn.title = `Saved as "${name.trim()}" (${data.count} tracks)`; }
+        else { btn.disabled = false; btn.textContent = 'Save'; alert(`✗ ${data.error}`); }
+      } catch (e) { btn.disabled = false; btn.textContent = 'Save'; }
     }
 
     document.getElementById('lbBackBtn').addEventListener('click', () => showListView());
@@ -1760,22 +1471,12 @@
         const res  = await fetch('/sync/lb-playlists/cached');
         const data = await res.json();
         if (data.ok) {
-          if (!data.playlists.length) {
-            document.getElementById('plLbList').innerHTML =
-              '<div class="pl-empty"><p>No playlists synced yet. Go to Services and run Sync All for ListenBrainz first.</p></div>';
-          } else {
-            renderLbPlaylists(data.playlists);
-          }
+          if (!data.playlists.length) { document.getElementById('plLbList').innerHTML = '<div class="pl-empty">No playlists synced yet. Go to Services and run Sync All for ListenBrainz first.</div>'; }
+          else { renderLbPlaylists(data.playlists); }
           status.textContent = data.playlists.length ? `${data.playlists.length} playlists` : '';
           status.className   = 'history-source-status status-ok';
-        } else {
-          status.textContent = `✗ ${data.error}`;
-          status.className   = 'history-source-status status-err';
-        }
-      } catch (e) {
-        status.textContent = '✗ Request failed';
-        status.className   = 'history-source-status status-err';
-      }
+        } else { status.textContent = `✗ ${data.error}`; status.className = 'history-source-status status-err'; }
+      } catch (e) { status.textContent = '✗ Request failed'; status.className = 'history-source-status status-err'; }
     }
 
     // ── Sort + select ──────────────────────────────────────────────────────
@@ -1783,7 +1484,7 @@
       const col = e.target.closest('.pl-col-hdr');
       if (!col) return;
       const field = col.dataset.sort;
-      sortDir   = sortField === field ? (sortDir === 'asc' ? 'desc' : 'asc') : 'asc';
+      sortDir = sortField === field ? (sortDir === 'asc' ? 'desc' : 'asc') : 'asc';
       sortField = field;
       localStorage.setItem('navilist_pl_sort', sortField);
       localStorage.setItem('navilist_pl_sort_dir', sortDir);
@@ -1793,33 +1494,21 @@
     document.getElementById('selectAllChk').addEventListener('change', e => {
       document.querySelectorAll('.pl-row-chk').forEach(chk => {
         chk.checked = e.target.checked;
-        if (e.target.checked) selected.add(chk.dataset.id);
-        else selected.delete(chk.dataset.id);
+        if (e.target.checked) selected.add(chk.dataset.id); else selected.delete(chk.dataset.id);
       });
       updateSelectionBar();
     });
 
-    document.getElementById('selClearBtn').addEventListener('click', () => {
-      selected.clear(); renderCards();
-    });
-
+    document.getElementById('selClearBtn').addEventListener('click', () => { selected.clear(); renderCards(); });
     document.getElementById('selActivateBtn').addEventListener('click', async () => {
-      for (const id of [...selected]) {
-        const p = allPlaylists.find(pl => pl.id === id);
-        if (p && isInactive(p)) await fetch(`/playlists/${id}/activate`, { method: 'POST' });
-      }
+      for (const id of [...selected]) { const p = allPlaylists.find(pl => pl.id === id); if (p && isInactive(p)) await fetch(`/playlists/${id}/activate`, { method: 'POST' }); }
       selected.clear(); await loadPlaylists();
     });
-
     document.getElementById('selDeactivateBtn').addEventListener('click', async () => {
       if (!confirm(`Deactivate ${selected.size} playlist(s)?`)) return;
-      for (const id of [...selected]) {
-        const p = allPlaylists.find(pl => pl.id === id);
-        if (p && !isInactive(p)) await fetch(`/playlists/${id}/deactivate`, { method: 'POST' });
-      }
+      for (const id of [...selected]) { const p = allPlaylists.find(pl => pl.id === id); if (p && !isInactive(p)) await fetch(`/playlists/${id}/deactivate`, { method: 'POST' }); }
       selected.clear(); await loadPlaylists();
     });
-
     document.getElementById('selDeleteBtn').addEventListener('click', async () => {
       if (!confirm(`Delete ${selected.size} playlist(s)? This cannot be undone.`)) return;
       for (const id of [...selected]) await fetch(`/playlists/${id}/delete`, { method: 'POST' });
@@ -1831,10 +1520,7 @@
     const openLb = new URLSearchParams(window.location.search).get('lb');
     loadPlaylists().then(() => {
       if (openLb) { showLbView(); return; }
-      if (openId) {
-        const match = allPlaylists.find(p => p.id === openId);
-        if (match) openDetail(match);
-      }
+      if (openId) { const match = allPlaylists.find(p => p.id === openId); if (match) openDetail(match); }
     });
   </script>
 </body>
