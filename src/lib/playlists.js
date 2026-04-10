@@ -3,7 +3,9 @@ const router = express.Router();
 const path = require('path');
 const db = require('../db/index');
 const navidrome = require('../providers/navidrome');
-const engine   = require('./pl_engine');
+const mb        = require('../providers/musicbrainz');
+const lastfm    = require('../providers/lastfm');
+const engine    = require('./pl_engine');
 const logger = require('../utils/logger');
 
 // ── Helper: snapshot a playlist into local registry ───────────────────────────
@@ -101,6 +103,122 @@ router.get('/api/:id', async (req, res) => {
   const playlist = await navidrome.getPlaylist(db, id);
   if (!playlist) return res.json({ ok: false, error: 'Not found' });
   res.json({ ok: true, playlist });
+});
+
+// POST /playlists/create-radio
+router.post('/create-radio', async (req, res) => {
+  const { name, artists, depth, track_count, include_seed } = req.body;
+  if (!name?.trim())    return res.json({ ok: false, error: 'name required' });
+  if (!artists?.length) return res.json({ ok: false, error: 'at least one artist required' });
+
+  const settings = db.prepare('SELECT key, value FROM settings').all()
+    .reduce((s, r) => { s[r.key] = r.value; return s; }, {});
+  const apiKey = settings.lastfm_api_key;
+  if (!apiKey) return res.json({ ok: false, error: 'Last.fm API key not configured' });
+
+  const scoreThreshold = depth      ?? 0.25;
+  const limit          = track_count ?? 50;
+  const includeSeed    = include_seed ?? true;
+  const fetchedAt      = Math.floor(Date.now() / 1000);
+
+  const resolveArtistId = db.prepare('SELECT DISTINCT artist_id FROM tracks WHERE LOWER(artist) = LOWER(?) LIMIT 1');
+  const upsertArtist    = db.prepare(`
+    INSERT INTO artists (artist_id, name, mbid, updated_at)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(artist_id) DO UPDATE SET
+      mbid       = excluded.mbid,
+      updated_at = excluded.updated_at
+  `);
+  const upsertSimilar = db.prepare(`
+    INSERT INTO artist_similar (artist_id, similar_name, similar_artist_id, score, source, fetched_at)
+    VALUES (@artistId, @similarName, @similarArtistId, @score, 'lastfm', @fetchedAt)
+    ON CONFLICT(artist_id, similar_name) DO UPDATE SET
+      similar_artist_id = excluded.similar_artist_id,
+      score             = excluded.score,
+      fetched_at        = excluded.fetched_at
+  `);
+  const resolveSimilarId = db.prepare('SELECT DISTINCT artist_id FROM tracks WHERE LOWER(artist) = LOWER(?) LIMIT 1');
+  const insertSentinel   = db.prepare(`
+    INSERT OR IGNORE INTO artist_similar (artist_id, similar_name, similar_artist_id, score, source, fetched_at)
+    VALUES (?, '__none__', NULL, NULL, 'lastfm', ?)
+  `);
+
+  const seedArtistIds = [];
+
+  for (const artistName of artists) {
+    const artistRow = resolveArtistId.get(artistName);
+    if (!artistRow) {
+      logger.warn('playlists', `create-radio: "${artistName}" not found in library`);
+      continue;
+    }
+    const artistId = artistRow.artist_id;
+    seedArtistIds.push(artistId);
+
+    // Fetch MBID — use cached value if available, otherwise look up
+    let mbid = db.prepare('SELECT mbid FROM artists WHERE artist_id = ?').get(artistId)?.mbid || null;
+    if (!mbid) {
+      try {
+        mbid = await mb.findArtistMbid(artistName);
+      } catch (e) {
+        logger.warn('playlists', `create-radio: MBID lookup failed for "${artistName}": ${e.message}`);
+      }
+    }
+    upsertArtist.run(artistId, artistName, mbid || null, fetchedAt);
+
+    // Only fetch similar artists if not already cached for this artist
+    const cachedCount = db.prepare(
+      'SELECT COUNT(*) as c FROM artist_similar WHERE artist_id = ?'
+    ).get(artistId).c;
+
+    if (!cachedCount) {
+      try {
+        const data    = await lastfm.getSimilarArtists(apiKey, { name: artistName, mbid: mbid || undefined }, 100);
+        const similar = data?.similarartists?.artist;
+        if (!Array.isArray(similar) || !similar.length) {
+          insertSentinel.run(artistId, fetchedAt);
+          logger.info('playlists', `create-radio: "${artistName}" — no similar artists from Last.fm`);
+        } else {
+          const rows = similar.map(s => ({
+            artistId,
+            similarName:     s.name,
+            similarArtistId: resolveSimilarId.get(s.name)?.artist_id ?? null,
+            score:           parseFloat(s.match) || 0,
+            fetchedAt
+          }));
+          db.transaction(rs => { for (const r of rs) upsertSimilar.run(r); })(rows);
+          logger.info('playlists', `create-radio: "${artistName}" → ${similar.length} similar artists cached`);
+        }
+      } catch (e) {
+        logger.warn('playlists', `create-radio: Last.fm similar failed for "${artistName}": ${e.message}`);
+        insertSentinel.run(artistId, fetchedAt);
+      }
+    } else {
+      logger.info('playlists', `create-radio: "${artistName}" similar artists already cached (${cachedCount} rows)`);
+    }
+  }
+
+  if (!seedArtistIds.length)
+    return res.json({ ok: false, error: 'None of the seed artists were found in your library' });
+
+  // Resolve tracks from similar artist cache
+  const trackIds = engine.resolveRadio(db, { artistIds: seedArtistIds, depth: scoreThreshold, includeSeed });
+  if (!trackIds.length)
+    return res.json({ ok: false, error: 'No tracks found at this depth — try a wider setting' });
+
+  engine.fisherYates(trackIds);
+  const limited = trackIds.slice(0, limit);
+
+  const created = await navidrome.createPlaylist(db, name.trim(), limited);
+  if (!created.ok) return res.json(created);
+
+  const playlistId = created.playlist?.id;
+  const config     = { artists, artistIds: seedArtistIds, depth: scoreThreshold, track_count: limit, include_seed: includeSeed, source: 'lastfm' };
+  const comment    = `navilist:radio ${JSON.stringify(config)}`;
+  await navidrome.updatePlaylist(db, playlistId, { comment });
+  snapshotPlaylist(db, playlistId, name.trim(), comment, limited, null);
+
+  logger.info('playlists', `radio playlist created: "${name.trim()}" (${limited.length} tracks, ${seedArtistIds.length} seed artists)`);
+  res.json({ ok: true, playlistId, count: limited.length });
 });
 
 // POST /playlists/create-smart — create playlist then immediately generate tracks from rules

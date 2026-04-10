@@ -46,12 +46,13 @@ router.get('/api/counts', (req, res) => {
   const topArtists     = db.prepare('SELECT COUNT(*) as c FROM user_top_artists').get().c;
   const topTracks      = db.prepare('SELECT COUNT(*) as c FROM user_top_tracks').get().c;
   const artistTagsLastfm = db.prepare("SELECT COUNT(DISTINCT artist_id) as c FROM artist_tags WHERE source = 'lastfm'").get().c;
+  const similarArtists   = db.prepare("SELECT COUNT(DISTINCT artist_id) as c FROM artist_similar WHERE source = 'lastfm' AND similar_name != '__none__'").get().c;
   const missingPending = db.prepare("SELECT COUNT(*) as c FROM missing_artists WHERE status = 'pending'").get().c;
   const missingSent    = db.prepare("SELECT COUNT(*) as c FROM missing_artists WHERE status = 'sent'").get().c;
   const missingFound   = db.prepare("SELECT COUNT(*) as c FROM missing_artists WHERE status = 'found'").get().c;
   const lbPlRow    = db.prepare("SELECT value FROM settings WHERE key = 'lb_playlist_count'").get();
   const lbPlaylists = lbPlRow ? parseInt(lbPlRow.value) : 0;
-  res.json({ ok: true, loved, disliked, topArtists, topTracks, artistTagsLastfm, missingPending, missingSent, missingFound, lbPlaylists });
+  res.json({ ok: true, loved, disliked, topArtists, topTracks, artistTagsLastfm, similarArtists, missingPending, missingSent, missingFound, lbPlaylists });
 });
 
 router.get('/', (req, res) => {

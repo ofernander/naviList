@@ -18,7 +18,7 @@ const {
   resolveArtistWithAliases,
   detectSlotKey,
   buildNaviTitle
-} = require('./index');
+} = require('./helpers');
 
 const LB_PERIODS = ['week', 'month', 'quarter', 'half_year', 'year', 'all_time'];
 

@@ -1,0 +1,131 @@
+'use strict';
+
+/**
+ * sync/helpers.js — shared utilities for all sync modules
+ *
+ * No imports from other sync files — exists specifically to break the
+ * circular dependency between index.js and the provider sync modules.
+ */
+
+const mb     = require('../../providers/musicbrainz');
+const logger = require('../../utils/logger');
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+function buildMatchCacheLocal(db) {
+  const rows = db.prepare('SELECT id, artist, title FROM tracks').all();
+  const map  = new Map();
+  for (const r of rows) {
+    const k = `${(r.artist||'').toLowerCase().trim()}|||${(r.title||'').toLowerCase().trim()}`;
+    map.set(k, r.id);
+  }
+  return map;
+}
+
+function matchLocal(artist, title, cache) {
+  const k = `${(artist||'').toLowerCase().trim()}|||${(title||'').toLowerCase().trim()}`;
+  return cache.get(k) || null;
+}
+
+// Session-level alias cache: artist_mbid → resolved local artist name
+const artistAliasCache = new Map();
+
+async function resolveArtistWithAliases(artistName, artistMbid, cache) {
+  const nameLower = (artistName || '').toLowerCase().trim();
+
+  if (artistMbid && artistAliasCache.has(artistMbid)) {
+    logger.debug('sync', `alias cache hit: "${artistName}" (${artistMbid}) → "${artistAliasCache.get(artistMbid)}"`);
+    return artistAliasCache.get(artistMbid);
+  }
+
+  const prefix = `${nameLower}|||`;
+  for (const key of cache.keys()) {
+    if (key.startsWith(prefix)) {
+      if (artistMbid) artistAliasCache.set(artistMbid, artistName);
+      return artistName;
+    }
+  }
+
+  if (!artistMbid) return artistName;
+
+  try {
+    const aliases = await mb.getArtistAliases(artistMbid);
+    await sleep(1000);
+    for (const alias of aliases) {
+      const aliasLower  = alias.toLowerCase().trim();
+      const aliasPrefix = `${aliasLower}|||`;
+      for (const key of cache.keys()) {
+        if (key.startsWith(aliasPrefix)) {
+          logger.info('sync', `alias resolved: "${artistName}" → "${alias}" via MB`);
+          artistAliasCache.set(artistMbid, alias);
+          return alias;
+        }
+      }
+    }
+  } catch (e) {
+    logger.warn('sync', `alias lookup failed for "${artistName}" (${artistMbid}): ${e.message}`);
+    return artistName;
+  }
+
+  logger.info('sync', `alias miss for "${artistName}" (${artistMbid}) — no alias matched local cache`);
+  artistAliasCache.set(artistMbid, artistName);
+  return artistName;
+}
+
+function detectSlotKey(title) {
+  if (/weekly exploration/i.test(title)) { logger.debug('sync', `slot key detected: weekly_exploration for "${title}"`); return 'weekly_exploration'; }
+  if (/daily jams/i.test(title))         { logger.debug('sync', `slot key detected: daily_jams for "${title}"`);         return 'daily_jams'; }
+  if (/weekly jams/i.test(title))        { logger.debug('sync', `slot key detected: weekly_jams for "${title}"`);        return 'weekly_jams'; }
+  return null;
+}
+
+function buildNaviTitle(lbTitle, slotKey) {
+  if (slotKey) {
+    const dateMatch = lbTitle.match(/(\d{4}-\d{2}-\d{2})/);
+    const slotLabel = slotKey.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+    return dateMatch
+      ? `ListenBrainz - ${slotLabel} - ${dateMatch[1]}`
+      : `ListenBrainz - ${slotLabel}`;
+  }
+  return `ListenBrainz - ${lbTitle}`;
+}
+
+const detachedRunning = new Set();
+function runDetached(name, fn) {
+  if (detachedRunning.has(name)) {
+    logger.warn('sync', `${name} already running — skipping`);
+    return;
+  }
+  detachedRunning.add(name);
+  fn().catch(e => logger.error('sync', `${name} threw: ${e.message}`)).finally(() => detachedRunning.delete(name));
+}
+
+function writeMissingArtists(db, artistNames, source) {
+  const isInLibrary = db.prepare('SELECT 1 FROM tracks WHERE LOWER(artist) = LOWER(?) LIMIT 1');
+  const insert      = db.prepare(`
+    INSERT OR IGNORE INTO missing_artists (artist_name, source, status, added_at)
+    VALUES (?, ?, 'pending', ?)
+  `);
+  const now = Math.floor(Date.now() / 1000);
+  let added = 0;
+  db.transaction(names => {
+    for (const name of names) {
+      if (!name || isInLibrary.get(name)) continue;
+      insert.run(name, source, now);
+      added++;
+    }
+  })(artistNames);
+  if (added > 0) logger.info('sync', `missing_artists: ${added} new entries from ${source}`);
+  return added;
+}
+
+module.exports = {
+  sleep,
+  buildMatchCacheLocal,
+  matchLocal,
+  resolveArtistWithAliases,
+  detectSlotKey,
+  buildNaviTitle,
+  runDetached,
+  writeMissingArtists
+};

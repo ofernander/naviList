@@ -11,15 +11,22 @@ const mb           = require('../../providers/musicbrainz');
 const { ingestListens } = require('../ingestion');
 const logger       = require('../../utils/logger');
 
+// ── Shared helpers (imported from helpers.js — no circular dep) ───────────────
+
+const {
+  sleep,
+  buildMatchCacheLocal,
+  matchLocal,
+  resolveArtistWithAliases,
+  detectSlotKey,
+  buildNaviTitle,
+  runDetached,
+  writeMissingArtists
+} = require('./helpers');
+
 // ── Sync state ────────────────────────────────────────────────────────────────
 
 let syncState = {
-  running:     false,
-  lastStarted: null,
-  lastResult:  null
-};
-
-let similarSyncState = {
   running:     false,
   lastStarted: null,
   lastResult:  null
@@ -58,116 +65,7 @@ function getSettings() {
   return s;
 }
 
-// ── Shared helpers (exported for use by provider sync files) ──────────────────
-
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-
-function buildMatchCacheLocal(db) {
-  const rows = db.prepare('SELECT id, artist, title FROM tracks').all();
-  const map  = new Map();
-  for (const r of rows) {
-    const k = `${(r.artist||'').toLowerCase().trim()}|||${(r.title||'').toLowerCase().trim()}`;
-    map.set(k, r.id);
-  }
-  return map;
-}
-
-function matchLocal(artist, title, cache) {
-  const k = `${(artist||'').toLowerCase().trim()}|||${(title||'').toLowerCase().trim()}`;
-  return cache.get(k) || null;
-}
-
-// Session-level alias cache: artist_mbid → resolved local artist name
-const artistAliasCache = new Map();
-
-async function resolveArtistWithAliases(artistName, artistMbid, cache) {
-  const nameLower = (artistName || '').toLowerCase().trim();
-
-  if (artistMbid && artistAliasCache.has(artistMbid)) {
-    logger.debug('sync', `alias cache hit: "${artistName}" (${artistMbid}) → "${artistAliasCache.get(artistMbid)}"`);
-    return artistAliasCache.get(artistMbid);
-  }
-
-  const prefix = `${nameLower}|||`;
-  for (const key of cache.keys()) {
-    if (key.startsWith(prefix)) {
-      if (artistMbid) artistAliasCache.set(artistMbid, artistName);
-      return artistName;
-    }
-  }
-
-  if (!artistMbid) return artistName;
-
-  try {
-    const aliases = await mb.getArtistAliases(artistMbid);
-    await sleep(1000);
-    for (const alias of aliases) {
-      const aliasLower  = alias.toLowerCase().trim();
-      const aliasPrefix = `${aliasLower}|||`;
-      for (const key of cache.keys()) {
-        if (key.startsWith(aliasPrefix)) {
-          logger.info('sync', `alias resolved: "${artistName}" → "${alias}" via MB`);
-          artistAliasCache.set(artistMbid, alias);
-          return alias;
-        }
-      }
-    }
-  } catch (e) {
-    logger.warn('sync', `alias lookup failed for "${artistName}" (${artistMbid}): ${e.message}`);
-    return artistName;
-  }
-
-  logger.info('sync', `alias miss for "${artistName}" (${artistMbid}) — no alias matched local cache`);
-  artistAliasCache.set(artistMbid, artistName);
-  return artistName;
-}
-
-function detectSlotKey(title) {
-  if (/weekly exploration/i.test(title)) { logger.debug('sync', `slot key detected: weekly_exploration for "${title}"`); return 'weekly_exploration'; }
-  if (/daily jams/i.test(title))         { logger.debug('sync', `slot key detected: daily_jams for "${title}"`);         return 'daily_jams'; }
-  if (/weekly jams/i.test(title))        { logger.debug('sync', `slot key detected: weekly_jams for "${title}"`);        return 'weekly_jams'; }
-  return null;
-}
-
-function buildNaviTitle(lbTitle, slotKey) {
-  if (slotKey) {
-    const dateMatch = lbTitle.match(/(\d{4}-\d{2}-\d{2})/);
-    const slotLabel = slotKey.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-    return dateMatch
-      ? `ListenBrainz - ${slotLabel} - ${dateMatch[1]}`
-      : `ListenBrainz - ${slotLabel}`;
-  }
-  return `ListenBrainz - ${lbTitle}`;
-}
-
-const detachedRunning = new Set();
-function runDetached(name, fn) {
-  if (detachedRunning.has(name)) {
-    logger.warn('sync', `${name} already running — skipping`);
-    return;
-  }
-  detachedRunning.add(name);
-  fn().catch(e => logger.error('sync', `${name} threw: ${e.message}`)).finally(() => detachedRunning.delete(name));
-}
-
-function writeMissingArtists(db, artistNames, source) {
-  const isInLibrary = db.prepare('SELECT 1 FROM tracks WHERE LOWER(artist) = LOWER(?) LIMIT 1');
-  const insert      = db.prepare(`
-    INSERT OR IGNORE INTO missing_artists (artist_name, source, status, added_at)
-    VALUES (?, ?, 'pending', ?)
-  `);
-  const now = Math.floor(Date.now() / 1000);
-  let added = 0;
-  db.transaction(names => {
-    for (const name of names) {
-      if (!name || isInLibrary.get(name)) continue;
-      insert.run(name, source, now);
-      added++;
-    }
-  })(artistNames);
-  if (added > 0) logger.info('sync', `missing_artists: ${added} new entries from ${source}`);
-  return added;
-}
+// ── Missing artists (needs getSettings + lidarr, stays in index) ──────────────
 
 async function processMissingArtists() {
   const settings = getSettings();
@@ -261,7 +159,7 @@ async function runHistoryImport(source, fetchFn, credentials, force = false) {
   }
 }
 
-// ── Provider sync modules (imported after helpers are defined) ────────────────
+// ── Provider sync modules (imported after helpers — no circular dep) ──────────
 
 const lfmSync = require('./lastfm');
 const lbSync  = require('./listenbrainz');
@@ -350,26 +248,6 @@ router.post('/artist-tags/lastfm', (req, res) => {
     return res.json({ ok: false, error: 'Last.fm API key required' });
   runDetached('artist-tags/lastfm', () => lfmSync.syncArtistTagsLastfm(db, s));
   res.json({ ok: true, message: 'Last.fm artist tags sync started' });
-});
-
-router.post('/similar-artists', (req, res) => {
-  if (similarSyncState.running)
-    return res.json({ ok: false, error: 'Similar artists sync already in progress' });
-  similarSyncState.running     = true;
-  similarSyncState.lastStarted = Math.floor(Date.now() / 1000);
-  similarSyncState.lastResult  = null;
-  logger.info('sync', 'similar artists sync triggered');
-  const s = getSettings();
-  lfmSync.syncSimilarArtistsLastfm(db, s).then(result => {
-    similarSyncState.running    = false;
-    similarSyncState.lastResult = result;
-    logger.info('sync', `similar artists sync finished — ok: ${result.ok}`);
-  }).catch(e => {
-    similarSyncState.running    = false;
-    similarSyncState.lastResult = { ok: false, error: e.message };
-    logger.error('sync', `similar artists sync threw: ${e.message}`);
-  });
-  res.json({ ok: true, message: 'Similar artists sync started' });
 });
 
 // ── Routes — MusicBrainz ──────────────────────────────────────────────────────
@@ -519,8 +397,8 @@ router.post('/lb-playlists/:mbid/import', async (req, res) => {
   if (!existing) return res.json({ ok: false, error: 'Playlist not found — run Sync All from Services first' });
 
   db.prepare('UPDATE lb_playlists SET enabled = 1 WHERE lb_mbid = ?').run(mbid);
-  const row       = db.prepare('SELECT * FROM lb_playlists WHERE lb_mbid = ?').get(mbid);
-  const cache     = buildMatchCacheLocal(db);
+  const row        = db.prepare('SELECT * FROM lb_playlists WHERE lb_mbid = ?').get(mbid);
+  const cache      = buildMatchCacheLocal(db);
   const cachedRows = db.prepare('SELECT * FROM lb_playlist_tracks WHERE lb_mbid = ? AND matched = 1 ORDER BY position').all(mbid);
   if (!cachedRows.length) return res.json({ ok: false, error: 'No matched tracks cached — run Sync All from Services first' });
 
@@ -580,18 +458,15 @@ router.post('/playlists/listenbrainz', (req, res) => {
 router.get('/status', (req, res) => {
   const trackCount   = db.prepare('SELECT COUNT(*) as c FROM tracks').get().c;
   const lastSync     = db.prepare('SELECT MAX(synced_at) as s FROM tracks').get().s;
-  const similarCount = db.prepare('SELECT COUNT(DISTINCT artist_id) as c FROM artist_similar').get().c;
-  const tagCount     = db.prepare('SELECT COUNT(DISTINCT artist_id) as c FROM artist_tags').get().c;
+  const tagCount = db.prepare('SELECT COUNT(DISTINCT artist_id) as c FROM artist_tags').get().c;
   res.json({
-    running:     syncState.running,
-    lastStarted: syncState.lastStarted,
-    lastResult:  syncState.lastResult,
+    running:         syncState.running,
+    lastStarted:     syncState.lastStarted,
+    lastResult:      syncState.lastResult,
     trackCount,
     lastSync,
-    similarArtistsCount: similarCount,
-    similarSync:         similarSyncState,
-    artistTagsCount:     tagCount,
-    tagSync:             tagSyncState
+    artistTagsCount: tagCount,
+    tagSync:         tagSyncState
   });
 });
 
@@ -603,11 +478,10 @@ function startAutoRefresh() {
 
     if (s.lastfm_api_key && s.lastfm_username) {
       runHistoryImport('lastfm', lastfm.fetchListens, { apiKey: s.lastfm_api_key, username: s.lastfm_username });
-      runDetached('loved/lastfm',            () => lfmSync.syncLovedLastfm(db, s));
-      runDetached('top-artists/lastfm',      () => lfmSync.syncTopArtistsLastfm(db, s));
-      runDetached('top-tracks/lastfm',       () => lfmSync.syncTopTracksLastfm(db, s));
-      runDetached('artist-tags/lastfm',      () => lfmSync.syncArtistTagsLastfm(db, s));
-      runDetached('similar-artists/lastfm',  () => lfmSync.syncSimilarArtistsLastfm(db, s));
+      runDetached('loved/lastfm',           () => lfmSync.syncLovedLastfm(db, s));
+      runDetached('top-artists/lastfm',     () => lfmSync.syncTopArtistsLastfm(db, s));
+      runDetached('top-tracks/lastfm',      () => lfmSync.syncTopTracksLastfm(db, s));
+      runDetached('artist-tags/lastfm',     () => lfmSync.syncArtistTagsLastfm(db, s));
     }
 
     if (s.listenbrainz_token && s.listenbrainz_username) {
@@ -629,10 +503,9 @@ function startAutoRefresh() {
 module.exports = {
   router,
   getSyncState,
-  getSimilarSyncState: () => similarSyncState,
-  getTagSyncState:     () => tagSyncState,
+  getTagSyncState: () => tagSyncState,
   startAutoRefresh,
-  // Helpers exported for use by provider sync files
+  // Re-export helpers for any external consumers
   sleep,
   buildMatchCacheLocal,
   matchLocal,

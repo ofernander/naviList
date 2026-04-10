@@ -539,6 +539,44 @@ function windowToCutoff(window) {
   }
 }
 
+// ── Radio resolution ─────────────────────────────────────────────────────────
+
+/**
+ * resolveRadio — build a track pool from artist_similar cache for a given set of seed artist_ids.
+ * Used for radio playlist regeneration (data was already seeded at creation time).
+ * config: { artistIds: string[], depth: number, includeSeed: bool }
+ */
+function resolveRadio(db, config) {
+  const { artistIds, depth = 0.25, includeSeed = true } = config;
+  if (!artistIds?.length) return [];
+
+  const allArtistIds = new Set();
+  if (includeSeed) artistIds.forEach(id => allArtistIds.add(id));
+
+  for (const artistId of artistIds) {
+    const similar = db.prepare(`
+      SELECT similar_artist_id FROM artist_similar
+      WHERE artist_id = ?
+        AND similar_artist_id IS NOT NULL
+        AND score >= ?
+        AND similar_name != '__none__'
+      ORDER BY score DESC
+    `).all(artistId, depth);
+    similar.forEach(r => allArtistIds.add(r.similar_artist_id));
+  }
+
+  if (!allArtistIds.size) return [];
+
+  const placeholders = [...allArtistIds].map(() => '?').join(', ');
+  const rows = db.prepare(`
+    SELECT id FROM tracks
+    WHERE artist_id IN (${placeholders})
+    ORDER BY play_count DESC
+  `).all(...allArtistIds);
+
+  return rows.map(r => r.id);
+}
+
 // ── Exports ───────────────────────────────────────────────────────────────────
 
-module.exports = { generatePlaylist, resolveRule, validateRules, previewRules };
+module.exports = { generatePlaylist, resolveRule, validateRules, previewRules, resolveRadio, fisherYates };

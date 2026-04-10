@@ -460,7 +460,7 @@ select:focus {
   border-radius: 10px;
   padding: 1.75rem 2rem;
   min-width: 340px;
-  max-width: 420px;
+  max-width: 560px;
   width: 100%;
   display: flex;
   flex-direction: column;
@@ -475,6 +475,7 @@ select:focus {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 0.75rem;
+  align-items: stretch;
 }
 
 .pl-type-option {
@@ -484,13 +485,15 @@ select:focus {
   padding: 1rem;
   cursor: pointer;
   transition: border-color 0.15s, background 0.15s;
+  display: flex;
+  flex-direction: column;
 }
 
 .pl-type-option:hover { border-color: #0084ff; }
 .pl-type-option.selected { border-color: #0084ff; background: #e6f3ff; }
 
-.pl-type-title { font-size: 0.9rem; font-weight: 600; color: #1a1a1a; margin-bottom: 0.3rem; }
-.pl-type-desc  { font-size: 0.78rem; color: #999; line-height: 1.4; }
+.pl-type-title { font-size: 0.88rem; font-weight: 600; color: #1a1a1a; margin-bottom: 0.25rem; }
+.pl-type-desc  { font-size: 0.74rem; color: #999; line-height: 1.35; }
 
 .modal input[type="text"] {
   width: 100%;
@@ -1212,3 +1215,65 @@ select:focus {
 .log-debug { color: #bbb; }
 .log-warn  { color: #b07000; }
 .log-error { color: #c0392b; }
+
+/* ── Radio builder ─────────────────────────────────────────────── */
+.pl-badge-radio { background: #fff3e0; color: #e65c00; }
+
+.radio-seeds {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 0.5rem;
+  min-height: 2rem;
+}
+
+.radio-seed-chip {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.25rem 0.6rem;
+  background: #e6f3ff;
+  border: 0.5px solid #99ccff;
+  border-radius: 20px;
+  font-size: 0.82rem;
+  color: #0066cc;
+}
+
+.radio-seed-chip button {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: #0066cc;
+  font-size: 0.9rem;
+  line-height: 1;
+  padding: 0;
+  opacity: 0.6;
+}
+.radio-seed-chip button:hover { opacity: 1; }
+
+.radio-seed-input-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.radio-seed-input-row input { flex: 1; }
+
+.radio-depth-options {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.radio-depth-option {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  cursor: pointer;
+  font-size: 0.875rem;
+}
+
+.radio-depth-option input[type="radio"] {
+  accent-color: #0084ff;
+  cursor: pointer;
+}

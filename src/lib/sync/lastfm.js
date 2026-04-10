@@ -4,12 +4,12 @@
  * sync/lastfm.js — Last.fm sync jobs
  *
  * All functions receive (db, settings) and return { ok, ... }.
- * Helpers (sleep, buildMatchCacheLocal, matchLocal, writeMissingArtists) imported from index.
+ * Helpers imported from index.
  */
 
 const lastfm = require('../../providers/lastfm');
 const logger = require('../../utils/logger');
-const { sleep, buildMatchCacheLocal, matchLocal, writeMissingArtists } = require('./index');
+const { sleep, buildMatchCacheLocal, matchLocal, writeMissingArtists } = require('./helpers');
 
 const LFM_PERIODS = ['7day', '1month', '3month', '6month', '12month', 'overall'];
 
@@ -195,7 +195,7 @@ async function syncSimilarArtistsLastfm(db, settings) {
 
   for (const { artist_id, artist } of todo) {
     try {
-      const data    = await lastfm.getSimilarArtists(apiKey, artist, 100);
+      const data    = await lastfm.getSimilarArtists(apiKey, { name: artist }, 100);
       const similar = data?.similarartists?.artist;
       if (!Array.isArray(similar) || !similar.length) {
         insertSentinel.run(artist_id, fetchedAt);
@@ -216,8 +216,13 @@ async function syncSimilarArtistsLastfm(db, settings) {
       fetched++;
       logger.info('sync', `similar-artists/lastfm: "${artist}" → ${similar.length} results`);
     } catch (e) {
-      failed++;
-      logger.warn('sync', `similar-artists/lastfm failed for "${artist}": ${e.message}`);
+      if (e.message.includes('400')) {
+        insertSentinel.run(artist_id, fetchedAt);
+        logger.warn('sync', `similar-artists/lastfm: "${artist}" 400 — ${e.message} — sentinelled`);
+      } else {
+        failed++;
+        logger.warn('sync', `similar-artists/lastfm failed for "${artist}": ${e.message}`);
+      }
     }
     await sleep(1000);
   }

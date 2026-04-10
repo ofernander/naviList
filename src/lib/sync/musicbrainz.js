@@ -2,18 +2,22 @@
 
 /**
  * sync/musicbrainz.js — MusicBrainz sync jobs
+ *
+ * syncArtistTagsMusicbrainz — fetches tags for all library artists via MusicBrainz
  */
 
 const mb     = require('../../providers/musicbrainz');
 const logger = require('../../utils/logger');
-const { sleep, writeMissingArtists } = require('./index');
+const { sleep } = require('./helpers');
 
 // ── Artist tags ───────────────────────────────────────────────────────────────
 
 async function syncArtistTagsMusicbrainz(db) {
   const artists = db.prepare('SELECT DISTINCT artist_id, artist FROM tracks WHERE artist_id IS NOT NULL AND artist IS NOT NULL').all();
-  const cached  = new Set(db.prepare("SELECT DISTINCT artist_id FROM artist_tags WHERE source = 'musicbrainz'").all().map(r => r.artist_id));
-  const todo    = artists.filter(a => !cached.has(a.artist_id));
+  const cached  = new Set(
+    db.prepare("SELECT DISTINCT artist_id FROM artist_tags WHERE source = 'musicbrainz'").all().map(r => r.artist_id)
+  );
+  const todo = artists.filter(a => !cached.has(a.artist_id));
 
   logger.info('sync', `artist-tags/musicbrainz: ${todo.length} artists to fetch (${cached.size} already cached)`);
   if (!todo.length) return { ok: true, fetched: 0, failed: 0, total: 0 };
@@ -46,6 +50,7 @@ async function syncArtistTagsMusicbrainz(db) {
     }
     await sleep(1000);
   }
+
   logger.info('sync', `artist-tags/musicbrainz: ${fetched} fetched, ${failed} failed`);
   return { ok: true, fetched, failed, total: todo.length };
 }

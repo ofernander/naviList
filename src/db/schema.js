@@ -58,7 +58,18 @@ module.exports = function (db) {
       result         TEXT
     );
 
-    -- Similar artists cache (Last.fm) — Phase 2
+    -- Artists — optional MBID lookup cache (populated on demand, e.g. radio playlist creation)
+    CREATE TABLE IF NOT EXISTS artists (
+      artist_id   TEXT PRIMARY KEY,
+      name        TEXT NOT NULL,
+      mbid        TEXT,
+      updated_at  INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_artists_name ON artists(name);
+    CREATE INDEX IF NOT EXISTS idx_artists_mbid ON artists(mbid) WHERE mbid IS NOT NULL;
+
+    -- Similar artists cache (Last.fm) — keyed on ND artist_id
     CREATE TABLE IF NOT EXISTS artist_similar (
       artist_id         TEXT NOT NULL,
       similar_name      TEXT NOT NULL,
@@ -71,7 +82,7 @@ module.exports = function (db) {
 
     CREATE INDEX IF NOT EXISTS idx_artist_similar_artist_id ON artist_similar(artist_id);
 
-    -- Artist tags cache (MusicBrainz) — Phase 3
+    -- Artist tags cache (Last.fm + MusicBrainz) — keyed on ND artist_id
     CREATE TABLE IF NOT EXISTS artist_tags (
       artist_id  TEXT NOT NULL,
       tag        TEXT NOT NULL,

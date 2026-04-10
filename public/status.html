@@ -61,6 +61,7 @@
             <div class="svc-job"><span class="svc-job-label">Top artists</span><span id="lastfmTopArtistsMeta">—</span></div>
             <div class="svc-job"><span class="svc-job-label">Top tracks</span><span id="lastfmTopTracksMeta">—</span></div>
             <div class="svc-job"><span class="svc-job-label">Artist tags</span><span id="lastfmArtistTagsMeta">—</span></div>
+            <div class="svc-job"><span class="svc-job-label">Similar artists</span><span id="lastfmSimilarMeta">—</span></div>
           </div>
         </div>
 
@@ -273,6 +274,8 @@
         document.getElementById('lastfmTopArtistsMeta').textContent  = `${topArtists} artist-period rows`;
         document.getElementById('lastfmTopTracksMeta').textContent   = `${topTracks} track-period rows`;
         document.getElementById('lastfmArtistTagsMeta').textContent  = `${tagsLfm} artists tagged`;
+        const similarArtists = countsRes.similarArtists || 0;
+        document.getElementById('lastfmSimilarMeta').textContent = `${similarArtists} artists cached`;
         document.getElementById('lbLovedMeta').textContent           = `${loved} loved · ${disliked} disliked`;
         document.getElementById('lbTopArtistsMeta').textContent      = `${topArtists} artist-period rows`;
         document.getElementById('lbTopTracksMeta').textContent       = `${topTracks} track-period rows`;

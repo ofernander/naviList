@@ -35,6 +35,7 @@
       <button class="pl-filter-btn active" data-filter="all">All</button>
       <button class="pl-filter-btn" data-filter="navilist">naviList</button>
       <button class="pl-filter-btn" data-filter="listenbrainz">ListenBrainz</button>
+      <button class="pl-filter-btn" data-filter="radio">Radio</button>
       <button class="pl-filter-btn" data-filter="manual">Manual</button>
       <button class="pl-filter-btn" data-filter="deactivated">Deactivated</button>
       <div class="pl-view-toggle">
@@ -131,7 +132,56 @@
     </div>
   </main>
 
-  <!-- ── New playlist modal ─────────────────────────────────────────────── -->
+  <!-- ── Radio builder view ─────────────────────────────────────────────── -->
+  <main id="viewRadio" style="display:none">
+    <button class="pl-detail-back" id="radioBackBtn">← Back</button>
+    <div class="pl-detail-header">
+      <div>
+        <div class="pl-detail-title" id="radioTitle"></div>
+        <div class="pl-detail-meta">Seed artists — naviList finds similar music from your library via Last.fm</div>
+      </div>
+    </div>
+    <hr style="border:none; border-top: 0.5px solid #eeeee8; margin-bottom: 1.5rem;" />
+
+    <div class="rb-section">
+      <div class="rb-section-label">Seed artists</div>
+      <div class="radio-seeds" id="radioSeedChips"></div>
+      <div class="radio-seed-input-row">
+        <input type="text" id="radioSeedInput" placeholder="Artist name..." list="radioArtistList" autocomplete="off" />
+        <datalist id="radioArtistList"></datalist>
+        <button class="btn btn-secondary btn-sm" id="radioAddSeedBtn">+ Add</button>
+      </div>
+    </div>
+
+    <div class="rb-section" style="margin-top:1.5rem;">
+      <div class="rb-section-label">Settings</div>
+      <div class="rb-globals">
+        <div class="rb-global-field">
+          <label>Depth</label>
+          <div class="radio-depth-options">
+            <label class="radio-depth-option"><input type="radio" name="radioDepth" value="0.5" /> Close</label>
+            <label class="radio-depth-option"><input type="radio" name="radioDepth" value="0.25" checked /> Medium</label>
+            <label class="radio-depth-option"><input type="radio" name="radioDepth" value="0.1" /> Wide</label>
+          </div>
+        </div>
+        <div class="rb-global-field">
+          <label for="radioTrackCount">Tracks</label>
+          <input type="number" id="radioTrackCount" min="10" max="200" value="50" style="width:70px;" />
+        </div>
+        <label class="rb-toggle">
+          <input type="checkbox" id="radioIncludeSeed" checked />
+          Include seed artists
+        </label>
+      </div>
+    </div>
+
+    <div class="rb-actions" style="margin-top:1.5rem;">
+      <button class="btn btn-secondary" id="radioCancelBtn">Cancel</button>
+      <button class="btn" id="radioCreateBtn">Create Radio Playlist →</button>
+      <span class="rb-status" id="radioStatus"></span>
+    </div>
+  </main>
+
   <!-- ── ListenBrainz playlists view ───────────────────────────────────────── -->
   <main id="viewLb" style="display:none">
     <button class="pl-detail-back" id="lbBackBtn">← All playlists</button>
@@ -145,11 +195,12 @@
     <div class="lb-cards" id="plLbList"></div>
   </main>
 
+  <!-- ── New playlist modal ─────────────────────────────────────────────── -->
   <div class="modal-overlay" id="newPlaylistModal" style="display:none">
     <div class="modal">
       <h3>New playlist</h3>
       <p class="modal-sub">Choose how you want to build it</p>
-      <div class="pl-type-grid" style="grid-template-columns:1fr 1fr 1fr">
+      <div class="pl-type-grid" style="grid-template-columns:1fr 1fr 1fr 1fr">
         <div class="pl-type-option selected" data-type="navilist" id="typeSmart">
           <div class="pl-type-title">naviList</div>
           <div class="pl-type-desc">Define rules — naviList generates and updates tracks automatically</div>
@@ -162,9 +213,14 @@
           <div class="pl-type-title">ListenBrainz</div>
           <div class="pl-type-desc">Import and sync playlists from your ListenBrainz account</div>
         </div>
+        <div class="pl-type-option" data-type="radio" id="typeRadio">
+          <div class="pl-type-title">Radio</div>
+          <div class="pl-type-desc">Seed with artists — naviList finds similar music from your library</div>
+        </div>
       </div>
       <input type="text" id="newPlaylistName" placeholder="Playlist name..." />
       <p id="lbTypeNote" style="display:none; font-size:0.82rem; color:#aaa; margin-top:-0.5rem;">No name needed — playlists come from ListenBrainz</p>
+      <p id="radioTypeNote" style="display:none; font-size:0.82rem; color:#aaa; margin-top:-0.5rem;">Name your station, then add seed artists on the next screen</p>
       <div class="modal-actions">
         <button class="btn btn-secondary" id="cancelNewPlaylist">Cancel</button>
         <button class="btn" id="createPlaylistBtn">Continue →</button>
@@ -187,10 +243,14 @@
     let selected  = new Set();
 
     // Rule builder state
-    let rbPlaylistId   = null;  // playlist being edited
+    let rbPlaylistId   = null;
     let rbPlaylistName = '';
-    let rbReturnTo     = 'list'; // 'list' or 'detail'
-    let rbRules        = [];    // array of rule objects
+    let rbReturnTo     = 'list';
+    let rbRules        = [];
+
+    // Radio builder state
+    let radioPlaylistName = '';
+    let radioSeeds        = [];
 
     // ── Helpers ────────────────────────────────────────────────────────────
     function esc(str) {
@@ -220,6 +280,10 @@
       return p.comment?.startsWith('navilist:lb') || false;
     }
 
+    function isRadioPlaylist(p) {
+      return p.comment?.startsWith('navilist:radio') || false;
+    }
+
     function isInactive(p) {
       return p.active === 0;
     }
@@ -227,6 +291,7 @@
     function getPlaylistType(p) {
       if (isSmartPlaylist(p))  return 'navilist';
       if (isLbPlaylist(p))     return 'listenbrainz';
+      if (isRadioPlaylist(p))  return 'radio';
       return 'manual';
     }
 
@@ -234,6 +299,7 @@
       switch (type) {
         case 'navilist':     return 'pl-badge-navilist';
         case 'listenbrainz': return 'pl-badge-listenbrainz';
+        case 'radio':        return 'pl-badge-radio';
         case 'lastfm':       return 'pl-badge-lastfm';
         default:             return 'pl-badge-manual';
       }
@@ -243,13 +309,13 @@
       switch (type) {
         case 'navilist':     return 'naviList';
         case 'listenbrainz': return 'ListenBrainz';
+        case 'radio':        return 'Radio';
         case 'lastfm':       return 'Last.fm';
         default:             return 'Manual';
       }
     }
 
     function parseRules(p) {
-      // Extract rules JSON from the comment field
       try {
         const json = p.comment?.replace(/^navilist:navilist\s*/, '');
         return json ? JSON.parse(json) : null;
@@ -289,6 +355,7 @@
       document.getElementById('viewDetail').style.display = 'none';
       document.getElementById('viewRules').style.display  = 'none';
       document.getElementById('viewLb').style.display     = 'none';
+      document.getElementById('viewRadio').style.display  = 'none';
     }
 
     function showDetailView() {
@@ -296,6 +363,7 @@
       document.getElementById('viewDetail').style.display = '';
       document.getElementById('viewRules').style.display  = 'none';
       document.getElementById('viewLb').style.display     = 'none';
+      document.getElementById('viewRadio').style.display  = 'none';
     }
 
     function showRulesView() {
@@ -303,6 +371,7 @@
       document.getElementById('viewDetail').style.display = 'none';
       document.getElementById('viewRules').style.display  = '';
       document.getElementById('viewLb').style.display     = 'none';
+      document.getElementById('viewRadio').style.display  = 'none';
     }
 
     function showLbView() {
@@ -310,7 +379,16 @@
       document.getElementById('viewDetail').style.display = 'none';
       document.getElementById('viewRules').style.display  = 'none';
       document.getElementById('viewLb').style.display     = '';
+      document.getElementById('viewRadio').style.display  = 'none';
       loadLbPlaylists();
+    }
+
+    function showRadioView() {
+      document.getElementById('viewList').style.display   = 'none';
+      document.getElementById('viewDetail').style.display = 'none';
+      document.getElementById('viewRules').style.display  = 'none';
+      document.getElementById('viewLb').style.display     = 'none';
+      document.getElementById('viewRadio').style.display  = '';
     }
 
     // ── Load playlists ─────────────────────────────────────────────────────
@@ -340,6 +418,7 @@
           (!inactive && (
             activeFilter === type ||
             (activeFilter === 'navilist' && type === 'navilist') ||
+            (activeFilter === 'radio' && type === 'radio') ||
             (activeFilter === 'manual' && type === 'manual')
           ));
         return matchSearch && matchFilter;
@@ -347,7 +426,8 @@
 
       if (!filtered.length) {
         document.getElementById('plListHeader').style.display = 'none';
-        container.innerHTML = `<div class="pl-empty"><p>${allPlaylists.length === 0 ? 'No playlists yet. Create one to get started.' : 'No playlists match your filter.'}</p></div>`;
+        container.classList.remove('pl-list', 'pl-cards');
+        container.innerHTML = `<div class="pl-empty">${allPlaylists.length === 0 ? 'No playlists yet. Create one to get started.' : 'No playlists match your filter.'}</div>`;
         return;
       }
 
@@ -393,7 +473,7 @@
           <div class="pl-card-name">${esc(p.name)}</div>
           <button class="pl-card-menu" title="Options">⋯</button>
         </div>
-        <div class="pl-card-desc">${esc(p.comment?.replace(/^navilist:(navilist|lb)\s*(\{.*\})?/, '').trim() || '')}</div>
+        <div class="pl-card-desc">${esc(p.comment?.replace(/^navilist:(navilist|lb|radio)\s*(\{.*\})?/, '').trim() || '')}</div>
         <div class="pl-card-footer">
           <span class="pl-badge ${badgeClass(type)}">${badgeLabel(type)}</span>
           <span class="pl-card-meta">${esc(meta)}</span>
@@ -416,7 +496,6 @@
     function renderListRow(p) {
       const type = getPlaylistType(p);
       const dur  = fmtDur(p.duration);
-      const meta = [p.songCount ? `${p.songCount} tracks` : null, dur || null].filter(Boolean).join(' · ');
 
       const row = document.createElement('div');
       row.className = 'pl-list-row';
@@ -462,10 +541,9 @@
     }
 
     async function toggleListRow(row, p) {
-      const body    = row.querySelector('.pl-list-row-body');
-      const isOpen  = row.classList.contains('is-open');
+      const body   = row.querySelector('.pl-list-row-body');
+      const isOpen = row.classList.contains('is-open');
 
-      // Collapse all other open rows
       document.querySelectorAll('.pl-list-row.is-open').forEach(r => {
         if (r !== row) {
           r.classList.remove('is-open');
@@ -482,12 +560,10 @@
       row.classList.add('is-open');
       body.style.display = '';
 
-      // Only fetch if not already loaded
       if (body.dataset.loaded) return;
       body.dataset.loaded = '1';
       body.innerHTML = '<div class="detail-loading">Loading…</div>';
 
-      // Action buttons
       const actions = document.createElement('div');
       actions.className = 'pl-list-row-actions';
       const type = getPlaylistType(p);
@@ -611,7 +687,7 @@
       });
     }
 
-    // ── Card context menu ──────────────────────────────────────────────────────────────────
+    // ── Card context menu ──────────────────────────────────────────────────
     function showCardMenu(e, p) {
       document.getElementById('cardMenu')?.remove();
 
@@ -661,7 +737,7 @@
 
       const type  = getPlaylistType(p);
       const badge = document.getElementById('detailBadge');
-      badge.className  = `pl-badge ${badgeClass(type)}`;
+      badge.className   = `pl-badge ${badgeClass(type)}`;
       badge.textContent = badgeLabel(type);
 
       document.getElementById('detailMeta').textContent = 'Loading...';
@@ -817,10 +893,7 @@
         body: JSON.stringify({ name: name.trim() })
       });
       const data = await res.json();
-      if (data.ok) {
-        await loadPlaylists();
-        showListView();
-      }
+      if (data.ok) { await loadPlaylists(); showListView(); }
     }
 
     async function deactivatePlaylist(p, btn) {
@@ -857,7 +930,6 @@
 
     // ── Rule builder ───────────────────────────────────────────────────────
 
-    // Term definitions — controls what value input is shown per term
     const TERMS = {
       stats:  { label: 'Stats',   valueType: 'stats-select' },
       decade: { label: 'Decade',  valueType: 'text', placeholder: 'e.g. 1990s' },
@@ -880,28 +952,27 @@
     ];
 
     const WINDOW_OPTIONS = [
-      { value: 'week',     label: 'Last week'     },
-      { value: 'month',   label: 'Last month'    },
-      { value: 'quarter', label: 'Last 3 months'  },
-      { value: 'year',    label: 'Last year'     },
+      { value: 'week',     label: 'Last week'    },
+      { value: 'month',    label: 'Last month'   },
+      { value: 'quarter',  label: 'Last 3 months' },
+      { value: 'year',     label: 'Last year'    },
       { value: 'all_time', label: 'All time'     },
     ];
 
     const PERIOD_OPTIONS = [
       { value: '7day',    label: 'Last 7 days'   },
       { value: '1month',  label: 'Last month'    },
-      { value: '3month',  label: 'Last 3 months'  },
-      { value: '6month',  label: 'Last 6 months'  },
+      { value: '3month',  label: 'Last 3 months' },
+      { value: '6month',  label: 'Last 6 months' },
       { value: '12month', label: 'Last 12 months' },
       { value: 'overall', label: 'All time'      },
     ];
 
     const SOURCE_OPTIONS = [
-      { value: 'lastfm',       label: 'Last.fm'       },
-      { value: 'listenbrainz', label: 'ListenBrainz'  },
+      { value: 'lastfm',       label: 'Last.fm'      },
+      { value: 'listenbrainz', label: 'ListenBrainz' },
     ];
 
-    // ── Genre list for tag autocomplete ─────────────────────────────────
     let genreList = [];
     async function loadGenres() {
       try {
@@ -911,7 +982,6 @@
       } catch (e) { /* silent fail */ }
     }
 
-    // ── Artist list for artist autocomplete ────────────────────────────
     let artistList = [];
     async function loadArtists() {
       try {
@@ -928,15 +998,14 @@
       rbPlaylistName = playlistName;
       rbReturnTo     = returnTo;
 
-      // Populate from existing rules or start with one blank rule
       if (existingRules?.rules?.length) {
-        document.getElementById('rbLimit').value        = existingRules.limit          ?? 50;
-        document.getElementById('rbShuffle').checked   = existingRules.shuffle        ?? true;
+        document.getElementById('rbLimit').value         = existingRules.limit          ?? 50;
+        document.getElementById('rbShuffle').checked    = existingRules.shuffle        ?? true;
         document.getElementById('rbMaxPerArtist').value = existingRules.max_per_artist ?? 5;
         rbRules = existingRules.rules.map(r => ({ ...r }));
       } else {
-        document.getElementById('rbLimit').value        = 50;
-        document.getElementById('rbShuffle').checked   = true;
+        document.getElementById('rbLimit').value         = 50;
+        document.getElementById('rbShuffle').checked    = true;
         document.getElementById('rbMaxPerArtist').value = 5;
         rbRules = [defaultRule()];
       }
@@ -965,7 +1034,6 @@
       row.className = 'rb-rule';
       row.dataset.index = index;
 
-      // Term select
       const termSel = document.createElement('select');
       termSel.setAttribute('aria-label', 'Term');
       Object.entries(TERMS).forEach(([key, def]) => {
@@ -976,12 +1044,10 @@
         termSel.appendChild(opt);
       });
 
-      // Value input (rebuilt when term changes)
       const valueWrap = document.createElement('div');
       valueWrap.style.minWidth = '0';
       renderValueInput(valueWrap, rule);
 
-      // Weight — labelled wrapper
       const weightWrap  = document.createElement('div');
       weightWrap.className = 'rb-weight-wrap';
       const weightLabel = document.createElement('span');
@@ -995,7 +1061,6 @@
       weightWrap.appendChild(weightLabel);
       weightWrap.appendChild(weightInput);
 
-      // Mode
       const modeSel = document.createElement('select');
       modeSel.setAttribute('aria-label', 'Mode');
       ['easy', 'medium', 'hard'].forEach(m => {
@@ -1006,13 +1071,11 @@
         modeSel.appendChild(opt);
       });
 
-      // Remove button
       const removeBtn = document.createElement('button');
       removeBtn.className   = 'rb-rule-remove';
       removeBtn.textContent = '✕';
       removeBtn.title       = 'Remove rule';
 
-      // Wire events
       termSel.addEventListener('change', () => {
         rbRules[index].term    = termSel.value;
         rbRules[index].value   = termSel.value === 'stats' ? 'top_played' : '';
@@ -1035,7 +1098,6 @@
         renderRuleRows();
       });
 
-      // Preview count — always present, updated by runPreview
       const previewSpan = document.createElement('span');
       previewSpan.className = 'rb-preview-count';
       previewSpan.textContent = '';
@@ -1047,9 +1109,7 @@
       row.appendChild(removeBtn);
       row.appendChild(previewSpan);
 
-      // Trigger initial preview
       schedulePreview(index);
-
       return row;
     }
 
@@ -1069,7 +1129,6 @@
           const opt = document.createElement('option');
           opt.value = sv.value;
           opt.textContent = sv.label;
-          // Match stored value — top_played_history maps to top_played + source:history
           const currentVal = rule.options?.source === 'history' && rule.value === 'top_played'
             ? 'top_played_history'
             : rule.value;
@@ -1077,7 +1136,6 @@
           sel.appendChild(opt);
         });
 
-        // Window dropdown — shown conditionally
         const windowSel = document.createElement('select');
         windowSel.setAttribute('aria-label', 'Window');
         windowSel.style.cssText = 'width:120px; flex-shrink:0;';
@@ -1089,7 +1147,6 @@
           windowSel.appendChild(opt);
         });
 
-        // Period dropdown — shown for top_artists
         const periodSel = document.createElement('select');
         periodSel.setAttribute('aria-label', 'Period');
         periodSel.style.cssText = 'width:130px; flex-shrink:0;';
@@ -1101,7 +1158,6 @@
           periodSel.appendChild(opt);
         });
 
-        // Source dropdown — shown for top_artists
         const sourceSel = document.createElement('select');
         sourceSel.setAttribute('aria-label', 'Source');
         sourceSel.style.cssText = 'width:120px; flex-shrink:0;';
@@ -1115,15 +1171,13 @@
 
         function syncWindowVisibility() {
           const sv = STATS_VALUES.find(s => s.value === sel.value);
-          windowSel.style.display  = sv?.hasWindow  ? '' : 'none';
-          periodSel.style.display  = sv?.hasPeriod  ? '' : 'none';
-          sourceSel.style.display  = sv?.hasSource  ? '' : 'none';
+          windowSel.style.display = sv?.hasWindow ? '' : 'none';
+          periodSel.style.display = sv?.hasPeriod ? '' : 'none';
+          sourceSel.style.display = sv?.hasSource ? '' : 'none';
         }
         syncWindowVisibility();
 
         sel.addEventListener('change', () => {
-          const sv = STATS_VALUES.find(s => s.value === sel.value);
-          // Map top_played_history → top_played + source:history
           if (sel.value === 'top_played_history') {
             rule.value = 'top_played';
             rule.options = { ...rule.options, source: 'history' };
@@ -1164,7 +1218,6 @@
         input.value       = rule.value || '';
         input.setAttribute('aria-label', 'Value');
 
-        // Attach datalist for decade term
         if (rule.term === 'decade') {
           const listId = `decade-list-${Date.now()}`;
           const dl = document.createElement('datalist');
@@ -1180,7 +1233,6 @@
           container.appendChild(dl);
         }
 
-        // Attach datalist for tag term
         if (rule.term === 'tag' && genreList.length) {
           const listId = `genre-list-${Date.now()}`;
           const dl = document.createElement('datalist');
@@ -1194,7 +1246,6 @@
           container.appendChild(dl);
         }
 
-        // Attach datalist for artist term
         if (rule.term === 'artist' && artistList.length) {
           const listId = `artist-list-${Date.now()}`;
           const dl = document.createElement('datalist');
@@ -1218,7 +1269,6 @@
       }
     }
 
-    // Preview — debounced, fires for the whole ruleset
     let previewTimer = null;
     function schedulePreview() {
       clearTimeout(previewTimer);
@@ -1238,29 +1288,25 @@
         const data = await res.json();
         if (!data.ok) return;
 
-        // Update each row with its preview count
         const rows = document.querySelectorAll('.rb-rule');
         rows.forEach((row, i) => {
           const prev = data.preview[i];
           if (!prev) return;
-
           const span = row.querySelector('.rb-preview-count');
           if (!span) return;
-          span.className = `rb-preview-count ${prev.count > 0 ? 'has-tracks' : 'no-tracks'}`;
+          span.className   = `rb-preview-count ${prev.count > 0 ? 'has-tracks' : 'no-tracks'}`;
           span.textContent = `${prev.count} tracks`;
         });
-      } catch (e) {
-        // Preview is best-effort — silent fail
-      }
+      } catch (e) { /* silent fail */ }
     }
 
     function buildRulesPayload() {
       return {
         version:        1,
-        limit:          parseInt(document.getElementById('rbLimit').value)          || 50,
+        limit:          parseInt(document.getElementById('rbLimit').value)         || 50,
         shuffle:        document.getElementById('rbShuffle').checked,
-        max_per_artist: parseInt(document.getElementById('rbMaxPerArtist').value)  || null,
-        rules:   rbRules.filter(r => r.value !== '').map(r => ({
+        max_per_artist: parseInt(document.getElementById('rbMaxPerArtist').value) || null,
+        rules: rbRules.filter(r => r.value !== '').map(r => ({
           term:    r.term,
           value:   r.value,
           weight:  r.weight  || 1,
@@ -1270,22 +1316,21 @@
       };
     }
 
-    // Save & generate
     document.getElementById('rulesSaveBtn').addEventListener('click', async () => {
-      const rules  = buildRulesPayload();
-      const status = document.getElementById('rbStatus');
+      const rules   = buildRulesPayload();
+      const status  = document.getElementById('rbStatus');
+      const saveBtn = document.getElementById('rulesSaveBtn');
 
       if (!rules.rules.length) {
         status.textContent = 'Add at least one rule';
-        status.className = 'rb-status status-err';
+        status.className   = 'rb-status status-err';
         return;
       }
 
-      const saveBtn = document.getElementById('rulesSaveBtn');
-      saveBtn.disabled     = true;
-      saveBtn.textContent  = 'Saving...';
-      status.textContent   = '';
-      status.className     = 'rb-status';
+      saveBtn.disabled    = true;
+      saveBtn.textContent = 'Saving...';
+      status.textContent  = '';
+      status.className    = 'rb-status';
 
       try {
         const res  = await fetch(`/playlists/${rbPlaylistId}/rules`, {
@@ -1298,7 +1343,6 @@
           status.textContent  = `✓ Generated ${data.count} tracks`;
           status.className    = 'rb-status status-ok';
           await loadPlaylists();
-          // Return to detail view after short delay
           setTimeout(async () => {
             const updated = allPlaylists.find(p => p.id === rbPlaylistId);
             if (updated) openDetail(updated);
@@ -1317,7 +1361,6 @@
       }
     });
 
-    // Cancel
     document.getElementById('rulesCancelBtn').addEventListener('click', () => {
       if (rbReturnTo === 'detail') {
         const p = allPlaylists.find(pl => pl.id === rbPlaylistId);
@@ -1326,7 +1369,6 @@
       showListView();
     });
 
-    // Back button on rules view
     document.getElementById('rulesBackBtn').addEventListener('click', () => {
       if (rbReturnTo === 'detail') {
         const p = allPlaylists.find(pl => pl.id === rbPlaylistId);
@@ -1335,7 +1377,6 @@
       showListView();
     });
 
-    // Add rule
     document.getElementById('rbAddRule').addEventListener('click', () => {
       rbRules.push(defaultRule());
       renderRuleRows();
@@ -1362,26 +1403,49 @@
         document.querySelectorAll('.pl-type-option').forEach(o => o.classList.remove('selected'));
         opt.classList.add('selected');
         selectedType = opt.dataset.type;
-        const isLb = selectedType === 'listenbrainz';
+        const isLb    = selectedType === 'listenbrainz';
+        const isRadio = selectedType === 'radio';
         document.getElementById('newPlaylistName').style.display = isLb ? 'none' : '';
-        document.getElementById('lbTypeNote').style.display      = isLb ? '' : 'none';
+        document.getElementById('lbTypeNote').style.display      = isLb    ? '' : 'none';
+        document.getElementById('radioTypeNote').style.display   = isRadio ? '' : 'none';
       });
     });
 
     document.getElementById('createPlaylistBtn').addEventListener('click', async () => {
       const status = document.getElementById('createStatus');
+      const name   = document.getElementById('newPlaylistName').value.trim();
 
-      // ListenBrainz type — no playlist creation needed, go straight to LB view
+      // Radio type — go straight to radio builder (no pre-creation needed)
+      if (selectedType === 'radio') {
+        if (!name) { status.textContent = 'Name required'; status.className = 'status-err'; return; }
+        document.getElementById('newPlaylistModal').style.display = 'none';
+        radioPlaylistName = name;
+        radioSeeds        = [];
+        renderRadioSeeds();
+        document.getElementById('radioTitle').textContent      = name;
+        document.getElementById('radioStatus').textContent     = '';
+        document.getElementById('radioCreateBtn').disabled     = false;
+        document.getElementById('radioCreateBtn').textContent  = 'Create Radio Playlist →';
+        showRadioView();
+        loadArtists().then(() => {
+          const dl = document.getElementById('radioArtistList');
+          dl.innerHTML = '';
+          artistList.forEach(a => { const o = document.createElement('option'); o.value = a; dl.appendChild(o); });
+        });
+        return;
+      }
+
+      // ListenBrainz type — go straight to LB view
       if (selectedType === 'listenbrainz') {
         document.getElementById('newPlaylistModal').style.display = 'none';
         showLbView();
         return;
       }
 
-      const name = document.getElementById('newPlaylistName').value.trim();
       if (!name) { status.textContent = 'Name required'; status.className = 'status-err'; return; }
 
-      status.textContent = 'Creating...'; status.className = 'status-pending';
+      status.textContent = 'Creating...';
+      status.className   = 'status-pending';
 
       const res  = await fetch('/playlists/create', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -1400,11 +1464,12 @@
           showListView();
         }
       } else {
-        status.textContent = `✗ ${data.error}`; status.className = 'status-err';
+        status.textContent = `✗ ${data.error}`;
+        status.className   = 'status-err';
       }
     });
 
-    // ── View toggle ──────────────────────────────────────────────────────────────────
+    // ── View toggle ────────────────────────────────────────────────────────
     function applyViewMode(mode) {
       viewMode = mode;
       localStorage.setItem('navilist_pl_view', mode);
@@ -1416,7 +1481,6 @@
     document.getElementById('viewBtnCards').addEventListener('click', () => applyViewMode('cards'));
     document.getElementById('viewBtnList').addEventListener('click',  () => applyViewMode('list'));
 
-    // Apply saved view mode button state on init
     if (viewMode === 'list') {
       document.getElementById('viewBtnCards').classList.remove('active');
       document.getElementById('viewBtnList').classList.add('active');
@@ -1444,8 +1508,86 @@
       loadPlaylists();
     });
 
-    // ── LB view (playlists page) ───────────────────────────────────────
-    let lbPlaylistData = []; // cached list from last Load
+    // ── Radio builder ──────────────────────────────────────────────────────
+    function renderRadioSeeds() {
+      const chips = document.getElementById('radioSeedChips');
+      chips.innerHTML = '';
+      radioSeeds.forEach((name, i) => {
+        const chip = document.createElement('div');
+        chip.className = 'radio-seed-chip';
+        chip.innerHTML = `<span>${esc(name)}</span><button title="Remove">✕</button>`;
+        chip.querySelector('button').addEventListener('click', () => {
+          radioSeeds.splice(i, 1);
+          renderRadioSeeds();
+        });
+        chips.appendChild(chip);
+      });
+    }
+
+    function addRadioSeed() {
+      const input = document.getElementById('radioSeedInput');
+      const name  = input.value.trim();
+      if (!name || radioSeeds.includes(name)) { input.value = ''; return; }
+      radioSeeds.push(name);
+      input.value = '';
+      renderRadioSeeds();
+    }
+
+    document.getElementById('radioAddSeedBtn').addEventListener('click', addRadioSeed);
+    document.getElementById('radioSeedInput').addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); addRadioSeed(); }
+    });
+
+    document.getElementById('radioCancelBtn').addEventListener('click', () => showListView());
+    document.getElementById('radioBackBtn').addEventListener('click',   () => showListView());
+
+    document.getElementById('radioCreateBtn').addEventListener('click', async () => {
+      const status = document.getElementById('radioStatus');
+      if (!radioSeeds.length) {
+        status.textContent = 'Add at least one seed artist';
+        status.className   = 'rb-status status-err';
+        return;
+      }
+      const depth        = parseFloat(document.querySelector('input[name="radioDepth"]:checked')?.value || '0.25');
+      const track_count  = parseInt(document.getElementById('radioTrackCount').value) || 50;
+      const include_seed = document.getElementById('radioIncludeSeed').checked;
+      const btn          = document.getElementById('radioCreateBtn');
+
+      btn.disabled       = true;
+      btn.textContent    = 'Creating...';
+      status.textContent = '';
+      status.className   = 'rb-status';
+
+      try {
+        const res  = await fetch('/playlists/create-radio', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: radioPlaylistName, artists: radioSeeds, depth, track_count, include_seed })
+        });
+        const data = await res.json();
+        if (data.ok) {
+          status.textContent = `✓ Created with ${data.count} tracks`;
+          status.className   = 'rb-status status-ok';
+          await loadPlaylists();
+          setTimeout(() => {
+            const created = allPlaylists.find(p => p.id === data.playlistId);
+            if (created) openDetail(created); else showListView();
+          }, 600);
+        } else {
+          status.textContent = `✗ ${data.error}`;
+          status.className   = 'rb-status status-err';
+          btn.disabled       = false;
+          btn.textContent    = 'Create Radio Playlist →';
+        }
+      } catch (e) {
+        status.textContent = '✗ Request failed';
+        status.className   = 'rb-status status-err';
+        btn.disabled       = false;
+        btn.textContent    = 'Create Radio Playlist →';
+      }
+    });
+
+    // ── LB view ────────────────────────────────────────────────────────────
+    let lbPlaylistData = [];
 
     function renderLbPlaylists(playlists) {
       lbPlaylistData = playlists;
@@ -1479,28 +1621,28 @@
 
       const badge = document.createElement('span');
       const isRotating = !!p.slot_key;
-      badge.className = `lb-pl-badge ${isGenerated ? 'lb-pl-generated' : 'lb-pl-user'}`;
+      badge.className   = `lb-pl-badge ${isGenerated ? 'lb-pl-generated' : 'lb-pl-user'}`;
       badge.textContent = isRotating ? '↻ Rotating' : (isGenerated ? 'Generated' : 'Mine');
       if (isRotating) badge.title = 'Updates automatically each week';
 
       const stat = document.createElement('span');
-      stat.className = 'lb-card-stat';
+      stat.className   = 'lb-card-stat';
       stat.textContent = statText;
 
       const actions = document.createElement('div');
       actions.className = 'lb-card-actions';
 
       const addBtn = document.createElement('button');
-      addBtn.className = 'btn btn-secondary btn-sm';
+      addBtn.className   = 'btn btn-secondary btn-sm';
       addBtn.textContent = isEnabled ? '✓ Enabled' : '+ Add';
       if (isEnabled) addBtn.style.color = '#27ae60';
       addBtn.addEventListener('click', e => { e.stopPropagation(); importLbPlaylist(p, addBtn, card); });
 
       if (isGenerated) {
         const saveBtn = document.createElement('button');
-        saveBtn.className = 'btn btn-secondary btn-sm';
+        saveBtn.className   = 'btn btn-secondary btn-sm';
         saveBtn.textContent = isSaved ? '🔒' : 'Save';
-        saveBtn.title = isSaved ? 'Saved this week' : 'Save this week';
+        saveBtn.title       = isSaved ? 'Saved this week' : 'Save this week';
         if (isSaved) saveBtn.style.color = '#27ae60';
         saveBtn.addEventListener('click', e => { e.stopPropagation(); saveLbWeek(p, saveBtn, card); });
         actions.appendChild(saveBtn);
@@ -1508,7 +1650,7 @@
       actions.appendChild(addBtn);
 
       const chevron = document.createElement('span');
-      chevron.className = 'lb-card-chevron';
+      chevron.className   = 'lb-card-chevron';
       chevron.textContent = '›';
 
       body.appendChild(titleEl);
@@ -1522,7 +1664,7 @@
       });
 
       const tracksPanel = document.createElement('div');
-      tracksPanel.className = 'lb-card-tracks';
+      tracksPanel.className    = 'lb-card-tracks';
       tracksPanel.style.display = 'none';
 
       card.appendChild(body);
@@ -1563,7 +1705,7 @@
     }
 
     async function importLbPlaylist(p, btn, card) {
-      btn.disabled = true;
+      btn.disabled    = true;
       btn.textContent = 'Adding…';
       try {
         const res  = await fetch(`/sync/lb-playlists/${p.lb_mbid}/import`, { method: 'POST' });
@@ -1573,12 +1715,12 @@
           btn.style.color = '#27ae60';
           card.classList.add('is-enabled');
         } else {
-          btn.disabled = false;
+          btn.disabled    = false;
           btn.textContent = '+ Add';
           alert(`✗ ${data.error}`);
         }
       } catch (e) {
-        btn.disabled = false;
+        btn.disabled    = false;
         btn.textContent = '+ Add';
       }
     }
@@ -1586,7 +1728,7 @@
     async function saveLbWeek(p, btn, card) {
       const name = prompt('Save this week as:', p.title);
       if (!name?.trim()) return;
-      btn.disabled = true;
+      btn.disabled    = true;
       btn.textContent = 'Saving…';
       try {
         const res  = await fetch(`/sync/lb-playlists/${p.lb_mbid}/snapshot`, {
@@ -1597,25 +1739,16 @@
         if (data.ok) {
           btn.textContent = '🔒 Saved';
           btn.style.color = '#27ae60';
-          btn.title = `Saved as "${name.trim()}" (${data.count} tracks)`;
+          btn.title       = `Saved as "${name.trim()}" (${data.count} tracks)`;
         } else {
-          btn.disabled = false;
+          btn.disabled    = false;
           btn.textContent = 'Save';
           alert(`✗ ${data.error}`);
         }
       } catch (e) {
-        btn.disabled = false;
+        btn.disabled    = false;
         btn.textContent = 'Save';
       }
-    }
-
-    function timeAgoLb(unix) {
-      if (!unix) return null;
-      const diff = Math.floor(Date.now() / 1000) - unix;
-      if (diff < 60)    return `${diff}s ago`;
-      if (diff < 3600)  return `${Math.floor(diff / 60)}m ago`;
-      if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-      return `${Math.floor(diff / 86400)}d ago`;
     }
 
     document.getElementById('lbBackBtn').addEventListener('click', () => showListView());
@@ -1634,23 +1767,23 @@
             renderLbPlaylists(data.playlists);
           }
           status.textContent = data.playlists.length ? `${data.playlists.length} playlists` : '';
-          status.className = 'history-source-status status-ok';
+          status.className   = 'history-source-status status-ok';
         } else {
           status.textContent = `✗ ${data.error}`;
-          status.className = 'history-source-status status-err';
+          status.className   = 'history-source-status status-err';
         }
       } catch (e) {
         status.textContent = '✗ Request failed';
-        status.className = 'history-source-status status-err';
+        status.className   = 'history-source-status status-err';
       }
     }
 
-    // ── Sort + select event listeners ────────────────────────────────────────
+    // ── Sort + select ──────────────────────────────────────────────────────
     document.getElementById('plListHeader').addEventListener('click', e => {
       const col = e.target.closest('.pl-col-hdr');
       if (!col) return;
       const field = col.dataset.sort;
-      sortDir = sortField === field ? (sortDir === 'asc' ? 'desc' : 'asc') : 'asc';
+      sortDir   = sortField === field ? (sortDir === 'asc' ? 'desc' : 'asc') : 'asc';
       sortField = field;
       localStorage.setItem('navilist_pl_sort', sortField);
       localStorage.setItem('navilist_pl_sort_dir', sortDir);
