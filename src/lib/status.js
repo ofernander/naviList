@@ -50,9 +50,10 @@ router.get('/api/counts', (req, res) => {
   const missingPending = db.prepare("SELECT COUNT(*) as c FROM missing_artists WHERE status = 'pending'").get().c;
   const missingSent    = db.prepare("SELECT COUNT(*) as c FROM missing_artists WHERE status = 'sent'").get().c;
   const missingFound   = db.prepare("SELECT COUNT(*) as c FROM missing_artists WHERE status = 'found'").get().c;
-  const lbPlRow    = db.prepare("SELECT value FROM settings WHERE key = 'lb_playlist_count'").get();
-  const lbPlaylists = lbPlRow ? parseInt(lbPlRow.value) : 0;
-  res.json({ ok: true, loved, disliked, topArtists, topTracks, artistTagsLastfm, similarArtists, missingPending, missingSent, missingFound, lbPlaylists });
+  const lbPlRow     = db.prepare("SELECT value FROM settings WHERE key = 'lb_playlist_count'").get();
+  const lbPlaylists  = lbPlRow ? parseInt(lbPlRow.value) : 0;
+  const lfmPlaylists = db.prepare('SELECT COUNT(*) as c FROM lfm_playlists').get().c;
+  res.json({ ok: true, loved, disliked, topArtists, topTracks, artistTagsLastfm, similarArtists, missingPending, missingSent, missingFound, lbPlaylists, lfmPlaylists });
 });
 
 router.get('/', (req, res) => {

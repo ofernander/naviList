@@ -219,12 +219,25 @@
     <div class="lb-cards" id="plLbList"></div>
   </main>
 
+  <!-- ── Last.fm playlists view ───────────────────────────────────────────── -->
+  <main id="viewLfm" style="display:none">
+    <button class="pl-detail-back" id="lfmBackBtn">← All playlists</button>
+    <div class="pl-page-header">
+      <div>
+        <h1>Last.fm Playlists</h1>
+        <p class="pl-page-sub">Review your Last.fm playlists and choose which to add to Navidrome</p>
+      </div>
+      <span id="plLfmStatus" class="history-source-status"></span>
+    </div>
+    <div class="lb-cards" id="plLfmList"></div>
+  </main>
+
   <!-- ── New playlist modal ─────────────────────────────────────────────── -->
   <div class="modal-overlay" id="newPlaylistModal" style="display:none">
     <div class="modal">
       <h3>New playlist</h3>
       <p class="modal-sub">Choose how you want to build it</p>
-      <div class="pl-type-grid" style="grid-template-columns:1fr 1fr 1fr 1fr">
+      <div class="pl-type-grid" style="grid-template-columns:1fr 1fr 1fr 1fr 1fr">
         <div class="pl-type-option selected" data-type="navilist" id="typeSmart">
           <div class="pl-type-title">naviList</div>
           <div class="pl-type-desc">Define rules — naviList generates and updates tracks automatically</div>
@@ -236,6 +249,10 @@
         <div class="pl-type-option" data-type="listenbrainz" id="typeLb">
           <div class="pl-type-title">ListenBrainz</div>
           <div class="pl-type-desc">Import and sync playlists from your ListenBrainz account</div>
+        </div>
+        <div class="pl-type-option" data-type="lastfm" id="typeLfm">
+          <div class="pl-type-title">Last.fm</div>
+          <div class="pl-type-desc">Import playlists from your Last.fm account into Navidrome</div>
         </div>
         <div class="pl-type-option" data-type="manual" id="typeManual">
           <div class="pl-type-title">Manual</div>
@@ -360,7 +377,7 @@
 
     // ── Views ──────────────────────────────────────────────────────────────
     function hideAllViews() {
-      ['viewList','viewDetail','viewRules','viewLb','viewRadio'].forEach(id => {
+      ['viewList','viewDetail','viewRules','viewLb','viewRadio','viewLfm'].forEach(id => {
         document.getElementById(id).style.display = 'none';
       });
     }
@@ -370,6 +387,12 @@
     function showRulesView()  { hideAllViews(); document.getElementById('viewRules').style.display  = ''; }
     function showRadioView()  { hideAllViews(); document.getElementById('viewRadio').style.display  = ''; }
     function showManualView() { window.location.href = '/library?mode=manual'; }
+
+    function showLfmView() {
+      hideAllViews();
+      document.getElementById('viewLfm').style.display = '';
+      loadLfmPlaylists();
+    }
 
     function showLbView() {
       hideAllViews();
@@ -1250,6 +1273,7 @@
         return;
       }
       if (selectedType === 'listenbrainz') { showLbView(); return; }
+      if (selectedType === 'lastfm')       { showLfmView(); return; }
       if (selectedType === 'manual')       { showManualView(); return; }
     });
 
@@ -1479,6 +1503,118 @@
       } catch (e) { status.textContent = '✗ Request failed'; status.className = 'history-source-status status-err'; }
     }
 
+    // ── Last.fm view ──────────────────────────────────────────────────────
+    let lfmPlaylistData = [];
+
+    function renderLfmPlaylists(playlists) {
+      lfmPlaylistData = playlists;
+      const container = document.getElementById('plLfmList');
+      if (!playlists.length) { container.innerHTML = '<div class="pl-empty">No playlists synced yet. Go to Services and run Sync All for Last.fm first.</div>'; return; }
+      container.innerHTML = '';
+      playlists.forEach(p => container.appendChild(buildLfmCard(p)));
+    }
+
+    function buildLfmCard(p) {
+      const isAdded  = !!p.navidrome_id;
+      const tracks   = p.tracks || [];
+      const matched  = tracks.filter(t => t.matched).length;
+      const statText = tracks.length ? `${matched} of ${tracks.length} in library` : 'No tracks synced';
+
+      const card = document.createElement('div');
+      card.className = `lb-card${isAdded ? ' is-enabled' : ''}`;
+      card.dataset.lfmId = p.lfm_id;
+
+      const body    = document.createElement('div'); body.className = 'lb-card-body';
+      const titleEl = document.createElement('div'); titleEl.className = 'lb-card-title'; titleEl.textContent = p.title;
+
+      const badge = document.createElement('span');
+      badge.className   = 'lb-pl-badge lb-pl-generated';
+      badge.textContent = '↻ Rotating';
+      badge.title       = 'Updates automatically on each sync';
+
+      const stat    = document.createElement('span'); stat.className = 'lb-card-stat'; stat.textContent = statText;
+      const actions = document.createElement('div'); actions.className = 'lb-card-actions';
+
+      const saveBtn = document.createElement('button');
+      saveBtn.className = 'btn btn-secondary btn-sm'; saveBtn.textContent = 'Save';
+      saveBtn.title = 'Save a permanent copy of this playlist';
+      saveBtn.addEventListener('click', e => { e.stopPropagation(); saveLfmSnapshot(p, saveBtn); });
+      actions.appendChild(saveBtn);
+
+      const addBtn = document.createElement('button');
+      addBtn.className = 'btn btn-secondary btn-sm'; addBtn.textContent = isAdded ? '✓ Added' : '+ Add';
+      if (isAdded) addBtn.style.color = '#27ae60';
+      addBtn.addEventListener('click', e => { e.stopPropagation(); importLfmPlaylist(p, addBtn, card); });
+      actions.appendChild(addBtn);
+
+      const chevron = document.createElement('span'); chevron.className = 'lb-card-chevron'; chevron.textContent = '›';
+      body.appendChild(titleEl); body.appendChild(badge); body.appendChild(stat); body.appendChild(actions); body.appendChild(chevron);
+      body.addEventListener('click', e => { if (!e.target.closest('.lb-card-actions')) toggleLfmCardTracks(card, tracks); });
+
+      const tracksPanel = document.createElement('div'); tracksPanel.className = 'lb-card-tracks'; tracksPanel.style.display = 'none';
+      card.appendChild(body); card.appendChild(tracksPanel);
+      return card;
+    }
+
+    function toggleLfmCardTracks(card, tracks) {
+      const panel  = card.querySelector('.lb-card-tracks');
+      const isOpen = panel.style.display !== 'none';
+      if (isOpen) { panel.style.display = 'none'; card.classList.remove('is-open'); return; }
+      card.classList.add('is-open'); panel.style.display = '';
+      if (!tracks.length) { panel.innerHTML = '<div class="lb-track-loading">No tracks cached. Run Sync All from Services.</div>'; return; }
+      const missingCount = tracks.filter(t => !t.matched).length;
+      let html = missingCount > 0 ? `<div class="lb-track-loading">${tracks.filter(t => t.matched).length} of ${tracks.length} tracks in your library</div>` : '';
+      html += tracks.map((t, i) => `
+        <div class="lb-card-track${t.matched ? '' : ' is-missing'}">
+          <span class="lb-track-num">${i + 1}</span>
+          <div class="lb-track-info"><div class="lb-track-title">${esc(t.title)}</div><div class="lb-track-artist">${esc(t.artist)}</div></div>
+          ${t.matched ? '<span></span>' : '<span class="lb-track-missing-pill">Not in library</span>'}
+        </div>`).join('');
+      panel.innerHTML = html;
+    }
+
+    async function importLfmPlaylist(p, btn, card) {
+      btn.disabled = true; btn.textContent = 'Adding…';
+      try {
+        const res  = await fetch(`/sync/lfm-playlists/${p.lfm_id}/import`, { method: 'POST' });
+        const data = await res.json();
+        if (data.ok) { btn.textContent = `✓ Added (${data.count} tracks)`; btn.style.color = '#27ae60'; card.classList.add('is-enabled'); }
+        else { btn.disabled = false; btn.textContent = '+ Add'; alert(`✗ ${data.error}`); }
+      } catch (e) { btn.disabled = false; btn.textContent = '+ Add'; }
+    }
+
+    async function saveLfmSnapshot(p, btn) {
+      const defaultName = p.title + ' — ' + new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+      const name = prompt('Save as:', defaultName);
+      if (!name?.trim()) return;
+      btn.disabled = true; btn.textContent = 'Saving…';
+      try {
+        const res  = await fetch(`/sync/lfm-playlists/${p.lfm_id}/snapshot`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: name.trim() })
+        });
+        const data = await res.json();
+        if (data.ok) { btn.textContent = '🔒 Saved'; btn.style.color = '#27ae60'; btn.title = `Saved as "${name.trim()}" (${data.count} tracks)`; }
+        else { btn.disabled = false; btn.textContent = 'Save'; alert(`✗ ${data.error}`); }
+      } catch (e) { btn.disabled = false; btn.textContent = 'Save'; }
+    }
+
+    document.getElementById('lfmBackBtn').addEventListener('click', () => showListView());
+
+    async function loadLfmPlaylists() {
+      const status = document.getElementById('plLfmStatus');
+      status.textContent = '';
+      try {
+        const res  = await fetch('/sync/lfm-playlists/cached');
+        const data = await res.json();
+        if (data.ok) {
+          renderLfmPlaylists(data.playlists);
+          status.textContent = data.playlists.length ? `${data.playlists.length} playlists` : '';
+          status.className   = 'history-source-status status-ok';
+        } else { status.textContent = `✗ ${data.error}`; status.className = 'history-source-status status-err'; }
+      } catch (e) { status.textContent = '✗ Request failed'; status.className = 'history-source-status status-err'; }
+    }
+
     // ── Sort + select ──────────────────────────────────────────────────────
     document.getElementById('plListHeader').addEventListener('click', e => {
       const col = e.target.closest('.pl-col-hdr');
@@ -1516,10 +1652,12 @@
     });
 
     // ── Init ───────────────────────────────────────────────────────────────
-    const openId = new URLSearchParams(window.location.search).get('id');
-    const openLb = new URLSearchParams(window.location.search).get('lb');
+    const openId  = new URLSearchParams(window.location.search).get('id');
+    const openLb  = new URLSearchParams(window.location.search).get('lb');
+    const openLfm = new URLSearchParams(window.location.search).get('lfm');
     loadPlaylists().then(() => {
-      if (openLb) { showLbView(); return; }
+      if (openLb)  { showLbView();  return; }
+      if (openLfm) { showLfmView(); return; }
       if (openId) { const match = allPlaylists.find(p => p.id === openId); if (match) openDetail(match); }
     });
   </script>

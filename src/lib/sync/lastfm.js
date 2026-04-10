@@ -9,7 +9,7 @@
 
 const lastfm = require('../../providers/lastfm');
 const logger = require('../../utils/logger');
-const { sleep, buildMatchCacheLocal, matchLocal, writeMissingArtists } = require('./helpers');
+const { sleep, buildMatchCacheLocal, matchLocal, writeMissingArtists, buildLfmTitle } = require('./helpers');
 
 const LFM_PERIODS = ['7day', '1month', '3month', '6month', '12month', 'overall'];
 
@@ -230,10 +230,103 @@ async function syncSimilarArtistsLastfm(db, settings) {
   return { ok: true, fetched, failed, total: todo.length };
 }
 
+// ── Last.fm playlists ─────────────────────────────────────────────────────────
+
+async function syncLfmPlaylists(db, settings) {
+  const { lastfm_api_key: apiKey, lastfm_username: username } = settings;
+  if (!apiKey || !username) return { ok: false, error: 'Last.fm credentials required' };
+
+  const CHART_PLAYLISTS = [
+    { lfm_id: 'weekly',      fetch: () => lastfm.getWeeklyTrackChart(apiKey, username) },
+    { lfm_id: 'top_7day',    fetch: () => lastfm.getTopTracks(apiKey, username, '7day',    100) },
+    { lfm_id: 'top_1month',  fetch: () => lastfm.getTopTracks(apiKey, username, '1month',  100) },
+    { lfm_id: 'top_3month',  fetch: () => lastfm.getTopTracks(apiKey, username, '3month',  100) },
+    { lfm_id: 'top_6month',  fetch: () => lastfm.getTopTracks(apiKey, username, '6month',  100) },
+    { lfm_id: 'top_12month', fetch: () => lastfm.getTopTracks(apiKey, username, '12month', 100) },
+    { lfm_id: 'top_overall', fetch: () => lastfm.getTopTracks(apiKey, username, 'overall', 100) },
+  ];
+
+  const cache        = buildMatchCacheLocal(db);
+  const upsertPl     = db.prepare(`
+    INSERT INTO lfm_playlists (lfm_id, title)
+    VALUES (@lfm_id, @title)
+    ON CONFLICT(lfm_id) DO UPDATE SET title = excluded.title
+  `);
+  const deleteTracks = db.prepare('DELETE FROM lfm_playlist_tracks WHERE lfm_id = ?');
+  const insertTrack  = db.prepare(`
+    INSERT INTO lfm_playlist_tracks (lfm_id, position, artist, title, matched)
+    VALUES (@lfm_id, @position, @artist, @title, @matched)
+  `);
+
+  // Also update enabled playlists in Navidrome
+  const nav           = require('../../providers/navidrome');
+  const enabledRows   = db.prepare('SELECT * FROM lfm_playlists WHERE navidrome_id IS NOT NULL').all();
+  const updateNavId   = db.prepare('UPDATE lfm_playlists SET navidrome_id = ?, last_imported_at = ? WHERE lfm_id = ?');
+
+  let total = 0;
+  for (const pl of CHART_PLAYLISTS) {
+    const { lfm_id } = pl;
+    const title = buildLfmTitle(lfm_id);
+    upsertPl.run({ lfm_id, title });
+
+    try {
+      const data = await pl.fetch();
+      // Normalise — weekly chart and top tracks have different shapes
+      const raw  = data?.weeklytrackchart?.track || data?.toptracks?.track || [];
+      const arr  = Array.isArray(raw) ? raw : (raw ? [raw] : []);
+      const rows = arr.map((t, i) => {
+        const artist = t.artist?.['#text'] || t.artist?.name || (typeof t.artist === 'string' ? t.artist : '') || '';
+        const name   = t.name || '';
+        return { lfm_id, position: i, artist, title: name, matched: matchLocal(artist, name, cache) ? 1 : 0 };
+      });
+
+      db.transaction(() => {
+        deleteTracks.run(lfm_id);
+        for (const r of rows) insertTrack.run(r);
+      })();
+
+      const matched = rows.filter(r => r.matched).length;
+      logger.info('sync', `lfm-playlists: "${title}" — ${rows.length} tracks, ${matched} matched`);
+
+      // If this playlist is already imported into ND, refresh it in place
+      const existing = enabledRows.find(r => r.lfm_id === lfm_id);
+      if (existing?.navidrome_id) {
+        const trackIds = rows.filter(r => r.matched).map(r => matchLocal(r.artist, r.title, cache)).filter(Boolean);
+        if (trackIds.length) {
+          const comment       = `navilist:lastfm ${JSON.stringify({ source: 'lastfm', lfm_id })}`;
+          const replaceResult = await nav.replacePlaylistTracks(db, existing.navidrome_id, trackIds);
+          if (replaceResult.ok) {
+            await nav.updatePlaylist(db, existing.navidrome_id, { comment });
+            updateNavId.run(existing.navidrome_id, Math.floor(Date.now() / 1000), lfm_id);
+            logger.info('sync', `lfm-playlists: refreshed "${title}" in ND (${trackIds.length} tracks)`);
+          } else {
+            // ND playlist stale — clear and recreate
+            db.prepare('UPDATE lfm_playlists SET navidrome_id = NULL WHERE lfm_id = ?').run(lfm_id);
+            const result = await nav.createPlaylist(db, title, trackIds);
+            if (result.ok) {
+              await nav.updatePlaylist(db, result.playlist.id, { comment });
+              updateNavId.run(result.playlist.id, Math.floor(Date.now() / 1000), lfm_id);
+            }
+          }
+        }
+      }
+
+      total++;
+    } catch (e) {
+      logger.warn('sync', `lfm-playlists: fetch failed for "${title}": ${e.message}`);
+    }
+    await sleep(500);
+  }
+
+  logger.info('sync', `lfm-playlists: ${total} playlists cached`);
+  return { ok: true, total };
+}
+
 module.exports = {
   syncLovedLastfm,
   syncTopArtistsLastfm,
   syncTopTracksLastfm,
   syncArtistTagsLastfm,
-  syncSimilarArtistsLastfm
+  syncSimilarArtistsLastfm,
+  syncLfmPlaylists,
 };

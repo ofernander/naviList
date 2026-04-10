@@ -175,6 +175,27 @@ module.exports = function (db) {
 
     CREATE INDEX IF NOT EXISTS idx_lb_playlist_tracks_mbid ON lb_playlist_tracks(lb_mbid);
 
+    -- Last.fm playlist cache
+    CREATE TABLE IF NOT EXISTS lfm_playlists (
+      id               INTEGER PRIMARY KEY AUTOINCREMENT,
+      lfm_id           TEXT NOT NULL UNIQUE,
+      title            TEXT NOT NULL,
+      navidrome_id     TEXT,
+      last_imported_at INTEGER
+    );
+
+    -- Last.fm playlist tracks cache
+    CREATE TABLE IF NOT EXISTS lfm_playlist_tracks (
+      lfm_id    TEXT NOT NULL,
+      position  INTEGER NOT NULL,
+      artist    TEXT NOT NULL,
+      title     TEXT NOT NULL,
+      matched   INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (lfm_id, position)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_lfm_playlist_tracks_id ON lfm_playlist_tracks(lfm_id);
+
     -- naviList playlist registry — local copies of all known playlists
     CREATE TABLE IF NOT EXISTS navilist_playlists (
       navidrome_id    TEXT PRIMARY KEY,

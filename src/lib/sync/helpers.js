@@ -84,10 +84,31 @@ function buildNaviTitle(lbTitle, slotKey) {
     const dateMatch = lbTitle.match(/(\d{4}-\d{2}-\d{2})/);
     const slotLabel = slotKey.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
     return dateMatch
-      ? `ListenBrainz - ${slotLabel} - ${dateMatch[1]}`
-      : `ListenBrainz - ${slotLabel}`;
+      ? `ListenBrainz \u2014 ${slotLabel} \u2014 ${dateMatch[1]}`
+      : `ListenBrainz \u2014 ${slotLabel}`;
   }
-  return `ListenBrainz - ${lbTitle}`;
+  return `ListenBrainz \u2014 ${lbTitle}`;
+}
+
+// LFM chart playlist titles in Navidrome
+const LFM_CHART_TITLES = {
+  weekly:      'Last.FM \u2014 Last.week',
+  top_7day:    'Last.FM \u2014 Top Tracks (7 Days)',
+  top_1month:  'Last.FM \u2014 Top Tracks (1 Month)',
+  top_3month:  'Last.FM \u2014 Top Tracks (3 Months)',
+  top_6month:  'Last.FM \u2014 Top Tracks (6 Months)',
+  top_12month: 'Last.FM \u2014 Top Tracks (12 Months)',
+  top_overall: 'Last.FM \u2014 Top Tracks (All Time)',
+};
+
+function buildLfmTitle(lfmId) {
+  return LFM_CHART_TITLES[lfmId] || `Last.FM \u2014 ${lfmId}`;
+}
+
+function buildLfmSnapshotTitle(lfmId) {
+  const base = LFM_CHART_TITLES[lfmId] || `Last.FM \u2014 ${lfmId}`;
+  const date = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+  return `${base} \u2014 ${date}`;
 }
 
 const detachedRunning = new Set();
@@ -126,6 +147,8 @@ module.exports = {
   resolveArtistWithAliases,
   detectSlotKey,
   buildNaviTitle,
+  buildLfmTitle,
+  buildLfmSnapshotTitle,
   runDetached,
   writeMissingArtists
 };

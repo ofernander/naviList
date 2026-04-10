@@ -340,6 +340,7 @@ select:focus {
 
 .pl-badge-smart  { background: #e6f3ff; color: #0066cc; }
 .pl-badge-manual { background: #f0f0f0; color: #777; }
+.pl-badge-lastfm { background: #ffe0e0; color: #c0392b; }
 
 /* ── Empty state ─────────────────────────────────────────────────────────── */
 .pl-empty {

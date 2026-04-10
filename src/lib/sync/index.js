@@ -20,6 +20,8 @@ const {
   resolveArtistWithAliases,
   detectSlotKey,
   buildNaviTitle,
+  buildLfmTitle,
+  buildLfmSnapshotTitle,
   runDetached,
   writeMissingArtists
 } = require('./helpers');
@@ -453,6 +455,101 @@ router.post('/playlists/listenbrainz', (req, res) => {
   res.json({ ok: true, message: 'ListenBrainz playlist import started' });
 });
 
+// ── Routes — Last.fm playlists ───────────────────────────────────────────────────
+
+router.get('/lfm-playlists/cached', (req, res) => {
+  const playlists = db.prepare('SELECT * FROM lfm_playlists ORDER BY title').all();
+  const tracks    = db.prepare('SELECT * FROM lfm_playlist_tracks ORDER BY position').all();
+  const trackMap  = new Map();
+  for (const t of tracks) {
+    if (!trackMap.has(t.lfm_id)) trackMap.set(t.lfm_id, []);
+    trackMap.get(t.lfm_id).push({ artist: t.artist, title: t.title, matched: !!t.matched });
+  }
+  res.json({ ok: true, playlists: playlists.map(p => ({ ...p, tracks: trackMap.get(p.lfm_id) || [] })) });
+});
+
+router.post('/lfm-playlists/:lfm_id/import', async (req, res) => {
+  const { lfm_id } = req.params;
+  const existing   = db.prepare('SELECT * FROM lfm_playlists WHERE lfm_id = ?').get(lfm_id);
+  if (!existing) return res.json({ ok: false, error: 'Playlist not found — run Sync All from Services first' });
+
+  const cache      = buildMatchCacheLocal(db);
+  const cachedRows = db.prepare('SELECT * FROM lfm_playlist_tracks WHERE lfm_id = ? AND matched = 1 ORDER BY position').all(lfm_id);
+  if (!cachedRows.length) return res.json({ ok: false, error: 'No matched tracks — run Sync All from Services first' });
+
+  const trackIds = cachedRows.map(r => matchLocal(r.artist, r.title, cache)).filter(Boolean);
+  if (!trackIds.length) return res.json({ ok: false, error: 'No tracks matched in your library' });
+
+  try {
+    const comment   = `navilist:lastfm ${JSON.stringify({ source: 'lastfm', lfm_id })}`;
+    const now       = Math.floor(Date.now() / 1000);
+    const ndTitle   = buildLfmTitle(lfm_id);
+    const update    = db.prepare('UPDATE lfm_playlists SET navidrome_id = ?, last_imported_at = ? WHERE lfm_id = ?');
+
+    if (existing.navidrome_id) {
+      const replaceResult = await navidrome.replacePlaylistTracks(db, existing.navidrome_id, trackIds);
+      if (replaceResult.ok) {
+        await navidrome.updatePlaylist(db, existing.navidrome_id, { comment });
+        update.run(existing.navidrome_id, now, lfm_id);
+      } else {
+        db.prepare('UPDATE lfm_playlists SET navidrome_id = NULL WHERE lfm_id = ?').run(lfm_id);
+        const result = await navidrome.createPlaylist(db, ndTitle, trackIds);
+        if (!result.ok) return res.json({ ok: false, error: result.error });
+        await navidrome.updatePlaylist(db, result.playlist.id, { comment });
+        update.run(result.playlist.id, now, lfm_id);
+      }
+    } else {
+      const result = await navidrome.createPlaylist(db, ndTitle, trackIds);
+      if (!result.ok) return res.json({ ok: false, error: result.error });
+      await navidrome.updatePlaylist(db, result.playlist.id, { comment });
+      update.run(result.playlist.id, now, lfm_id);
+    }
+
+    logger.info('sync', `lfm-import: "${ndTitle}" (${trackIds.length} tracks)`);
+    res.json({ ok: true, count: trackIds.length });
+  } catch (e) {
+    logger.error('sync', `lfm-import failed for ${lfm_id}: ${e.message}`);
+    res.json({ ok: false, error: e.message });
+  }
+});
+
+router.post('/lfm-playlists/:lfm_id/snapshot', async (req, res) => {
+  const { lfm_id } = req.params;
+  const { name }   = req.body;
+  if (!name?.trim()) return res.json({ ok: false, error: 'name required' });
+
+  const cache      = buildMatchCacheLocal(db);
+  const cachedRows = db.prepare('SELECT * FROM lfm_playlist_tracks WHERE lfm_id = ? AND matched = 1 ORDER BY position').all(lfm_id);
+  if (!cachedRows.length) return res.json({ ok: false, error: 'No matched tracks cached for this playlist' });
+
+  const trackIds = cachedRows.map(r => matchLocal(r.artist, r.title, cache)).filter(Boolean);
+  if (!trackIds.length) return res.json({ ok: false, error: 'Could not resolve any track IDs' });
+
+  try {
+    const result = await navidrome.createPlaylist(db, name.trim(), trackIds);
+    if (!result.ok) return res.json({ ok: false, error: result.error });
+    await navidrome.updatePlaylist(db, result.playlist.id, {
+      comment: `navilist:lastfm-snapshot ${JSON.stringify({ source: 'lastfm', lfm_id })}`
+    });
+    logger.info('sync', `lfm-snapshot: created "${name.trim()}" with ${trackIds.length} tracks from ${lfm_id}`);
+    res.json({ ok: true, playlist_id: result.playlist.id, count: trackIds.length });
+  } catch (e) {
+    logger.error('sync', `lfm-snapshot failed for ${lfm_id}: ${e.message}`);
+    res.json({ ok: false, error: e.message });
+  }
+});
+
+router.post('/lfm-playlists', async (req, res) => {
+  const s = getSettings();
+  try {
+    await lfmSync.syncLfmPlaylists(db, s);
+    res.json({ ok: true, message: 'Last.fm playlists synced' });
+  } catch (e) {
+    logger.error('sync', `lfm-playlists POST failed: ${e.message}`);
+    res.json({ ok: false, error: e.message });
+  }
+});
+
 // ── Routes — Status ───────────────────────────────────────────────────────────
 
 router.get('/status', (req, res) => {
@@ -482,6 +579,7 @@ function startAutoRefresh() {
       runDetached('top-artists/lastfm',     () => lfmSync.syncTopArtistsLastfm(db, s));
       runDetached('top-tracks/lastfm',      () => lfmSync.syncTopTracksLastfm(db, s));
       runDetached('artist-tags/lastfm',     () => lfmSync.syncArtistTagsLastfm(db, s));
+      runDetached('playlists/lastfm',       () => lfmSync.syncLfmPlaylists(db, s));
     }
 
     if (s.listenbrainz_token && s.listenbrainz_username) {
@@ -512,6 +610,8 @@ module.exports = {
   resolveArtistWithAliases,
   detectSlotKey,
   buildNaviTitle,
+  buildLfmTitle,
+  buildLfmSnapshotTitle,
   writeMissingArtists,
   processMissingArtists
 };

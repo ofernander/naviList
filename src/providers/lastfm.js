@@ -235,6 +235,16 @@ async function getUserTopTags(apiKey, username, limit = 50) {
   return request(apiKey, 'user.getTopTags', { user: username, limit });
 }
 
+// ── Playlist methods ─────────────────────────────────────────────────────────
+
+/**
+ * Get current week's track chart for a user.
+ * Response: data.weeklytrackchart.track[] — each has .name, .artist["#text"], .playcount
+ */
+async function getWeeklyTrackChart(apiKey, username) {
+  return request(apiKey, 'user.getWeeklyTrackChart', { user: username, limit: 100 });
+}
+
 // ── Ingestion adapter ─────────────────────────────────────────────────────────
 
 /**
@@ -322,6 +332,8 @@ module.exports = {
   getRecentTracks,
   getLovedTracks,
   getUserTopTags,
+  // Playlists
+  getWeeklyTrackChart,
   // Ingestion adapter
   fetchListens
 };

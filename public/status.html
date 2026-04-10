@@ -62,6 +62,7 @@
             <div class="svc-job"><span class="svc-job-label">Top tracks</span><span id="lastfmTopTracksMeta">—</span></div>
             <div class="svc-job"><span class="svc-job-label">Artist tags</span><span id="lastfmArtistTagsMeta">—</span></div>
             <div class="svc-job"><span class="svc-job-label">Similar artists</span><span id="lastfmSimilarMeta">—</span></div>
+            <div class="svc-job"><span class="svc-job-label">Playlists</span><span id="lastfmPlaylistsMeta">—</span></div>
           </div>
         </div>
 
@@ -276,6 +277,9 @@
         document.getElementById('lastfmArtistTagsMeta').textContent  = `${tagsLfm} artists tagged`;
         const similarArtists = countsRes.similarArtists || 0;
         document.getElementById('lastfmSimilarMeta').textContent = `${similarArtists} artists cached`;
+        const lfmPl = countsRes.lfmPlaylists || 0;
+        document.getElementById('lastfmPlaylistsMeta').innerHTML =
+          `${lfmPl} playlist${lfmPl !== 1 ? 's' : ''} · <a href="/playlists?lfm=1" class="status-ok" style="font-size:0.8rem;">Manage →</a>`;
         document.getElementById('lbLovedMeta').textContent           = `${loved} loved · ${disliked} disliked`;
         document.getElementById('lbTopArtistsMeta').textContent      = `${topArtists} artist-period rows`;
         document.getElementById('lbTopTracksMeta').textContent       = `${topTracks} track-period rows`;
@@ -317,13 +321,27 @@
       }
     }
 
-    document.getElementById('syncLastfmAllBtn').addEventListener('click', () =>
-      runAllJobs(
-        ['history/lastfm?force=true', 'loved/lastfm', 'top-artists/lastfm', 'top-tracks/lastfm', 'artist-tags/lastfm'],
-        document.getElementById('syncLastfmAllBtn'),
-        document.getElementById('lastfmAllStatus')
-      )
-    );
+    document.getElementById('syncLastfmAllBtn').addEventListener('click', async () => {
+      const btn      = document.getElementById('syncLastfmAllBtn');
+      const statusEl = document.getElementById('lastfmAllStatus');
+      btn.disabled = true; btn.textContent = 'Syncing...';
+      statusEl.textContent = ''; statusEl.className = 'history-source-status status-pending';
+      try {
+        for (const route of ['history/lastfm?force=true', 'loved/lastfm', 'top-artists/lastfm', 'top-tracks/lastfm', 'artist-tags/lastfm']) {
+          await fetch(`/sync/${route}`, { method: 'POST' });
+          await new Promise(r => setTimeout(r, 300));
+        }
+        document.getElementById('lastfmPlaylistsMeta').textContent = 'Building cache…';
+        statusEl.textContent = 'Syncing playlists…';
+        await fetch('/sync/lfm-playlists', { method: 'POST' });
+        statusEl.textContent = '✓ Done'; statusEl.className = 'history-source-status status-ok';
+        setTimeout(() => loadAllStatus(), 500);
+      } catch (e) {
+        statusEl.textContent = '✗ Request failed'; statusEl.className = 'history-source-status status-err';
+      } finally {
+        btn.disabled = false; btn.textContent = 'Sync All';
+      }
+    });
 
     document.getElementById('syncLbAllBtn').addEventListener('click', async () => {
       const btn      = document.getElementById('syncLbAllBtn');
