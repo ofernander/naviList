@@ -240,28 +240,58 @@
       <div class="pl-type-grid" style="grid-template-columns:1fr 1fr 1fr 1fr 1fr">
         <div class="pl-type-option selected" data-type="navilist" id="typeSmart">
           <div class="pl-type-title">naviList</div>
-          <div class="pl-type-desc">Define rules — naviList generates and updates tracks automatically</div>
+          <div class="pl-type-desc">Rules-based, auto-updating playlists</div>
         </div>
         <div class="pl-type-option" data-type="radio" id="typeRadio">
           <div class="pl-type-title">Radio</div>
-          <div class="pl-type-desc">Seed with artists — naviList finds similar music from your library</div>
+          <div class="pl-type-desc">Similar artists from your library</div>
         </div>
         <div class="pl-type-option" data-type="listenbrainz" id="typeLb">
           <div class="pl-type-title">ListenBrainz</div>
-          <div class="pl-type-desc">Import and sync playlists from your ListenBrainz account</div>
+          <div class="pl-type-desc">Import your ListenBrainz playlists</div>
         </div>
         <div class="pl-type-option" data-type="lastfm" id="typeLfm">
           <div class="pl-type-title">Last.fm</div>
-          <div class="pl-type-desc">Import playlists from your Last.fm account into Navidrome</div>
+          <div class="pl-type-desc">Import your Last.fm charts</div>
         </div>
         <div class="pl-type-option" data-type="manual" id="typeManual">
           <div class="pl-type-title">Manual</div>
-          <div class="pl-type-desc">Hand-pick tracks from your library yourself</div>
+          <div class="pl-type-desc">Hand-pick tracks yourself</div>
         </div>
       </div>
       <div class="modal-actions">
         <button class="btn btn-secondary" id="cancelNewPlaylist">Cancel</button>
         <button class="btn" id="createPlaylistBtn">Continue →</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Export modal ────────────────────────────────────────────────────── -->
+  <div class="modal-overlay" id="exportModal" style="display:none">
+    <div class="modal" style="max-width:480px">
+      <h3>Export playlist</h3>
+      <p class="modal-sub">Choose a format to download</p>
+      <div class="pl-type-grid" style="grid-template-columns:1fr 1fr 1fr 1fr">
+        <div class="pl-type-option selected" data-format="m3u" style="height:88px">
+          <div class="pl-type-title">M3U</div>
+          <div class="pl-type-desc">Media player compatible</div>
+        </div>
+        <div class="pl-type-option" data-format="xspf" style="height:88px">
+          <div class="pl-type-title">XSPF</div>
+          <div class="pl-type-desc">XML playlist standard</div>
+        </div>
+        <div class="pl-type-option" data-format="csv" style="height:88px">
+          <div class="pl-type-title">CSV</div>
+          <div class="pl-type-desc">Spreadsheet / tabular</div>
+        </div>
+        <div class="pl-type-option" data-format="json" style="height:88px">
+          <div class="pl-type-title">JSON</div>
+          <div class="pl-type-desc">Structured data backup</div>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" id="exportCancelBtn">Cancel</button>
+        <button class="btn" id="exportDownloadBtn">↓ Download</button>
       </div>
     </div>
   </div>
@@ -313,11 +343,13 @@
 
     function isSmartPlaylist(p)  { return p.comment?.startsWith('navilist:navilist') || false; }
     function isLbPlaylist(p)     { return p.comment?.startsWith('navilist:lb')       || false; }
+    function isLfmPlaylist(p)    { return p.comment?.startsWith('navilist:lastfm')   || false; }
     function isRadioPlaylist(p)  { return p.comment?.startsWith('navilist:radio')    || false; }
     function isInactive(p)       { return p.active === 0; }
 
     function getPlaylistType(p) {
       if (isSmartPlaylist(p))  return 'navilist';
+      if (isLfmPlaylist(p))    return 'lastfm';
       if (isLbPlaylist(p))     return 'listenbrainz';
       if (isRadioPlaylist(p))  return 'radio';
       return 'manual';
@@ -348,6 +380,30 @@
         const json = p.comment?.replace(/^navilist:navilist\s*/, '');
         return json ? JSON.parse(json) : null;
       } catch (e) { return null; }
+    }
+
+    function getSubscriptionInfo(p) {
+      const c = p.comment || '';
+      if (/^navilist:lb \{/.test(c)) {
+        try {
+          const data = JSON.parse(c.replace('navilist:lb ', ''));
+          return { type: 'lb', id: data.mbid };
+        } catch (e) {}
+      }
+      if (/^navilist:lastfm \{/.test(c)) {
+        try { return { type: 'lfm', id: JSON.parse(c.replace('navilist:lastfm ', '')).lfm_id }; } catch (e) {}
+      }
+      return null;
+    }
+
+    async function unsubscribeFromMenu(p, sub) {
+      const route = sub.type === 'lb'
+        ? `/sync/lb-playlists/${sub.id}/unsubscribe`
+        : `/sync/lfm-playlists/${sub.id}/unsubscribe`;
+      const res  = await fetch(route, { method: 'POST' });
+      const data = await res.json();
+      if (data.ok) { await loadPlaylists(); }
+      else { alert(`\u2717 Unsubscribe failed: ${data.error}`); }
     }
 
     function updateSortArrows() {
@@ -388,16 +444,16 @@
     function showRadioView()  { hideAllViews(); document.getElementById('viewRadio').style.display  = ''; }
     function showManualView() { window.location.href = '/library?mode=manual'; }
 
-    function showLfmView() {
+    async function showLfmView() {
       hideAllViews();
       document.getElementById('viewLfm').style.display = '';
-      loadLfmPlaylists();
+      await loadLfmPlaylists();
     }
 
-    function showLbView() {
+    async function showLbView() {
       hideAllViews();
       document.getElementById('viewLb').style.display = '';
-      loadLbPlaylists();
+      await loadLbPlaylists();
     }
 
     // ── Load playlists ─────────────────────────────────────────────────────
@@ -470,6 +526,10 @@
       updateSelectionBar();
     }
 
+    function getListDisplayName(p) {
+      return p.lb_title || p.name;
+    }
+
     function renderCard(p) {
       const type = getPlaylistType(p);
       const dur  = fmtDur(p.duration);
@@ -478,7 +538,7 @@
       card.className = 'pl-card';
       card.innerHTML = `
         <div class="pl-card-top">
-          <div class="pl-card-name">${esc(p.name)}</div>
+          <div class="pl-card-name">${esc(getListDisplayName(p))}</div>
           <button class="pl-card-menu" title="Options">⋯</button>
         </div>
         <div class="pl-card-desc">${esc(p.comment?.replace(/^navilist:(navilist|lb|radio)\s*(\{.*\})?/, '').trim() || '')}</div>
@@ -504,7 +564,7 @@
       header.innerHTML = `
         <input type="checkbox" class="pl-row-chk" data-id="${esc(p.id)}" ${selected.has(p.id) ? 'checked' : ''} style="accent-color:#0084ff; cursor:pointer; flex-shrink:0;" />
         <span class="pl-badge ${badgeClass(type)}">${badgeLabel(type)}</span>
-        <span class="pl-list-row-name">${esc(p.name)}</span>
+        <span class="pl-list-row-name">${esc(getListDisplayName(p))}</span>
         <span class="pl-list-row-meta">${p.songCount || '—'}</span>
         <span class="pl-list-row-meta">${dur || '—'}</span>
         <span class="pl-list-row-added">${fmtDate(p.created_at)}</span>
@@ -667,8 +727,15 @@
       menu.id = 'cardMenu';
       menu.style.cssText = `position:fixed; background:#fff; border:0.5px solid #ddddd8; border-radius:6px; padding:0.4rem 0; min-width:140px; z-index:200; box-shadow:0 4px 16px rgba(0,0,0,0.1); top:${e.clientY}px; left:${e.clientX}px;`;
 
-      const items = [
+      const sub = getSubscriptionInfo(p);
+
+      const items = sub ? [
+        { label: 'Open',        action: () => openDetail(p) },
+        { label: 'Export',      action: () => openExportModal(p) },
+        { label: 'Unsubscribe', action: () => unsubscribeFromMenu(p, sub), danger: true },
+      ] : [
         { label: 'Open',   action: () => openDetail(p) },
+        { label: 'Export', action: () => openExportModal(p) },
         { label: 'Rename', action: () => renamePlaylist(p) },
         ...(isInactive(p)
           ? [{ label: '▶ Activate', action: () => activatePlaylist(p, { disabled: false, textContent: '' }) }]
@@ -1402,6 +1469,16 @@
       playlists.forEach(p => container.appendChild(buildLbCard(p)));
     }
 
+    const LB_SOURCE_PATCH_LABELS = {
+      'weekly-exploration': 'Weekly Exploration',
+      'weekly-jams':        'Weekly Jams',
+      'daily-jams':         'Daily Jams',
+    };
+
+    function getLbDisplayTitle(p) {
+      return `ListenBrainz — ${p.title}`;
+    }
+
     function buildLbCard(p) {
       const isGenerated = p.playlist_type === 'generated';
       const isEnabled   = !!p.enabled;
@@ -1409,33 +1486,36 @@
       const tracks      = p.tracks || [];
       const matched     = tracks.filter(t => t.matched).length;
       const statText    = tracks.length ? `${matched} of ${tracks.length} in library` : 'No tracks synced';
+      const isRotating   = !!p.source_patch;
+      const displayTitle = getLbDisplayTitle(p);
 
       const card = document.createElement('div');
       card.className = `lb-card${isEnabled ? ' is-enabled' : ''}${isSaved ? ' is-saved' : ''}`;
       card.dataset.mbid = p.lb_mbid;
 
       const body = document.createElement('div'); body.className = 'lb-card-body';
-      const titleEl = document.createElement('div'); titleEl.className = 'lb-card-title'; titleEl.textContent = p.title;
+      const titleEl = document.createElement('div'); titleEl.className = 'lb-card-title'; titleEl.textContent = displayTitle;
       const badge = document.createElement('span');
-      const isRotating = !!p.slot_key;
       badge.className = `lb-pl-badge ${isGenerated ? 'lb-pl-generated' : 'lb-pl-user'}`;
       badge.textContent = isRotating ? '↻ Rotating' : (isGenerated ? 'Generated' : 'Mine');
       if (isRotating) badge.title = 'Updates automatically each week';
       const stat = document.createElement('span'); stat.className = 'lb-card-stat'; stat.textContent = statText;
       const actions = document.createElement('div'); actions.className = 'lb-card-actions';
       const addBtn = document.createElement('button');
-      addBtn.className = 'btn btn-secondary btn-sm'; addBtn.textContent = isEnabled ? '✓ Enabled' : '+ Add';
+      addBtn.className = 'btn btn-secondary btn-sm'; addBtn.textContent = isEnabled ? '✓ Subscribed' : 'Subscribe';
       if (isEnabled) addBtn.style.color = '#27ae60';
-      addBtn.addEventListener('click', e => { e.stopPropagation(); importLbPlaylist(p, addBtn, card); });
-      if (isGenerated) {
-        const saveBtn = document.createElement('button');
-        saveBtn.className = 'btn btn-secondary btn-sm'; saveBtn.textContent = isSaved ? '🔒' : 'Save';
-        saveBtn.title = isSaved ? 'Saved this week' : 'Save this week';
-        if (isSaved) saveBtn.style.color = '#27ae60';
-        saveBtn.addEventListener('click', e => { e.stopPropagation(); saveLbWeek(p, saveBtn, card); });
-        actions.appendChild(saveBtn);
-      }
-      actions.appendChild(addBtn);
+      addBtn.addEventListener('click', e => {
+        e.stopPropagation();
+        if (addBtn.textContent === '✓ Subscribed') unsubscribeLbPlaylist(p, addBtn, card);
+        else importLbPlaylist(p, addBtn, card);
+      });
+      const saveBtn = document.createElement('button');
+      saveBtn.className = 'btn btn-secondary btn-sm'; saveBtn.textContent = isSaved ? '🔒' : 'Save';
+      saveBtn.title = isSaved ? 'Saved' : 'Save a copy';
+      if (isSaved) saveBtn.style.color = '#27ae60';
+      saveBtn.addEventListener('click', e => { e.stopPropagation(); saveLbWeek(p, saveBtn, card); });
+      actions.appendChild(saveBtn);
+      if (isGenerated) actions.appendChild(addBtn);
       const chevron = document.createElement('span'); chevron.className = 'lb-card-chevron'; chevron.textContent = '›';
       body.appendChild(titleEl); body.appendChild(badge); body.appendChild(stat); body.appendChild(actions); body.appendChild(chevron);
       body.addEventListener('click', e => { if (!e.target.closest('.lb-card-actions')) toggleLbCardTracks(card, tracks); });
@@ -1462,17 +1542,28 @@
     }
 
     async function importLbPlaylist(p, btn, card) {
-      btn.disabled = true; btn.textContent = 'Adding…';
+      btn.disabled = true; btn.textContent = 'Subscribing…';
       try {
         const res  = await fetch(`/sync/lb-playlists/${p.lb_mbid}/import`, { method: 'POST' });
         const data = await res.json();
-        if (data.ok) { btn.textContent = `✓ Added (${data.count} tracks)`; btn.style.color = '#27ae60'; card.classList.add('is-enabled'); }
-        else { btn.disabled = false; btn.textContent = '+ Add'; alert(`✗ ${data.error}`); }
-      } catch (e) { btn.disabled = false; btn.textContent = '+ Add'; }
+        if (data.ok) { btn.textContent = '✓ Subscribed'; btn.style.color = '#27ae60'; card.classList.add('is-enabled'); }
+        else { btn.disabled = false; btn.textContent = 'Subscribe'; alert(`✗ ${data.error}`); }
+      } catch (e) { btn.disabled = false; btn.textContent = 'Subscribe'; }
+    }
+
+    async function unsubscribeLbPlaylist(p, btn, card) {
+      btn.disabled = true; btn.textContent = 'Unsubscribing…';
+      try {
+        const res  = await fetch(`/sync/lb-playlists/${p.lb_mbid}/unsubscribe`, { method: 'POST' });
+        const data = await res.json();
+        if (data.ok) { btn.textContent = 'Subscribe'; btn.style.color = ''; btn.disabled = false; card.classList.remove('is-enabled'); }
+        else { btn.disabled = false; btn.textContent = '✓ Subscribed'; alert(`✗ ${data.error}`); }
+      } catch (e) { btn.disabled = false; btn.textContent = '✓ Subscribed'; }
     }
 
     async function saveLbWeek(p, btn, card) {
-      const name = prompt('Save this week as:', p.title);
+      const defaultName = `ListenBrainz — ${p.title}`;
+      const name = prompt('Save as:', defaultName);
       if (!name?.trim()) return;
       btn.disabled = true; btn.textContent = 'Saving…';
       try {
@@ -1542,9 +1633,13 @@
       actions.appendChild(saveBtn);
 
       const addBtn = document.createElement('button');
-      addBtn.className = 'btn btn-secondary btn-sm'; addBtn.textContent = isAdded ? '✓ Added' : '+ Add';
+      addBtn.className = 'btn btn-secondary btn-sm'; addBtn.textContent = isAdded ? '✓ Subscribed' : 'Subscribe';
       if (isAdded) addBtn.style.color = '#27ae60';
-      addBtn.addEventListener('click', e => { e.stopPropagation(); importLfmPlaylist(p, addBtn, card); });
+      addBtn.addEventListener('click', e => {
+        e.stopPropagation();
+        if (addBtn.textContent === '✓ Subscribed') unsubscribeLfmPlaylist(p, addBtn, card);
+        else importLfmPlaylist(p, addBtn, card);
+      });
       actions.appendChild(addBtn);
 
       const chevron = document.createElement('span'); chevron.className = 'lb-card-chevron'; chevron.textContent = '›';
@@ -1574,13 +1669,23 @@
     }
 
     async function importLfmPlaylist(p, btn, card) {
-      btn.disabled = true; btn.textContent = 'Adding…';
+      btn.disabled = true; btn.textContent = 'Subscribing…';
       try {
         const res  = await fetch(`/sync/lfm-playlists/${p.lfm_id}/import`, { method: 'POST' });
         const data = await res.json();
-        if (data.ok) { btn.textContent = `✓ Added (${data.count} tracks)`; btn.style.color = '#27ae60'; card.classList.add('is-enabled'); }
-        else { btn.disabled = false; btn.textContent = '+ Add'; alert(`✗ ${data.error}`); }
-      } catch (e) { btn.disabled = false; btn.textContent = '+ Add'; }
+        if (data.ok) { btn.textContent = '✓ Subscribed'; btn.style.color = '#27ae60'; card.classList.add('is-enabled'); }
+        else { btn.disabled = false; btn.textContent = 'Subscribe'; alert(`✗ ${data.error}`); }
+      } catch (e) { btn.disabled = false; btn.textContent = 'Subscribe'; }
+    }
+
+    async function unsubscribeLfmPlaylist(p, btn, card) {
+      btn.disabled = true; btn.textContent = 'Unsubscribing…';
+      try {
+        const res  = await fetch(`/sync/lfm-playlists/${p.lfm_id}/unsubscribe`, { method: 'POST' });
+        const data = await res.json();
+        if (data.ok) { btn.textContent = 'Subscribe'; btn.style.color = ''; btn.disabled = false; card.classList.remove('is-enabled'); }
+        else { btn.disabled = false; btn.textContent = '✓ Subscribed'; alert(`✗ ${data.error}`); }
+      } catch (e) { btn.disabled = false; btn.textContent = '✓ Subscribed'; }
     }
 
     async function saveLfmSnapshot(p, btn) {
@@ -1614,6 +1719,41 @@
         } else { status.textContent = `✗ ${data.error}`; status.className = 'history-source-status status-err'; }
       } catch (e) { status.textContent = '✗ Request failed'; status.className = 'history-source-status status-err'; }
     }
+
+    // ── Export modal ──────────────────────────────────────────────────────
+    let exportPlaylistId  = null;
+    let exportFormat      = 'm3u';
+
+    function openExportModal(p) {
+      exportPlaylistId = p.id;
+      exportFormat     = 'm3u';
+      // Reset selection
+      document.querySelectorAll('#exportModal .pl-type-option').forEach(o => {
+        o.classList.toggle('selected', o.dataset.format === 'm3u');
+      });
+      document.getElementById('exportModal').style.display = 'flex';
+    }
+
+    document.querySelectorAll('#exportModal .pl-type-option').forEach(opt => {
+      opt.addEventListener('click', () => {
+        document.querySelectorAll('#exportModal .pl-type-option').forEach(o => o.classList.remove('selected'));
+        opt.classList.add('selected');
+        exportFormat = opt.dataset.format;
+      });
+    });
+
+    document.getElementById('exportCancelBtn').addEventListener('click', () => {
+      document.getElementById('exportModal').style.display = 'none';
+    });
+    document.getElementById('exportModal').addEventListener('click', e => {
+      if (e.target === e.currentTarget) e.currentTarget.style.display = 'none';
+    });
+
+    document.getElementById('exportDownloadBtn').addEventListener('click', () => {
+      if (!exportPlaylistId) return;
+      window.location.href = `/playlists/${exportPlaylistId}/export?format=${exportFormat}`;
+      document.getElementById('exportModal').style.display = 'none';
+    });
 
     // ── Sort + select ──────────────────────────────────────────────────────
     document.getElementById('plListHeader').addEventListener('click', e => {

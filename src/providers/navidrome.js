@@ -297,6 +297,71 @@ async function syncPlaylistsToLocal(db) {
   return { ok: true, synced };
 }
 
+// ── Native API auth ──────────────────────────────────────────────────────────
+
+let nativeTokenCache = { token: null, expiresAt: 0 };
+
+async function getNativeToken(db) {
+  const now = Date.now();
+  if (nativeTokenCache.token && now < nativeTokenCache.expiresAt) {
+    return nativeTokenCache.token;
+  }
+
+  const settings = getSettings(db);
+  const base     = settings.navidrome_url?.replace(/\/$/, '');
+  if (!base || !settings.navidrome_user || !settings.navidrome_password) return null;
+
+  try {
+    const res  = await fetch(`${base}/auth/login`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ username: settings.navidrome_user, password: settings.navidrome_password })
+    });
+    if (!res.ok) throw new Error(`auth/login returned ${res.status}`);
+    const json = await res.json();
+    if (!json.token) throw new Error('no token in response');
+    // Cache for 23 hours (ND tokens last 24h by default)
+    nativeTokenCache = { token: json.token, expiresAt: now + 23 * 60 * 60 * 1000 };
+    logger.debug('navidrome', 'native API token refreshed');
+    return json.token;
+  } catch (e) {
+    logger.warn('navidrome', `getNativeToken failed: ${e.message}`);
+    return null;
+  }
+}
+
+async function getNdTrackCount(db) {
+  try {
+    const token = await getNativeToken(db);
+    if (!token) return null;
+    const settings = getSettings(db);
+    const base     = settings.navidrome_url?.replace(/\/$/, '');
+    const res      = await fetch(`${base}/api/song?_start=0&_end=0`, {
+      headers: { 'X-ND-Authorization': `Bearer ${token}` }
+    });
+    if (!res.ok) {
+      // Token may have expired — clear cache and retry once
+      if (res.status === 401) {
+        nativeTokenCache = { token: null, expiresAt: 0 };
+        const fresh = await getNativeToken(db);
+        if (!fresh) return null;
+        const retry = await fetch(`${base}/api/song?_start=0&_end=0`, {
+          headers: { 'X-ND-Authorization': `Bearer ${fresh}` }
+        });
+        if (!retry.ok) return null;
+        const count = retry.headers.get('x-total-count');
+        return count !== null ? parseInt(count, 10) : null;
+      }
+      return null;
+    }
+    const count = res.headers.get('x-total-count');
+    return count !== null ? parseInt(count, 10) : null;
+  } catch (e) {
+    logger.warn('navidrome', `getNdTrackCount failed: ${e.message}`);
+    return null;
+  }
+}
+
 // ── Library sync ──────────────────────────────────────────────────────────────
 
 async function syncFolderPage(db, folderId, offset, upsertMany, seenIds, syncedAt) {
@@ -488,5 +553,6 @@ module.exports = {
   request, ping, getMusicFolders,
   getPlaylists, getPlaylist, createPlaylist,
   updatePlaylist, addTracksToPlaylist, removeTracksFromPlaylist, deletePlaylist,
-  replacePlaylistTracks, syncLibrary, syncPlaylistsToLocal
+  replacePlaylistTracks, syncLibrary, syncPlaylistsToLocal,
+  getNativeToken, getNdTrackCount
 };

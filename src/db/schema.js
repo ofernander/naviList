@@ -147,23 +147,19 @@ module.exports = function (db) {
 
     CREATE INDEX IF NOT EXISTS idx_missing_artists_status ON missing_artists(status);
 
-    -- LB playlist subscriptions
-    CREATE TABLE IF NOT EXISTS lb_playlists (
-      id               INTEGER PRIMARY KEY AUTOINCREMENT,
-      lb_mbid          TEXT NOT NULL UNIQUE,
-      title            TEXT NOT NULL,
-      playlist_type    TEXT NOT NULL DEFAULT 'generated',
-      enabled          INTEGER NOT NULL DEFAULT 0,
-      protected        INTEGER NOT NULL DEFAULT 0,
-      navidrome_id     TEXT,
-      slot_key         TEXT,
-      last_imported_at INTEGER
+    -- LB playlist cache — what LB currently has, refreshed on each sync
+    -- source_patch is the algorithm type from LB API (weekly-exploration etc.), null for user playlists
+    CREATE TABLE IF NOT EXISTS lb_playlist_cache (
+      lb_mbid       TEXT NOT NULL UNIQUE,
+      title         TEXT NOT NULL,
+      playlist_type TEXT NOT NULL DEFAULT 'generated',
+      source_patch  TEXT,
+      fetched_at    INTEGER NOT NULL
     );
 
-    CREATE INDEX IF NOT EXISTS idx_lb_playlists_slot_key ON lb_playlists(slot_key);
-    CREATE INDEX IF NOT EXISTS idx_lb_playlists_enabled ON lb_playlists(enabled);
+    CREATE INDEX IF NOT EXISTS idx_lb_playlist_cache_source_patch ON lb_playlist_cache(source_patch);
 
-    -- LB playlist tracks cache — populated during Sync All, read by UI
+    -- LB playlist tracks cache — keyed on lb_mbid, populated on sync/view-open
     CREATE TABLE IF NOT EXISTS lb_playlist_tracks (
       lb_mbid   TEXT NOT NULL,
       position  INTEGER NOT NULL,
@@ -175,11 +171,22 @@ module.exports = function (db) {
 
     CREATE INDEX IF NOT EXISTS idx_lb_playlist_tracks_mbid ON lb_playlist_tracks(lb_mbid);
 
+    -- LB subscriptions — one row per active subscription, keyed by lb_mbid
+    -- source_patch stored for auto-rotation when MBID expires
+    CREATE TABLE IF NOT EXISTS lb_subscriptions (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      lb_mbid      TEXT NOT NULL UNIQUE,
+      source_patch TEXT,
+      navidrome_id TEXT,
+      created_at   INTEGER NOT NULL
+    );
+
     -- Last.fm playlist cache
     CREATE TABLE IF NOT EXISTS lfm_playlists (
       id               INTEGER PRIMARY KEY AUTOINCREMENT,
       lfm_id           TEXT NOT NULL UNIQUE,
       title            TEXT NOT NULL,
+      enabled          INTEGER NOT NULL DEFAULT 0,
       navidrome_id     TEXT,
       last_imported_at INTEGER
     );

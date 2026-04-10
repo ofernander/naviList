@@ -54,9 +54,26 @@ router.get('/api/list', async (req, res) => {
   const createdAt = {};
   db.prepare('SELECT navidrome_id, created_at FROM navilist_playlists').all()
     .forEach(r => { createdAt[r.navidrome_id] = r.created_at; });
+  // Attach lb_slot_key + lb_title to LB subscribed playlists so the frontend
+  // can compute friendly display names.
+  const lbCache  = db.prepare('SELECT lb_mbid, source_patch, title FROM lb_playlist_cache').all();
+  const lbByMbid = new Map(lbCache.map(r => [r.lb_mbid, r]));
+
+  function enrichPlaylist(p) {
+    const c = p.comment || '';
+    if (/^navilist:lb \{/.test(c)) {
+      try {
+        const data = JSON.parse(c.replace('navilist:lb ', ''));
+        const row  = lbByMbid.get(data.mbid);
+        if (row) return { ...p, lb_source_patch: row.source_patch, lb_title: row.title };
+      } catch (e) {}
+    }
+    return p;
+  }
+
   const playlists = [
-    ...active.map(p => ({ ...p, active: 1, created_at: createdAt[p.id] || null })),
-    ...inactive
+    ...active.map(p => enrichPlaylist({ ...p, active: 1, created_at: createdAt[p.id] || null })),
+    ...inactive.map(enrichPlaylist)
   ];
   res.json({ ok: true, playlists });
 });
@@ -408,8 +425,7 @@ router.post('/:id/deactivate', async (req, res) => {
   if (!result.ok) return res.json(result);
   const now = Math.floor(Date.now() / 1000);
   db.prepare('UPDATE navilist_playlists SET active = 0, deactivated_at = ? WHERE navidrome_id = ?').run(now, id);
-  // Clear LB playlists reference
-  db.prepare('UPDATE lb_playlists SET navidrome_id = NULL, enabled = 0 WHERE navidrome_id = ?').run(id);
+  db.prepare('UPDATE lb_subscriptions SET navidrome_id = NULL WHERE navidrome_id = ?').run(id);
   logger.info('playlists', `deactivated "${id}" — removed from ND, kept locally`);
   res.json({ ok: true });
 });
@@ -443,8 +459,7 @@ router.post('/:id/activate', async (req, res) => {
       INSERT INTO navilist_playlists (navidrome_id, name, comment, active, track_count, duration, created_at)
       VALUES (?, ?, ?, 1, ?, ?, ?)
     `).run(newId, local.name, local.comment, local.track_count, local.duration, local.created_at);
-    // Update LB playlists if it pointed to old id
-    db.prepare('UPDATE lb_playlists SET navidrome_id = ? WHERE navidrome_id = ?').run(newId, id);
+    db.prepare('UPDATE lb_subscriptions SET navidrome_id = ? WHERE navidrome_id = ?').run(newId, id);
   })();
 
   logger.info('playlists', `activated "${local.name}" → new ND id ${newId} (${trackIds.length} tracks)`);
@@ -465,11 +480,84 @@ router.post('/:id/delete', async (req, res) => {
   db.transaction(() => {
     db.prepare('DELETE FROM navilist_playlist_tracks WHERE playlist_id = ?').run(id);
     db.prepare('DELETE FROM navilist_playlists WHERE navidrome_id = ?').run(id);
-    db.prepare('UPDATE lb_playlists SET navidrome_id = NULL, enabled = 0 WHERE navidrome_id = ?').run(id);
+    db.prepare('UPDATE lb_subscriptions SET navidrome_id = NULL WHERE navidrome_id = ?').run(id);
   })();
 
   logger.info('playlists', `deleted ${id} (was ${local?.active ? 'active' : 'inactive'})`);
   res.json({ ok: true });
 });
+
+// GET /playlists/:id/export?format=m3u|xspf|csv|json
+router.get('/:id/export', async (req, res) => {
+  const { id } = req.params;
+  const format  = (req.query.format || 'm3u').toLowerCase();
+
+  let name, tracks;
+  const local = db.prepare('SELECT * FROM navilist_playlists WHERE navidrome_id = ? AND active = 0').get(id);
+  if (local) {
+    name   = local.name;
+    tracks = db.prepare(`
+      SELECT t.id, t.title, t.artist, t.duration
+      FROM navilist_playlist_tracks npt
+      JOIN tracks t ON t.id = npt.track_id
+      WHERE npt.playlist_id = ? ORDER BY npt.position ASC
+    `).all(id);
+  } else {
+    const playlist = await navidrome.getPlaylist(db, id);
+    if (!playlist) return res.status(404).json({ ok: false, error: 'Not found' });
+    name   = playlist.name;
+    tracks = Array.isArray(playlist.entry) ? playlist.entry : (playlist.entry ? [playlist.entry] : []);
+  }
+
+  const safeName = (name || 'playlist').replace(/[^\w\s\-\u2013\u2014]/g, '').trim().replace(/\s+/g, '_');
+
+  if (format === 'm3u') {
+    const lines = ['#EXTM3U'];
+    tracks.forEach(t => {
+      lines.push(`#EXTINF:${t.duration || -1},${t.artist || ''} - ${t.title || ''}`);
+      lines.push(`${t.artist || ''} - ${t.title || ''}`);
+    });
+    res.setHeader('Content-Type', 'audio/x-mpegurl');
+    res.setHeader('Content-Disposition', `attachment; filename="${safeName}.m3u"`);
+    return res.send(lines.join('\n'));
+  }
+
+  if (format === 'xspf') {
+    const xmlTracks = tracks.map(t =>
+      `    <track>\n      <title>${escXml(t.title)}</title>\n      <creator>${escXml(t.artist)}</creator>\n      <duration>${(t.duration || 0) * 1000}</duration>\n    </track>`
+    ).join('\n');
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<playlist version="1" xmlns="http://xspf.org/ns/0/">\n  <title>${escXml(name)}</title>\n  <trackList>\n${xmlTracks}\n  </trackList>\n</playlist>`;
+    res.setHeader('Content-Type', 'application/xspf+xml');
+    res.setHeader('Content-Disposition', `attachment; filename="${safeName}.xspf"`);
+    return res.send(xml);
+  }
+
+  if (format === 'csv') {
+    const rows = ['position,title,artist,duration'];
+    tracks.forEach((t, i) => rows.push(`${i + 1},"${csvEsc(t.title)}","${csvEsc(t.artist)}",${t.duration || 0}`));
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename="${safeName}.csv"`);
+    return res.send(rows.join('\n'));
+  }
+
+  if (format === 'json') {
+    const payload = {
+      name,
+      exported_at: new Date().toISOString(),
+      tracks: tracks.map((t, i) => ({ position: i + 1, title: t.title, artist: t.artist, duration: t.duration || 0 }))
+    };
+    res.setHeader('Content-Disposition', `attachment; filename="${safeName}.json"`);
+    return res.json(payload);
+  }
+
+  res.status(400).json({ ok: false, error: `Unknown format: ${format}` });
+});
+
+function escXml(str) {
+  return (str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+function csvEsc(str) {
+  return (str || '').replace(/"/g, '""');
+}
 
 module.exports = router;

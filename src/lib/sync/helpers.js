@@ -72,22 +72,8 @@ async function resolveArtistWithAliases(artistName, artistMbid, cache) {
   return artistName;
 }
 
-function detectSlotKey(title) {
-  if (/weekly exploration/i.test(title)) { logger.debug('sync', `slot key detected: weekly_exploration for "${title}"`); return 'weekly_exploration'; }
-  if (/daily jams/i.test(title))         { logger.debug('sync', `slot key detected: daily_jams for "${title}"`);         return 'daily_jams'; }
-  if (/weekly jams/i.test(title))        { logger.debug('sync', `slot key detected: weekly_jams for "${title}"`);        return 'weekly_jams'; }
-  return null;
-}
-
-function buildNaviTitle(lbTitle, slotKey) {
-  if (slotKey) {
-    const dateMatch = lbTitle.match(/(\d{4}-\d{2}-\d{2})/);
-    const slotLabel = slotKey.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-    return dateMatch
-      ? `ListenBrainz \u2014 ${slotLabel} \u2014 ${dateMatch[1]}`
-      : `ListenBrainz \u2014 ${slotLabel}`;
-  }
-  return `ListenBrainz \u2014 ${lbTitle}`;
+function buildNaviTitle(lbTitle) {
+  return `ListenBrainz — ${lbTitle}`;
 }
 
 // LFM chart playlist titles in Navidrome
@@ -145,7 +131,6 @@ module.exports = {
   buildMatchCacheLocal,
   matchLocal,
   resolveArtistWithAliases,
-  detectSlotKey,
   buildNaviTitle,
   buildLfmTitle,
   buildLfmSnapshotTitle,

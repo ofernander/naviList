@@ -18,7 +18,6 @@ const {
   buildMatchCacheLocal,
   matchLocal,
   resolveArtistWithAliases,
-  detectSlotKey,
   buildNaviTitle,
   buildLfmTitle,
   buildLfmSnapshotTitle,
@@ -171,22 +170,7 @@ const mbSync  = require('./musicbrainz');
 
 router.post('/library', async (req, res) => {
   if (syncState.running) return res.json({ ok: false, error: 'Sync already in progress' });
-
-  syncState.running     = true;
-  syncState.lastStarted = Math.floor(Date.now() / 1000);
-  syncState.lastResult  = null;
-  logger.info('sync', 'library sync triggered via UI');
-
-  navidrome.syncLibrary(db).then(result => {
-    syncState.running    = false;
-    syncState.lastResult = result;
-    logger.info('sync', `sync finished — ok: ${result.ok}`);
-  }).catch(e => {
-    syncState.running    = false;
-    syncState.lastResult = { ok: false, error: e.message };
-    logger.error('sync', `sync threw: ${e.message}`);
-  });
-
+  runLibrarySync('manual');
   res.json({ ok: true, message: 'Sync started' });
 });
 
@@ -309,14 +293,19 @@ router.get('/lb-playlists/:mbid/tracks', (req, res) => {
 });
 
 router.get('/lb-playlists/cached', (req, res) => {
-  const playlists = db.prepare('SELECT * FROM lb_playlists ORDER BY playlist_type, title').all();
+  const playlists = db.prepare('SELECT * FROM lb_playlist_cache ORDER BY playlist_type, title').all();
   const tracks    = db.prepare('SELECT * FROM lb_playlist_tracks ORDER BY position').all();
+  const subs      = db.prepare('SELECT * FROM lb_subscriptions').all();
+  const subByMbid = new Map(subs.map(s => [s.lb_mbid, s]));
   const trackMap  = new Map();
   for (const t of tracks) {
     if (!trackMap.has(t.lb_mbid)) trackMap.set(t.lb_mbid, []);
     trackMap.get(t.lb_mbid).push({ artist: t.artist, title: t.title, matched: !!t.matched });
   }
-  res.json({ ok: true, playlists: playlists.map(p => ({ ...p, tracks: trackMap.get(p.lb_mbid) || [] })) });
+  res.json({ ok: true, playlists: playlists.map(p => {
+    const sub = subByMbid.get(p.lb_mbid);
+    return { ...p, enabled: sub ? 1 : 0, navidrome_id: sub?.navidrome_id || null, tracks: trackMap.get(p.lb_mbid) || [] };
+  })});
 });
 
 router.get('/lb-playlists', async (req, res) => {
@@ -339,32 +328,6 @@ router.post('/lb-playlists', async (req, res) => {
     logger.error('sync', `lb-playlists POST failed: ${e.message}`);
     res.json({ ok: false, error: e.message });
   }
-});
-
-router.post('/lb-playlists/toggle', (req, res) => {
-  const { lb_mbid, title, playlist_type, field, value } = req.body;
-  if (!lb_mbid || !['enabled', 'protected'].includes(field))
-    return res.json({ ok: false, error: 'lb_mbid and field (enabled|protected) required' });
-
-  const existing      = db.prepare('SELECT * FROM lb_playlists WHERE lb_mbid = ?').get(lb_mbid) || {};
-  const resolvedTitle = title || existing.title || '';
-  db.prepare(`
-    INSERT INTO lb_playlists (lb_mbid, title, playlist_type, enabled, protected, slot_key)
-    VALUES (@lb_mbid, @title, @playlist_type, @enabled, @protected, @slot_key)
-    ON CONFLICT(lb_mbid) DO UPDATE SET
-      title         = excluded.title,
-      playlist_type = excluded.playlist_type,
-      enabled       = excluded.enabled,
-      protected     = excluded.protected
-  `).run({
-    lb_mbid,
-    title:         resolvedTitle,
-    playlist_type: playlist_type || existing.playlist_type || 'generated',
-    slot_key:      existing.slot_key ?? detectSlotKey(resolvedTitle),
-    enabled:   field === 'enabled'   ? (value ? 1 : 0) : (existing.enabled   ?? 0),
-    protected: field === 'protected' ? (value ? 1 : 0) : (existing.protected ?? 0)
-  });
-  res.json({ ok: true });
 });
 
 router.post('/lb-playlists/:mbid/snapshot', async (req, res) => {
@@ -395,54 +358,56 @@ router.post('/lb-playlists/:mbid/snapshot', async (req, res) => {
 
 router.post('/lb-playlists/:mbid/import', async (req, res) => {
   const { mbid } = req.params;
-  const existing = db.prepare('SELECT * FROM lb_playlists WHERE lb_mbid = ?').get(mbid);
-  if (!existing) return res.json({ ok: false, error: 'Playlist not found — run Sync All from Services first' });
+  const cached = db.prepare('SELECT * FROM lb_playlist_cache WHERE lb_mbid = ?').get(mbid);
+  if (!cached) return res.json({ ok: false, error: 'Playlist not found — run Sync All from Services first' });
 
-  db.prepare('UPDATE lb_playlists SET enabled = 1 WHERE lb_mbid = ?').run(mbid);
-  const row        = db.prepare('SELECT * FROM lb_playlists WHERE lb_mbid = ?').get(mbid);
-  const cache      = buildMatchCacheLocal(db);
-  const cachedRows = db.prepare('SELECT * FROM lb_playlist_tracks WHERE lb_mbid = ? AND matched = 1 ORDER BY position').all(mbid);
-  if (!cachedRows.length) return res.json({ ok: false, error: 'No matched tracks cached — run Sync All from Services first' });
+  const alreadySub = db.prepare('SELECT id FROM lb_subscriptions WHERE lb_mbid = ?').get(mbid);
+  if (alreadySub) return res.json({ ok: false, error: 'Already subscribed' });
 
-  const trackIds = cachedRows.map(r => matchLocal(r.artist, r.title, cache)).filter(Boolean);
-  if (!trackIds.length) return res.json({ ok: false, error: 'No tracks matched in your library' });
+  const now = Math.floor(Date.now() / 1000);
+  db.prepare('INSERT INTO lb_subscriptions (lb_mbid, source_patch, navidrome_id, created_at) VALUES (?, ?, NULL, ?)')
+    .run(mbid, cached.source_patch || null, now);
 
   try {
-    const comment      = `navilist:lb ${JSON.stringify({ source: 'listenbrainz', mbid })}`;
-    const now          = Math.floor(Date.now() / 1000);
-    const displayTitle = buildNaviTitle(row.title, row.slot_key);
-    const updateRow    = db.prepare('UPDATE lb_playlists SET navidrome_id = ?, last_imported_at = ? WHERE lb_mbid = ?');
-
-    let navId = row.navidrome_id;
-    if (!navId && row.slot_key) {
-      const slotRow = db.prepare('SELECT navidrome_id FROM lb_playlists WHERE slot_key = ? AND navidrome_id IS NOT NULL LIMIT 1').get(row.slot_key);
-      navId = slotRow?.navidrome_id || null;
-    }
-
-    if (navId) {
-      const replaceResult = await navidrome.replacePlaylistTracks(db, navId, trackIds);
-      if (replaceResult.ok) {
-        await navidrome.updatePlaylist(db, navId, { comment });
-        updateRow.run(navId, now, mbid);
-      } else {
-        logger.warn('sync', `lb-import: navId ${navId} stale, clearing and creating fresh`);
-        db.prepare('UPDATE lb_playlists SET navidrome_id = NULL WHERE navidrome_id = ?').run(navId);
-        const result = await navidrome.createPlaylist(db, displayTitle, trackIds);
-        if (!result.ok) return res.json({ ok: false, error: result.error });
-        await navidrome.updatePlaylist(db, result.playlist.id, { comment });
-        updateRow.run(result.playlist.id, now, mbid);
-      }
-    } else {
-      const result = await navidrome.createPlaylist(db, displayTitle, trackIds);
-      if (!result.ok) return res.json({ ok: false, error: result.error });
-      await navidrome.updatePlaylist(db, result.playlist.id, { comment });
-      updateRow.run(result.playlist.id, now, mbid);
-    }
-
-    logger.info('sync', `lb-import: "${row.title}" → "${displayTitle}" (${trackIds.length} tracks)`);
-    res.json({ ok: true, count: trackIds.length });
+    await lbSync.syncLbPlaylists(db, getSettings());
+    const sub = db.prepare('SELECT * FROM lb_subscriptions WHERE lb_mbid = ?').get(mbid);
+    res.json({ ok: true, navidrome_id: sub?.navidrome_id || null });
   } catch (e) {
     logger.error('sync', `lb-import failed for ${mbid}: ${e.message}`);
+    res.json({ ok: false, error: e.message });
+  }
+});
+
+router.post('/lb-playlists/:mbid/unsubscribe', async (req, res) => {
+  const { mbid } = req.params;
+  const sub = db.prepare('SELECT * FROM lb_subscriptions WHERE lb_mbid = ?').get(mbid);
+  if (!sub) return res.json({ ok: false, error: 'Not subscribed' });
+
+  try {
+    if (sub.navidrome_id) await navidrome.deletePlaylist(db, sub.navidrome_id);
+    db.prepare('DELETE FROM lb_subscriptions WHERE id = ?').run(sub.id);
+    logger.info('sync', `lb-unsubscribe: removed subscription for ${mbid}`);
+    res.json({ ok: true });
+  } catch (e) {
+    logger.error('sync', `lb-unsubscribe failed: ${e.message}`);
+    res.json({ ok: false, error: e.message });
+  }
+});
+
+router.post('/lfm-playlists/:lfm_id/unsubscribe', async (req, res) => {
+  const { lfm_id } = req.params;
+  const row = db.prepare('SELECT * FROM lfm_playlists WHERE lfm_id = ?').get(lfm_id);
+  if (!row) return res.json({ ok: false, error: 'Playlist not found' });
+
+  try {
+    if (row.navidrome_id) {
+      await navidrome.deletePlaylist(db, row.navidrome_id);
+    }
+    db.prepare('UPDATE lfm_playlists SET navidrome_id = NULL WHERE lfm_id = ?').run(lfm_id);
+    logger.info('sync', `lfm-unsubscribe: "${row.title}" removed from ND`);
+    res.json({ ok: true });
+  } catch (e) {
+    logger.error('sync', `lfm-unsubscribe failed for ${lfm_id}: ${e.message}`);
     res.json({ ok: false, error: e.message });
   }
 });
@@ -473,40 +438,11 @@ router.post('/lfm-playlists/:lfm_id/import', async (req, res) => {
   const existing   = db.prepare('SELECT * FROM lfm_playlists WHERE lfm_id = ?').get(lfm_id);
   if (!existing) return res.json({ ok: false, error: 'Playlist not found — run Sync All from Services first' });
 
-  const cache      = buildMatchCacheLocal(db);
-  const cachedRows = db.prepare('SELECT * FROM lfm_playlist_tracks WHERE lfm_id = ? AND matched = 1 ORDER BY position').all(lfm_id);
-  if (!cachedRows.length) return res.json({ ok: false, error: 'No matched tracks — run Sync All from Services first' });
-
-  const trackIds = cachedRows.map(r => matchLocal(r.artist, r.title, cache)).filter(Boolean);
-  if (!trackIds.length) return res.json({ ok: false, error: 'No tracks matched in your library' });
-
+  db.prepare('UPDATE lfm_playlists SET enabled = 1 WHERE lfm_id = ?').run(lfm_id);
   try {
-    const comment   = `navilist:lastfm ${JSON.stringify({ source: 'lastfm', lfm_id })}`;
-    const now       = Math.floor(Date.now() / 1000);
-    const ndTitle   = buildLfmTitle(lfm_id);
-    const update    = db.prepare('UPDATE lfm_playlists SET navidrome_id = ?, last_imported_at = ? WHERE lfm_id = ?');
-
-    if (existing.navidrome_id) {
-      const replaceResult = await navidrome.replacePlaylistTracks(db, existing.navidrome_id, trackIds);
-      if (replaceResult.ok) {
-        await navidrome.updatePlaylist(db, existing.navidrome_id, { comment });
-        update.run(existing.navidrome_id, now, lfm_id);
-      } else {
-        db.prepare('UPDATE lfm_playlists SET navidrome_id = NULL WHERE lfm_id = ?').run(lfm_id);
-        const result = await navidrome.createPlaylist(db, ndTitle, trackIds);
-        if (!result.ok) return res.json({ ok: false, error: result.error });
-        await navidrome.updatePlaylist(db, result.playlist.id, { comment });
-        update.run(result.playlist.id, now, lfm_id);
-      }
-    } else {
-      const result = await navidrome.createPlaylist(db, ndTitle, trackIds);
-      if (!result.ok) return res.json({ ok: false, error: result.error });
-      await navidrome.updatePlaylist(db, result.playlist.id, { comment });
-      update.run(result.playlist.id, now, lfm_id);
-    }
-
-    logger.info('sync', `lfm-import: "${ndTitle}" (${trackIds.length} tracks)`);
-    res.json({ ok: true, count: trackIds.length });
+    await lfmSync.syncLfmPlaylists(db, getSettings());
+    const row = db.prepare('SELECT * FROM lfm_playlists WHERE lfm_id = ?').get(lfm_id);
+    res.json({ ok: true, navidrome_id: row?.navidrome_id || null });
   } catch (e) {
     logger.error('sync', `lfm-import failed for ${lfm_id}: ${e.message}`);
     res.json({ ok: false, error: e.message });
@@ -567,9 +503,59 @@ router.get('/status', (req, res) => {
   });
 });
 
+// ── Library sync runner ────────────────────────────────────────────────────────
+
+function runLibrarySync(reason) {
+  if (syncState.running) {
+    logger.debug('sync', `library sync skipped — already running (triggered by: ${reason})`);
+    return;
+  }
+  syncState.running     = true;
+  syncState.lastStarted = Math.floor(Date.now() / 1000);
+  syncState.lastResult  = null;
+  logger.info('sync', `library sync started (triggered by: ${reason})`);
+  navidrome.syncLibrary(db)
+    .then(result => {
+      syncState.running    = false;
+      syncState.lastResult = result;
+      logger.info('sync', `library sync finished (${reason}) — ok: ${result.ok}`);
+    })
+    .catch(e => {
+      syncState.running    = false;
+      syncState.lastResult = { ok: false, error: e.message };
+      logger.error('sync', `library sync threw (${reason}): ${e.message}`);
+    });
+}
+
 // ── Auto-refresh ──────────────────────────────────────────────────────────────
 
 function startAutoRefresh() {
+  // ── 1. Startup: full library sync immediately ────────────────────────────────
+  runLibrarySync('startup');
+
+  // ── 2. Every 5 min: lightweight track count poll ───────────────────────────
+  setInterval(async () => {
+    if (syncState.running) return;
+    try {
+      const ndCount    = await navidrome.getNdTrackCount(db);
+      const localCount = db.prepare('SELECT COUNT(*) as c FROM tracks').get().c;
+      if (ndCount !== null && ndCount !== localCount) {
+        logger.info('sync', `nd-poll: count changed (local=${localCount}, nd=${ndCount}) — triggering sync`);
+        runLibrarySync('track-count-change');
+      } else {
+        logger.debug('sync', `nd-poll: no change (${localCount} tracks)`);
+      }
+    } catch (e) {
+      logger.warn('sync', `nd-poll failed: ${e.message}`);
+    }
+  }, 5 * 60 * 1000);
+
+  // ── 3. Every 6 hours: full library sync regardless ──────────────────────────
+  setInterval(() => {
+    runLibrarySync('6-hour-interval');
+  }, 6 * 60 * 60 * 1000);
+
+  // ── 4. Every 30 min: external service syncs ───────────────────────────────
   setInterval(() => {
     const s = getSettings();
 
@@ -593,7 +579,7 @@ function startAutoRefresh() {
     runDetached('process-missing-artists', () => processMissingArtists());
   }, 30 * 60 * 1000);
 
-  logger.info('sync', 'history auto-refresh scheduled every 30 minutes');
+  logger.info('sync', 'auto-refresh scheduled: library poll every 5m, full sync every 6h, services every 30m');
 }
 
 // ── Exports ───────────────────────────────────────────────────────────────────
@@ -603,12 +589,10 @@ module.exports = {
   getSyncState,
   getTagSyncState: () => tagSyncState,
   startAutoRefresh,
-  // Re-export helpers for any external consumers
   sleep,
   buildMatchCacheLocal,
   matchLocal,
   resolveArtistWithAliases,
-  detectSlotKey,
   buildNaviTitle,
   buildLfmTitle,
   buildLfmSnapshotTitle,

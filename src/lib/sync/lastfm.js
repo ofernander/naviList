@@ -247,6 +247,7 @@ async function syncLfmPlaylists(db, settings) {
   ];
 
   const cache        = buildMatchCacheLocal(db);
+  const nav          = require('../../providers/navidrome');
   const upsertPl     = db.prepare(`
     INSERT INTO lfm_playlists (lfm_id, title)
     VALUES (@lfm_id, @title)
@@ -257,11 +258,8 @@ async function syncLfmPlaylists(db, settings) {
     INSERT INTO lfm_playlist_tracks (lfm_id, position, artist, title, matched)
     VALUES (@lfm_id, @position, @artist, @title, @matched)
   `);
-
-  // Also update enabled playlists in Navidrome
-  const nav           = require('../../providers/navidrome');
-  const enabledRows   = db.prepare('SELECT * FROM lfm_playlists WHERE navidrome_id IS NOT NULL').all();
-  const updateNavId   = db.prepare('UPDATE lfm_playlists SET navidrome_id = ?, last_imported_at = ? WHERE lfm_id = ?');
+  const updateNd    = db.prepare('UPDATE lfm_playlists SET navidrome_id = ?, last_imported_at = ? WHERE lfm_id = ?');
+  const unsubscribe = db.prepare('UPDATE lfm_playlists SET enabled = 0, navidrome_id = NULL WHERE lfm_id = ?');
 
   let total = 0;
   for (const pl of CHART_PLAYLISTS) {
@@ -271,7 +269,6 @@ async function syncLfmPlaylists(db, settings) {
 
     try {
       const data = await pl.fetch();
-      // Normalise — weekly chart and top tracks have different shapes
       const raw  = data?.weeklytrackchart?.track || data?.toptracks?.track || [];
       const arr  = Array.isArray(raw) ? raw : (raw ? [raw] : []);
       const rows = arr.map((t, i) => {
@@ -288,24 +285,30 @@ async function syncLfmPlaylists(db, settings) {
       const matched = rows.filter(r => r.matched).length;
       logger.info('sync', `lfm-playlists: "${title}" — ${rows.length} tracks, ${matched} matched`);
 
-      // If this playlist is already imported into ND, refresh it in place
-      const existing = enabledRows.find(r => r.lfm_id === lfm_id);
-      if (existing?.navidrome_id) {
+      // Push to ND for subscribed playlists
+      const sub = db.prepare('SELECT * FROM lfm_playlists WHERE lfm_id = ?').get(lfm_id);
+      if (sub?.enabled) {
         const trackIds = rows.filter(r => r.matched).map(r => matchLocal(r.artist, r.title, cache)).filter(Boolean);
         if (trackIds.length) {
-          const comment       = `navilist:lastfm ${JSON.stringify({ source: 'lastfm', lfm_id })}`;
-          const replaceResult = await nav.replacePlaylistTracks(db, existing.navidrome_id, trackIds);
-          if (replaceResult.ok) {
-            await nav.updatePlaylist(db, existing.navidrome_id, { comment });
-            updateNavId.run(existing.navidrome_id, Math.floor(Date.now() / 1000), lfm_id);
-            logger.info('sync', `lfm-playlists: refreshed "${title}" in ND (${trackIds.length} tracks)`);
+          const comment = `navilist:lastfm ${JSON.stringify({ source: 'lastfm', lfm_id })}`;
+          const now     = Math.floor(Date.now() / 1000);
+          if (sub.navidrome_id) {
+            const ndExists = await nav.getPlaylist(db, sub.navidrome_id);
+            if (!ndExists) {
+              logger.info('sync', `lfm-playlists: "${title}" ND playlist gone — unsubscribing`);
+              unsubscribe.run(lfm_id);
+            } else {
+              await nav.replacePlaylistTracks(db, sub.navidrome_id, trackIds);
+              await nav.updatePlaylist(db, sub.navidrome_id, { comment });
+              updateNd.run(sub.navidrome_id, now, lfm_id);
+              logger.info('sync', `lfm-playlists: refreshed "${title}" (${trackIds.length} tracks)`);
+            }
           } else {
-            // ND playlist stale — clear and recreate
-            db.prepare('UPDATE lfm_playlists SET navidrome_id = NULL WHERE lfm_id = ?').run(lfm_id);
             const result = await nav.createPlaylist(db, title, trackIds);
             if (result.ok) {
               await nav.updatePlaylist(db, result.playlist.id, { comment });
-              updateNavId.run(result.playlist.id, Math.floor(Date.now() / 1000), lfm_id);
+              updateNd.run(result.playlist.id, now, lfm_id);
+              logger.info('sync', `lfm-playlists: created "${title}" (${trackIds.length} tracks)`);
             }
           }
         }

@@ -16,7 +16,6 @@ const {
   matchLocal,
   writeMissingArtists,
   resolveArtistWithAliases,
-  detectSlotKey,
   buildNaviTitle
 } = require('./helpers');
 
@@ -128,8 +127,7 @@ async function syncTopTracksListenbrainz(db, settings) {
   return { ok: true, total };
 }
 
-// ── LB playlists ──────────────────────────────────────────────────────────────
-
+// Fetch playlist list from LB, update lb_playlist_cache, fetch + cache tracks for all playlists
 async function fetchAndCacheLbPlaylists(db, s) {
   if (!s.listenbrainz_token || !s.listenbrainz_username)
     throw new Error('ListenBrainz credentials required');
@@ -149,63 +147,33 @@ async function fetchAndCacheLbPlaylists(db, s) {
   const normalise = (playlists, type) => (playlists || []).map(pl => ({
     lb_mbid:       pl.playlist?.identifier?.split('/playlist/')?.[1]?.replace(/\/$/, '') || null,
     title:         pl.playlist?.title || 'Untitled',
-    playlist_type: type
+    playlist_type: type,
+    source_patch:  pl.playlist?.extension?.['https://musicbrainz.org/doc/jspf#playlist']
+                     ?.additional_metadata?.algorithm_metadata?.source_patch || null,
   })).filter(p => p.lb_mbid);
 
-  const remote = [
+  const remote     = [
     ...normalise(cfData.playlists,  'generated'),
-    ...normalise(ownData.playlists, 'user')
+    ...normalise(ownData.playlists, 'user'),
   ];
+  const fetched_at = Math.floor(Date.now() / 1000);
 
-  const saved    = db.prepare('SELECT * FROM lb_playlists').all();
-  const savedMap = new Map(saved.map(r => [r.lb_mbid, r]));
-
-  const merged = remote.map(p => {
-    const row = savedMap.get(p.lb_mbid) || {};
-    return {
-      lb_mbid:          p.lb_mbid,
-      title:            p.title,
-      playlist_type:    p.playlist_type,
-      enabled:          row.enabled          ?? 0,
-      protected:        row.protected        ?? 0,
-      navidrome_id:     row.navidrome_id     ?? null,
-      last_imported_at: row.last_imported_at ?? null,
-      slot_key:         row.slot_key         ?? detectSlotKey(p.title),
-    };
-  });
-
-  db.prepare(`INSERT INTO settings (key, value) VALUES ('lb_playlist_count', ?)
-    ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(String(remote.length));
-
-  const getSlotRow = db.prepare('SELECT * FROM lb_playlists WHERE slot_key = ? AND lb_mbid != ? ORDER BY id DESC LIMIT 1');
-  const upsertPl   = db.prepare(`
-    INSERT INTO lb_playlists (lb_mbid, title, playlist_type, enabled, protected, slot_key, navidrome_id)
-    VALUES (@lb_mbid, @title, @playlist_type, @enabled, @protected, @slot_key, @navidrome_id)
+  // Update cache
+  const upsertCache = db.prepare(`
+    INSERT INTO lb_playlist_cache (lb_mbid, title, playlist_type, source_patch, fetched_at)
+    VALUES (@lb_mbid, @title, @playlist_type, @source_patch, @fetched_at)
     ON CONFLICT(lb_mbid) DO UPDATE SET
       title         = excluded.title,
       playlist_type = excluded.playlist_type,
-      slot_key      = excluded.slot_key,
-      navidrome_id  = COALESCE(lb_playlists.navidrome_id, excluded.navidrome_id)
+      source_patch  = excluded.source_patch,
+      fetched_at    = excluded.fetched_at
   `);
-  db.transaction(rows => { for (const r of rows) upsertPl.run(r); })(remote.map(p => {
-    const existing     = savedMap.get(p.lb_mbid) || {};
-    const slotKey      = detectSlotKey(p.title);
-    const slotRow      = slotKey ? getSlotRow.get(slotKey, p.lb_mbid) : null;
-    const enabled      = existing.enabled      ?? slotRow?.enabled      ?? 0;
-    const navidrome_id = existing.navidrome_id ?? slotRow?.navidrome_id ?? null;
-    return {
-      lb_mbid:       p.lb_mbid,
-      title:         p.title,
-      playlist_type: p.playlist_type,
-      enabled,
-      protected:     existing.protected ?? 0,
-      slot_key:      slotKey,
-      navidrome_id,
-    };
-  }));
+  db.transaction(rows => { for (const r of rows) upsertCache.run(r); })(
+    remote.map(p => ({ ...p, fetched_at }))
+  );
+  logger.info('sync', `lb-playlists: cached ${remote.length} playlists from LB`);
 
-  logger.info('sync', `lb-playlists: fetched ${remote.length} playlists from LB`);
-
+  // Fetch and cache tracks for all playlists (for UI display)
   const cache        = buildMatchCacheLocal(db);
   const deleteTracks = db.prepare('DELETE FROM lb_playlist_tracks WHERE lb_mbid = ?');
   const insertTrack  = db.prepare(`
@@ -216,12 +184,8 @@ async function fetchAndCacheLbPlaylists(db, s) {
   for (const p of remote) {
     try {
       const plRes = await fetch(`${BASE}/playlist/${p.lb_mbid}`, { headers });
-      if (!plRes.ok) { logger.warn('sync', `lb-playlists: failed to fetch tracks for ${p.title}: ${plRes.status}`); continue; }
-      const plData = await plRes.json();
-      const jspf   = plData?.playlist;
-      if (!jspf) continue;
-
-      const jspfTracks = jspf.track || [];
+      if (!plRes.ok) { logger.warn('sync', `lb-playlists: track fetch failed for "${p.title}": ${plRes.status}`); continue; }
+      const jspfTracks = (await plRes.json())?.playlist?.track || [];
       if (!jspfTracks.length) continue;
 
       const trackRows = [];
@@ -233,117 +197,152 @@ async function fetchAndCacheLbPlaylists(db, s) {
         const artistMbid = artists[0]?.artist_mbid || null;
         const resolved   = await resolveArtistWithAliases(artistName, artistMbid, cache);
         const id         = matchLocal(resolved, title, cache);
-        logger.debug('sync', `lb track match: "${artistName}" / "${title}" → ${id ? 'matched' : 'unmatched'}`);
         trackRows.push({ lb_mbid: p.lb_mbid, position: i, artist: artistName, title, matched: id ? 1 : 0 });
       }
-
       db.transaction(() => {
         deleteTracks.run(p.lb_mbid);
         for (const r of trackRows) insertTrack.run(r);
       })();
-
-      const matchedCount = trackRows.filter(r => r.matched).length;
-      logger.info('sync', `lb-playlists: "${p.title}" — ${jspfTracks.length} tracks, ${matchedCount} matched`);
+      logger.info('sync', `lb-playlists: "${p.title}" — ${jspfTracks.length} tracks, ${trackRows.filter(r => r.matched).length} matched`);
     } catch (e) {
       logger.warn('sync', `lb-playlists: track fetch failed for "${p.title}": ${e.message}`);
     }
     await sleep(300);
   }
 
-  return merged;
+  // Enrich with subscription state for UI
+  const subs      = db.prepare('SELECT * FROM lb_subscriptions').all();
+  const subByMbid = new Map(subs.map(s => [s.lb_mbid, s]));
+
+  return remote.map(p => {
+    const sub = subByMbid.get(p.lb_mbid);
+    return { ...p, enabled: sub ? 1 : 0, navidrome_id: sub?.navidrome_id || null, tracks: [] };
+  });
 }
 
+// Push fresh tracks to ND for all active subscriptions
 async function syncLbPlaylists(db, settings) {
-  const token = settings.listenbrainz_token;
-  const nav   = require('../../providers/navidrome');
-  const BASE  = 'https://api.listenbrainz.org/1';
+  const token   = settings.listenbrainz_token;
+  const nav     = require('../../providers/navidrome');
+  const BASE    = 'https://api.listenbrainz.org/1';
+  const headers = { Authorization: `Token ${token}` };
 
-  const enabled = db.prepare('SELECT * FROM lb_playlists WHERE enabled = 1').all();
-  if (!enabled.length) {
-    logger.info('sync', 'playlists/listenbrainz: no enabled playlists');
-    return { ok: true, imported: 0 };
+  const subs = db.prepare('SELECT * FROM lb_subscriptions').all();
+  if (!subs.length) {
+    logger.info('sync', 'playlists/listenbrainz: no subscriptions');
+    return { ok: true, synced: 0 };
   }
 
-  logger.info('sync', `playlists/listenbrainz: importing ${enabled.length} enabled playlists`);
+  // Fetch current playlists from LB to detect expired MBIDs and find replacements
+  const [cfRes, ownRes] = await Promise.all([
+    fetch(`${BASE}/user/${settings.listenbrainz_username}/playlists/createdfor`, { headers }),
+    fetch(`${BASE}/user/${settings.listenbrainz_username}/playlists`, { headers }),
+  ]);
+  const cfData  = cfRes.ok  ? await cfRes.json()  : { playlists: [] };
+  const ownData = ownRes.ok ? await ownRes.json() : { playlists: [] };
+
+  const extractMbid        = pl => pl.playlist?.identifier?.split('/playlist/')?.[1]?.replace(/\/$/, '') || null;
+  const extractSourcePatch = pl => pl.playlist?.extension?.['https://musicbrainz.org/doc/jspf#playlist']
+                                     ?.additional_metadata?.algorithm_metadata?.source_patch || null;
+
+  // All current MBIDs from LB
+  const currentMbids = new Set([
+    ...(cfData.playlists  || []).map(extractMbid),
+    ...(ownData.playlists || []).map(extractMbid),
+  ].filter(Boolean));
+
+  // source_patch → newest MBID (first in createdfor list = most recent)
+  const patchToNewestMbid = new Map();
+  for (const pl of (cfData.playlists || [])) {
+    const mbid  = extractMbid(pl);
+    const patch = extractSourcePatch(pl);
+    if (mbid && patch && !patchToNewestMbid.has(patch)) patchToNewestMbid.set(patch, mbid);
+  }
+
+  // mbid → LB title (for display name generation)
+  const mbidToTitle = new Map();
+  for (const pl of [...(cfData.playlists || []), ...(ownData.playlists || [])]) {
+    const mbid = extractMbid(pl);
+    if (mbid) mbidToTitle.set(mbid, pl.playlist?.title || '');
+  }
+
   const cache     = buildMatchCacheLocal(db);
-  let imported    = 0;
-  const updateRow = db.prepare('UPDATE lb_playlists SET navidrome_id = ?, last_imported_at = ? WHERE lb_mbid = ?');
+  const updateSub = db.prepare('UPDATE lb_subscriptions SET lb_mbid = ?, navidrome_id = ? WHERE id = ?');
+  const deleteSub = db.prepare('DELETE FROM lb_subscriptions WHERE id = ?');
+  let synced = 0;
 
-  for (const row of enabled) {
+  for (const sub of subs) {
     try {
-      const res = await fetch(`${BASE}/playlist/${row.lb_mbid}`, {
-        headers: { Authorization: `Token ${token}` }
-      });
-      if (!res.ok) { logger.warn('sync', `LB playlist ${row.lb_mbid} fetch failed: ${res.status}`); continue; }
-      const data = await res.json();
-      const jspf = data?.playlist;
-      if (!jspf) continue;
+      let mbid = sub.lb_mbid;
 
-      const jspfTracks = jspf.track || [];
-      if (!jspfTracks.length) { logger.info('sync', `"${row.title}": no tracks`); continue; }
+      // If subscribed MBID has expired, auto-rotate to newest for same source_patch
+      if (!currentMbids.has(mbid)) {
+        const newMbid = sub.source_patch ? patchToNewestMbid.get(sub.source_patch) : null;
+        if (!newMbid) {
+          logger.info('sync', `lb-sync: MBID ${mbid} expired, no replacement found — unsubscribing`);
+          if (sub.navidrome_id) await nav.deletePlaylist(db, sub.navidrome_id);
+          deleteSub.run(sub.id);
+          continue;
+        }
+        logger.info('sync', `lb-sync: MBID ${mbid} expired, rotating to ${newMbid}`);
+        updateSub.run(newMbid, sub.navidrome_id, sub.id);
+        mbid = newMbid;
+      }
 
+      const lbTitle      = mbidToTitle.get(mbid) || '';
+      const displayTitle = buildNaviTitle(lbTitle);
+      const comment      = `navilist:lb ${JSON.stringify({ source: 'listenbrainz', source_patch: sub.source_patch || null, mbid })}`;
+
+      // Fetch fresh tracks
+      const res = await fetch(`${BASE}/playlist/${mbid}`, { headers });
+      if (!res.ok) { logger.warn('sync', `lb-sync: fetch failed for ${mbid}: ${res.status}`); continue; }
+      const jspfTracks = (await res.json())?.playlist?.track || [];
+      if (!jspfTracks.length) { logger.info('sync', `lb-sync: ${mbid} has no tracks`); continue; }
+
+      // Resolve tracks
       const trackIds       = [];
       const missingArtists = new Set();
       for (const t of jspfTracks) {
-        const title      = t.title || '';
+        const trackTitle = t.title || '';
         const artists    = t.extension?.['https://musicbrainz.org/doc/jspf#track']?.additional_metadata?.artists || [];
         const artistName = artists[0]?.artist_credit_name || t.creator || '';
         const artistMbid = artists[0]?.artist_mbid || null;
-        if (!artistName || !title) continue;
+        if (!artistName || !trackTitle) continue;
         const resolved = await resolveArtistWithAliases(artistName, artistMbid, cache);
-        const id       = matchLocal(resolved, title, cache);
-        if (id) { trackIds.push(id); } else { missingArtists.add(artistName); }
+        const id       = matchLocal(resolved, trackTitle, cache);
+        if (id) trackIds.push(id); else missingArtists.add(artistName);
       }
-
-      logger.info('sync', `"${row.title}": ${jspfTracks.length} tracks, ${trackIds.length} matched, ${missingArtists.size} missing artists`);
-
       if (missingArtists.size && settings.lb_lidarr_enabled === 'true')
         writeMissingArtists(db, [...missingArtists], 'lb_playlist');
-      if (!trackIds.length) continue;
-      if (row.protected) { logger.info('sync', `"${row.title}": protected — skipping overwrite`); imported++; continue; }
+      if (!trackIds.length) { logger.info('sync', `lb-sync: ${mbid} — no matched tracks`); continue; }
 
-      const comment      = `navilist:lb ${JSON.stringify({ source: 'listenbrainz', mbid: row.lb_mbid })}`;
-      const now          = Math.floor(Date.now() / 1000);
-      const displayTitle = buildNaviTitle(row.title, row.slot_key);
-
-      let navId = row.navidrome_id;
-      if (!navId && row.slot_key) {
-        const slotRow = db.prepare('SELECT navidrome_id FROM lb_playlists WHERE slot_key = ? AND navidrome_id IS NOT NULL LIMIT 1').get(row.slot_key);
-        navId = slotRow?.navidrome_id || null;
-      }
-
-      if (navId) {
-        const replaceResult = await nav.replacePlaylistTracks(db, navId, trackIds);
-        if (replaceResult.ok) {
-          await nav.updatePlaylist(db, navId, { comment });
-          updateRow.run(navId, now, row.lb_mbid);
-          logger.info('sync', `"${row.title}": updated slot "${row.slot_key || 'none'}" (${trackIds.length} tracks)`);
-        } else {
-          logger.warn('sync', `"${row.title}": navId ${navId} stale, clearing and creating fresh`);
-          db.prepare('UPDATE lb_playlists SET navidrome_id = NULL WHERE navidrome_id = ?').run(navId);
-          const result = await nav.createPlaylist(db, displayTitle, trackIds);
-          if (result.ok) {
-            await nav.updatePlaylist(db, result.playlist.id, { comment });
-            updateRow.run(result.playlist.id, now, row.lb_mbid);
-          }
+      // Push to ND
+      if (sub.navidrome_id) {
+        const ndExists = await nav.getPlaylist(db, sub.navidrome_id);
+        if (!ndExists) {
+          logger.info('sync', `lb-sync: "${displayTitle}" ND playlist gone — unsubscribing`);
+          deleteSub.run(sub.id);
+          continue;
         }
+        await nav.replacePlaylistTracks(db, sub.navidrome_id, trackIds);
+        await nav.updatePlaylist(db, sub.navidrome_id, { name: displayTitle, comment });
+        logger.info('sync', `lb-sync: "${displayTitle}" updated (${trackIds.length} tracks)`);
       } else {
         const result = await nav.createPlaylist(db, displayTitle, trackIds);
-        if (result.ok) {
-          await nav.updatePlaylist(db, result.playlist.id, { comment });
-          updateRow.run(result.playlist.id, now, row.lb_mbid);
-          logger.info('sync', `"${row.title}": created as "${displayTitle}" (${trackIds.length} tracks)`);
-        }
+        if (!result.ok) { logger.warn('sync', `lb-sync: failed to create "${displayTitle}": ${result.error}`); continue; }
+        await nav.updatePlaylist(db, result.playlist.id, { comment });
+        db.prepare('UPDATE lb_subscriptions SET navidrome_id = ? WHERE id = ?').run(result.playlist.id, sub.id);
+        logger.info('sync', `lb-sync: "${displayTitle}" created (${trackIds.length} tracks)`);
       }
-      imported++;
+      synced++;
     } catch (e) {
-      logger.warn('sync', `playlists/listenbrainz: error on "${row.title}": ${e.message}`);
+      logger.warn('sync', `lb-sync: error on sub ${sub.id}: ${e.message}`);
     }
     await sleep(500);
   }
 
-  logger.info('sync', `playlists/listenbrainz: ${imported} imported`);
-  return { ok: true, imported };
+  logger.info('sync', `playlists/listenbrainz: ${synced} synced`);
+  return { ok: true, synced };
 }
 
 module.exports = {
