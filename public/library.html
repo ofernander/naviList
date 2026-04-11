@@ -8,15 +8,28 @@
 </head>
 <body>
   <nav>
-    <a href="/" class="nav-brand">naviList</a>
+    <a href="/playlists" class="nav-brand">
+      <img src="/assets/navidrome.webp" class="nav-brand-icon" alt="" />
+      naviList
+    </a>
     <ul>
       <li><a href="/playlists">Playlists</a></li>
-      <li><a href="/status">Status</a></li>
+      <li><a href="/status">Services</a></li>
       <li><a href="/settings">Settings</a></li>
+      <li><a href="/logs">Logs</a></li>
     </ul>
   </nav>
   <main class="full-width">
     <div class="library-page">
+
+      <!-- Manual creation banner (name input, shown in manual mode) -->
+      <div class="manual-create-banner" id="manualBanner" style="display:none">
+        <a href="/playlists" class="pl-detail-back">← Back to playlists</a>
+        <div class="manual-banner-body">
+          <input type="text" id="manualPlaylistName" class="pl-builder-name-input" placeholder="Playlist name..." autocomplete="off" />
+          <div class="pl-detail-meta">Select tracks below, then save when ready</div>
+        </div>
+      </div>
 
       <!-- Toolbar -->
       <div class="library-toolbar">
@@ -24,7 +37,6 @@
           <input type="text" id="searchInput" placeholder="Search artists..." />
           <select id="genreFilter">
             <option value="">All Genres</option>
-            <!-- Populated by JS via /playlists/api/genres -->
           </select>
           <select id="sortSelect">
             <option value="artist" selected>Artist A-Z</option>
@@ -37,25 +49,45 @@
         </div>
       </div>
 
-      <!-- Selection bar — inner actions rendered by JS depending on addTo mode -->
-      <div class="selection-bar" id="selectionBar" style="display:none">
-        <span id="selectionCount">0 selected</span>
-        <span id="selectionActions"></span>
-        <button class="btn btn-sm btn-secondary" id="clearSelectionBtn">Clear selection</button>
-        <span id="addStatus"></span>
-      </div>
+      <!-- Body: playlist panel (manual mode) + grid area -->
+      <div class="library-body" id="libraryBody">
 
-      <!-- Artist grid -->
-      <div class="album-grid-container" id="gridContainer">
-        <div class="album-grid" id="albumGrid"></div>
-        <div class="grid-loading" id="gridLoading" style="display:none">Loading...</div>
-      </div>
+        <!-- Playlist build panel — manual mode only -->
+        <div class="pl-build-panel" id="plBuildPanel">
+          <div class="pl-build-header">
+            <span class="pl-build-title">Playlist</span>
+            <span class="pl-build-count" id="plBuildCount">0 tracks</span>
+          </div>
+          <div class="pl-build-tracks" id="plBuildTracks">
+            <div class="pl-build-empty">No tracks yet</div>
+          </div>
+          <div class="pl-build-footer">
+            <button class="btn" id="plBuildSaveBtn" style="width:100%">Save Playlist</button>
+            <span class="rb-status" id="plBuildStatus"></span>
+          </div>
+        </div>
 
+        <!-- Grid area (scrollable) -->
+        <div class="library-grid-area">
+          <!-- Selection bar — non-manual modes -->
+          <div class="selection-bar" id="selectionBar" style="display:none">
+            <span id="selectionCount">0 selected</span>
+            <span id="selectionActions"></span>
+            <button class="btn btn-sm btn-secondary" id="clearSelectionBtn">Clear selection</button>
+            <span id="addStatus"></span>
+          </div>
+          <div class="album-grid-container" id="gridContainer">
+            <div class="album-grid" id="albumGrid"></div>
+            <div class="grid-loading" id="gridLoading" style="display:none">Loading...</div>
+          </div>
+        </div>
+
+      </div>
     </div>
   </main>
   <script>
-    // ADD_TO read from URL instead of EJS template var
     const ADD_TO = new URLSearchParams(window.location.search).get('addTo') || '';
+    const MODE   = new URLSearchParams(window.location.search).get('mode')  || '';
 
     let state = {
       loading:          false,
@@ -65,6 +97,9 @@
       selected:         new Set(),
       expandedArtistId: null
     };
+
+    // Ordered track list for manual playlist build
+    let manualTracks = []; // [{ id, title, artist }]
 
     // ── Helpers ──────────────────────────────────────────────────────────────
     function esc(str) {
@@ -79,11 +114,125 @@
       return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
     }
 
-    // ── Selection bar actions — rendered once on init ────────────────────────
+    // ── Manual playlist panel ─────────────────────────────────────────────────
+    function updatePlBuildPanel() {
+      const container = document.getElementById('plBuildTracks');
+      document.getElementById('plBuildCount').textContent =
+        `${manualTracks.length} track${manualTracks.length !== 1 ? 's' : ''}`;
+
+      if (!manualTracks.length) {
+        container.innerHTML = '<div class="pl-build-empty">No tracks yet</div>';
+        return;
+      }
+
+      container.innerHTML = manualTracks.map((t, i) => `
+        <div class="pl-build-track">
+          <span class="pl-build-num">${i + 1}</span>
+          <div class="pl-build-info">
+            <div class="pl-build-track-title">${esc(t.title || '—')}</div>
+            <div class="pl-build-track-artist">${esc(t.artist || '—')}</div>
+          </div>
+          <button class="pl-build-remove" data-id="${esc(t.id)}" title="Remove">✕</button>
+        </div>`).join('');
+
+      container.querySelectorAll('.pl-build-remove').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const id = btn.dataset.id;
+          manualTracks = manualTracks.filter(t => t.id !== id);
+          state.selected.delete(id);
+          updatePlBuildPanel();
+          updateArtistBadges();
+          syncCheckboxStates();
+        });
+      });
+    }
+
+    function updateArtistBadges() {
+      document.querySelectorAll('.album-card.artist-card').forEach(card => {
+        card.classList.toggle('has-selected', card.dataset.hasSelected === '1');
+      });
+    }
+
+    function syncCheckboxStates() {
+      document.querySelectorAll('.expand-cb').forEach(cb => {
+        cb.checked = state.selected.has(cb.value);
+        cb.closest('.expand-track-row')?.classList.toggle('selected', cb.checked);
+      });
+      // Also sync itl-select-all checkboxes
+      document.querySelectorAll('.inline-track-list').forEach(panel => {
+        const cbs = [...panel.querySelectorAll('.expand-cb')];
+        const all = cbs.length > 0 && cbs.every(cb => cb.checked);
+        const selectAll = panel.querySelector('.itl-select-all');
+        if (selectAll) selectAll.checked = all;
+      });
+    }
+
+    function addToManualTracks(id, title, artist) {
+      if (!manualTracks.find(t => t.id === id))
+        manualTracks.push({ id, title, artist });
+    }
+
+    function removeFromManualTracks(id) {
+      manualTracks = manualTracks.filter(t => t.id !== id);
+    }
+
+    // ── Selection bar actions ────────────────────────────────────────────────
     function initSelectionActions() {
       const el = document.getElementById('selectionActions');
-      if (ADD_TO) {
+
+      if (MODE === 'manual') {
+        document.getElementById('manualBanner').style.display = '';
+        document.getElementById('plBuildPanel').style.display = 'flex';
+        document.getElementById('libraryBody').classList.add('has-pl-panel');
+        setTimeout(() => document.getElementById('manualPlaylistName').focus(), 50);
+
+        document.getElementById('plBuildSaveBtn').addEventListener('click', async () => {
+          const name   = document.getElementById('manualPlaylistName').value.trim();
+          const status = document.getElementById('plBuildStatus');
+          const btn    = document.getElementById('plBuildSaveBtn');
+          if (!name)               { status.textContent = 'Add a playlist name';   status.className = 'rb-status status-err'; return; }
+          if (!manualTracks.length){ status.textContent = 'Add at least one track'; status.className = 'rb-status status-err'; return; }
+          btn.disabled = true; btn.textContent = 'Saving...';
+          try {
+            const res  = await fetch('/playlists/create', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ name, trackIds: manualTracks.map(t => t.id) })
+            });
+            const data = await res.json();
+            if (data.ok) {
+              status.textContent = '✓ Saved'; status.className = 'rb-status status-ok';
+              setTimeout(() => window.location.href = `/playlists?id=${data.playlist.id}`, 600);
+            } else {
+              status.textContent = `✗ ${data.error}`; status.className = 'rb-status status-err';
+              btn.disabled = false; btn.textContent = 'Save Playlist';
+            }
+          } catch (e) {
+            status.textContent = '✗ Request failed'; status.className = 'rb-status status-err';
+            btn.disabled = false; btn.textContent = 'Save Playlist';
+          }
+        });
+
+      } else if (ADD_TO) {
         el.innerHTML = `<button class="btn btn-sm" id="addSelectedBtn">Add to playlist</button>`;
+        document.getElementById('addSelectedBtn').addEventListener('click', async () => {
+          const ids    = [...state.selected];
+          const status = document.getElementById('addStatus');
+          if (!ids.length) return;
+          status.textContent = 'Adding...'; status.className = 'status-pending';
+          const res  = await fetch(`/playlists/${ADD_TO}/tracks/add`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ trackIds: ids })
+          });
+          const data = await res.json();
+          if (data.ok) {
+            status.textContent = `✓ Added ${ids.length} tracks`; status.className = 'status-ok';
+            state.selected.clear(); updateSelectionBar();
+            setTimeout(() => window.location.href = `/playlists?id=${ADD_TO}`, 800);
+          } else {
+            status.textContent = `✗ ${data.error}`; status.className = 'status-err';
+          }
+        });
+
       } else {
         el.innerHTML = `
           <select id="playlistSelect" class="playlist-select">
@@ -92,55 +241,48 @@
           <button class="btn btn-sm" id="addSelectedBtn">Add</button>
           <button class="btn btn-sm btn-secondary" id="newFromSelectedBtn">New playlist from selection</button>
         `;
+        document.getElementById('addSelectedBtn').addEventListener('click', async () => {
+          const ids        = [...state.selected];
+          const status     = document.getElementById('addStatus');
+          const playlistId = document.getElementById('playlistSelect')?.value;
+          if (!ids.length)  return;
+          if (!playlistId) { status.textContent = 'Select a playlist'; status.className = 'status-err'; return; }
+          status.textContent = 'Adding...'; status.className = 'status-pending';
+          const res  = await fetch(`/playlists/${playlistId}/tracks/add`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ trackIds: ids })
+          });
+          const data = await res.json();
+          if (data.ok) {
+            status.textContent = `✓ Added ${ids.length} tracks`; status.className = 'status-ok';
+            state.selected.clear(); updateSelectionBar();
+          } else {
+            status.textContent = `✗ ${data.error}`; status.className = 'status-err';
+          }
+        });
+        document.getElementById('newFromSelectedBtn')?.addEventListener('click', async () => {
+          const ids    = [...state.selected];
+          const status = document.getElementById('addStatus');
+          if (!ids.length) return;
+          const name = prompt('New playlist name:');
+          if (!name?.trim()) return;
+          status.textContent = 'Creating...'; status.className = 'status-pending';
+          const res  = await fetch('/playlists/create', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: name.trim(), trackIds: ids })
+          });
+          const data = await res.json();
+          if (data.ok) {
+            status.textContent = `✓ Created "${name.trim()}"`; status.className = 'status-ok';
+            setTimeout(() => window.location.href = '/playlists', 800);
+          } else {
+            status.textContent = `✗ ${data.error}`; status.className = 'status-err';
+          }
+        });
       }
-
-      document.getElementById('addSelectedBtn').addEventListener('click', async () => {
-        const ids    = [...state.selected];
-        const status = document.getElementById('addStatus');
-        if (!ids.length) return;
-
-        const playlistId = ADD_TO || document.getElementById('playlistSelect')?.value;
-        if (!playlistId) { status.textContent = 'Select a playlist'; status.className = 'status-err'; return; }
-
-        status.textContent = 'Adding...'; status.className = 'status-pending';
-        const res  = await fetch(`/playlists/${playlistId}/tracks/add`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ trackIds: ids })
-        });
-        const data = await res.json();
-        if (data.ok) {
-          status.textContent = `✓ Added ${ids.length} tracks`; status.className = 'status-ok';
-          state.selected.clear(); updateSelectionBar();
-          if (ADD_TO) setTimeout(() => window.location.href = `/playlists?id=${ADD_TO}`, 800);
-        } else {
-          status.textContent = `✗ ${data.error}`; status.className = 'status-err';
-        }
-      });
-
-      document.getElementById('newFromSelectedBtn')?.addEventListener('click', async () => {
-        const ids    = [...state.selected];
-        const status = document.getElementById('addStatus');
-        if (!ids.length) return;
-        const name = prompt('New playlist name:');
-        if (!name?.trim()) return;
-        status.textContent = 'Creating...'; status.className = 'status-pending';
-        const res  = await fetch('/playlists/create', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: name.trim(), trackIds: ids })
-        });
-        const data = await res.json();
-        if (data.ok) {
-          status.textContent = `✓ Created "${name.trim()}"`; status.className = 'status-ok';
-          setTimeout(() => window.location.href = '/playlists', 800);
-        } else {
-          status.textContent = `✗ ${data.error}`; status.className = 'status-err';
-        }
-      });
     }
 
-    // ── Load genres into dropdown ────────────────────────────────────────────
+    // ── Load genres ──────────────────────────────────────────────────────────
     async function loadGenres() {
       try {
         const res  = await fetch('/playlists/api/genres');
@@ -151,14 +293,12 @@
           opt.value = g; opt.textContent = g;
           sel.appendChild(opt);
         });
-      } catch (e) {
-        console.error('Failed to load genres', e);
-      }
+      } catch (e) {}
     }
 
-    // ── Load playlists into dropdown (non-addTo mode) ────────────────────────
+    // ── Load playlists into dropdown (default mode) ──────────────────────────
     async function loadPlaylists() {
-      if (ADD_TO) return;
+      if (ADD_TO || MODE === 'manual') return;
       try {
         const res  = await fetch('/playlists/api/list');
         const data = await res.json();
@@ -240,13 +380,13 @@
     }
 
     function insertPanelAfterCardRow(card, panel, grid) {
-      const cards    = [...grid.querySelectorAll('.album-card')];
-      const idx      = cards.indexOf(card);
+      const cards     = [...grid.querySelectorAll('.album-card')];
+      const idx       = cards.indexOf(card);
       const gridStyle = getComputedStyle(grid);
-      const colGap   = parseFloat(gridStyle.columnGap) || 20;
-      const cardW    = card.offsetWidth + colGap;
-      const perRow   = Math.max(1, Math.floor((grid.offsetWidth + colGap) / cardW));
-      const rowEnd   = Math.min(cards.length - 1, Math.ceil((idx + 1) / perRow) * perRow - 1);
+      const colGap    = parseFloat(gridStyle.columnGap) || 20;
+      const cardW     = card.offsetWidth + colGap;
+      const perRow    = Math.max(1, Math.floor((grid.offsetWidth + colGap) / cardW));
+      const rowEnd    = Math.min(cards.length - 1, Math.ceil((idx + 1) / perRow) * perRow - 1);
       cards[rowEnd].after(panel);
     }
 
@@ -294,7 +434,7 @@
         document.getElementById('selectAllArtistBtn').textContent = `✓ ${state.selected.size} selected`;
       });
       panel.querySelectorAll('.artist-album-card').forEach(ac => {
-        ac.addEventListener('click', () => toggleAlbumInPanel(ac, panel));
+        ac.addEventListener('click', () => toggleAlbumInPanel(ac, panel, artist.artist || ''));
       });
       document.getElementById('expandClose').addEventListener('click', () => {
         panel.remove();
@@ -304,7 +444,7 @@
     }
 
     // ── Album tracks inline ──────────────────────────────────────────────────
-    async function toggleAlbumInPanel(albumCard, panel) {
+    async function toggleAlbumInPanel(albumCard, panel, artistName) {
       const albumId  = albumCard.dataset.albumId;
       const existing = panel.querySelector('.inline-track-list');
 
@@ -354,21 +494,59 @@
       placeholder.innerHTML = html;
 
       placeholder.querySelector('.itl-select-all').addEventListener('change', (e) => {
-        data.tracks.forEach(t => { e.target.checked ? state.selected.add(t.id) : state.selected.delete(t.id); });
+        data.tracks.forEach(t => {
+          if (e.target.checked) {
+            state.selected.add(t.id);
+            if (MODE === 'manual') addToManualTracks(t.id, t.title, artistName);
+          } else {
+            state.selected.delete(t.id);
+            if (MODE === 'manual') removeFromManualTracks(t.id);
+          }
+        });
         placeholder.querySelectorAll('.expand-cb').forEach(cb => { cb.checked = e.target.checked; });
         placeholder.querySelectorAll('.expand-track-row').forEach(r => r.classList.toggle('selected', e.target.checked));
+        if (MODE === 'manual') {
+          const artistCard = document.querySelector(`.album-card[data-artist-id]`);
+          updateArtistCardBadge(placeholder, artistName);
+          updatePlBuildPanel();
+        }
         updateSelectionBar();
       });
+
       placeholder.querySelectorAll('.expand-cb').forEach(cb => {
         cb.addEventListener('change', (e) => {
-          e.target.checked ? state.selected.add(cb.value) : state.selected.delete(cb.value);
+          if (e.target.checked) {
+            state.selected.add(cb.value);
+            if (MODE === 'manual') {
+              const row   = cb.closest('.expand-track-row');
+              const title = row.querySelector('.et-title')?.textContent || '—';
+              addToManualTracks(cb.value, title, artistName);
+            }
+          } else {
+            state.selected.delete(cb.value);
+            if (MODE === 'manual') removeFromManualTracks(cb.value);
+          }
           cb.closest('.expand-track-row').classList.toggle('selected', e.target.checked);
+          if (MODE === 'manual') { updateArtistCardBadge(placeholder, artistName); updatePlBuildPanel(); }
           updateSelectionBar();
         });
       });
+
       placeholder.querySelector('.itl-close').addEventListener('click', () => {
         placeholder.remove(); albumCard.classList.remove('expanded');
       });
+    }
+
+    function updateArtistCardBadge(placeholder, artistName) {
+      // Find the artist card for this expand panel and mark it if any tracks selected
+      const expandPanel = placeholder.closest('.album-expand-panel');
+      const prevCard = expandPanel?.previousElementSibling;
+      if (prevCard?.classList.contains('artist-card')) {
+        const anySelected = [...placeholder.querySelectorAll('.expand-cb')].some(cb => cb.checked);
+        if (anySelected) prevCard.dataset.hasSelected = '1';
+        // Don't clear — artist may have other albums with selections
+      }
+      updateArtistBadges();
     }
 
     // ── Select all tracks for an artist ─────────────────────────────────────
@@ -379,9 +557,15 @@
       for (const album of data.albums) {
         const r2 = await fetch(`/library/api/albums/${album.album_id}/tracks`);
         const d2 = await r2.json();
-        if (d2.ok) d2.tracks.forEach(t => state.selected.add(t.id));
+        if (d2.ok) d2.tracks.forEach(t => {
+          state.selected.add(t.id);
+          if (MODE === 'manual') addToManualTracks(t.id, t.title || '—', artist.artist || '—');
+        });
       }
+      const card = document.querySelector(`.album-card[data-artist-id="${artist.artist_id}"]`);
+      if (card) card.dataset.hasSelected = '1';
       updateSelectionBar();
+      if (MODE === 'manual') { updateArtistBadges(); updatePlBuildPanel(); }
     }
 
     // ── Fetch + render artists ───────────────────────────────────────────────
@@ -398,6 +582,7 @@
         grid.innerHTML = '';
         data.artists.forEach(a => grid.appendChild(renderArtistCard(a)));
         document.getElementById('artistCount').textContent = data.total.toLocaleString();
+        if (MODE === 'manual') updateArtistBadges();
       } catch (e) { console.error('Artist fetch failed', e); }
       document.getElementById('gridLoading').style.display = 'none';
       state.loading = false;
@@ -409,8 +594,12 @@
       fetchArtists();
     }
 
-    // ── Selection bar ────────────────────────────────────────────────────────
+    // ── Selection bar (non-manual modes) ────────────────────────────────────
     function updateSelectionBar() {
+      if (MODE === 'manual') {
+        updatePlBuildPanel();
+        return;
+      }
       const count = state.selected.size;
       document.getElementById('selectionCount').textContent = `${count} track${count !== 1 ? 's' : ''} selected`;
       document.getElementById('selectionBar').style.display = count > 0 ? 'flex' : 'none';
@@ -418,6 +607,7 @@
 
     document.getElementById('clearSelectionBtn').addEventListener('click', () => {
       state.selected.clear();
+      if (MODE === 'manual') { manualTracks = []; updatePlBuildPanel(); updateArtistBadges(); }
       document.querySelectorAll('.expand-cb').forEach(cb => cb.checked = false);
       document.querySelectorAll('.expand-track-row').forEach(r => r.classList.remove('selected'));
       updateSelectionBar();

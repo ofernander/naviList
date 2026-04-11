@@ -58,7 +58,18 @@ module.exports = function (db) {
       result         TEXT
     );
 
-    -- Similar artists cache (Last.fm) — Phase 2
+    -- Artists — optional MBID lookup cache (populated on demand, e.g. radio playlist creation)
+    CREATE TABLE IF NOT EXISTS artists (
+      artist_id   TEXT PRIMARY KEY,
+      name        TEXT NOT NULL,
+      mbid        TEXT,
+      updated_at  INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_artists_name ON artists(name);
+    CREATE INDEX IF NOT EXISTS idx_artists_mbid ON artists(mbid) WHERE mbid IS NOT NULL;
+
+    -- Similar artists cache (Last.fm) — keyed on ND artist_id
     CREATE TABLE IF NOT EXISTS artist_similar (
       artist_id         TEXT NOT NULL,
       similar_name      TEXT NOT NULL,
@@ -71,7 +82,7 @@ module.exports = function (db) {
 
     CREATE INDEX IF NOT EXISTS idx_artist_similar_artist_id ON artist_similar(artist_id);
 
-    -- Artist tags cache (MusicBrainz) — Phase 3
+    -- Artist tags cache (Last.fm + MusicBrainz) — keyed on ND artist_id
     CREATE TABLE IF NOT EXISTS artist_tags (
       artist_id  TEXT NOT NULL,
       tag        TEXT NOT NULL,
@@ -136,23 +147,19 @@ module.exports = function (db) {
 
     CREATE INDEX IF NOT EXISTS idx_missing_artists_status ON missing_artists(status);
 
-    -- LB playlist subscriptions
-    CREATE TABLE IF NOT EXISTS lb_playlists (
-      id               INTEGER PRIMARY KEY AUTOINCREMENT,
-      lb_mbid          TEXT NOT NULL UNIQUE,
-      title            TEXT NOT NULL,
-      playlist_type    TEXT NOT NULL DEFAULT 'generated',
-      enabled          INTEGER NOT NULL DEFAULT 0,
-      protected        INTEGER NOT NULL DEFAULT 0,
-      navidrome_id     TEXT,
-      slot_key         TEXT,
-      last_imported_at INTEGER
+    -- LB playlist cache — what LB currently has, refreshed on each sync
+    -- source_patch is the algorithm type from LB API (weekly-exploration etc.), null for user playlists
+    CREATE TABLE IF NOT EXISTS lb_playlist_cache (
+      lb_mbid       TEXT NOT NULL UNIQUE,
+      title         TEXT NOT NULL,
+      playlist_type TEXT NOT NULL DEFAULT 'generated',
+      source_patch  TEXT,
+      fetched_at    INTEGER NOT NULL
     );
 
-    CREATE INDEX IF NOT EXISTS idx_lb_playlists_slot_key ON lb_playlists(slot_key);
-    CREATE INDEX IF NOT EXISTS idx_lb_playlists_enabled ON lb_playlists(enabled);
+    CREATE INDEX IF NOT EXISTS idx_lb_playlist_cache_source_patch ON lb_playlist_cache(source_patch);
 
-    -- LB playlist tracks cache — populated during Sync All, read by UI
+    -- LB playlist tracks cache — keyed on lb_mbid, populated on sync/view-open
     CREATE TABLE IF NOT EXISTS lb_playlist_tracks (
       lb_mbid   TEXT NOT NULL,
       position  INTEGER NOT NULL,
@@ -163,5 +170,62 @@ module.exports = function (db) {
     );
 
     CREATE INDEX IF NOT EXISTS idx_lb_playlist_tracks_mbid ON lb_playlist_tracks(lb_mbid);
+
+    -- LB subscriptions — one row per active subscription, keyed by lb_mbid
+    -- source_patch stored for auto-rotation when MBID expires
+    CREATE TABLE IF NOT EXISTS lb_subscriptions (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      lb_mbid      TEXT NOT NULL UNIQUE,
+      source_patch TEXT,
+      navidrome_id TEXT,
+      created_at   INTEGER NOT NULL
+    );
+
+    -- Last.fm playlist cache
+    CREATE TABLE IF NOT EXISTS lfm_playlists (
+      id               INTEGER PRIMARY KEY AUTOINCREMENT,
+      lfm_id           TEXT NOT NULL UNIQUE,
+      title            TEXT NOT NULL,
+      enabled          INTEGER NOT NULL DEFAULT 0,
+      navidrome_id     TEXT,
+      last_imported_at INTEGER
+    );
+
+    -- Last.fm playlist tracks cache
+    CREATE TABLE IF NOT EXISTS lfm_playlist_tracks (
+      lfm_id    TEXT NOT NULL,
+      position  INTEGER NOT NULL,
+      artist    TEXT NOT NULL,
+      title     TEXT NOT NULL,
+      matched   INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (lfm_id, position)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_lfm_playlist_tracks_id ON lfm_playlist_tracks(lfm_id);
+
+    -- naviList playlist registry — local copies of all known playlists
+    CREATE TABLE IF NOT EXISTS navilist_playlists (
+      navidrome_id    TEXT PRIMARY KEY,
+      name            TEXT NOT NULL,
+      comment         TEXT,
+      active          INTEGER NOT NULL DEFAULT 1,
+      track_count     INTEGER,
+      duration        INTEGER,
+      created_at         INTEGER NOT NULL,
+      deactivated_at     INTEGER,
+      refresh_cron        TEXT,
+      last_refreshed_at  INTEGER
+    );
+
+    -- naviList playlist track snapshots
+    CREATE TABLE IF NOT EXISTS navilist_playlist_tracks (
+      playlist_id  TEXT NOT NULL,
+      track_id     TEXT NOT NULL,
+      position     INTEGER NOT NULL,
+      PRIMARY KEY (playlist_id, track_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_navilist_playlist_tracks_playlist
+      ON navilist_playlist_tracks(playlist_id);
   `);
 };

@@ -29,9 +29,10 @@ async function request(apiKey, method, params = {}) {
       ...params
     });
 
-    const res = await fetch(`${BASE_URL}?${qs}`, { signal: controller.signal });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return res.json();
+    const res  = await fetch(`${BASE_URL}?${qs}`, { signal: controller.signal });
+    const json = await res.json();
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${JSON.stringify(json)}`);
+    return json;
   } finally {
     clearTimeout(timer);
   }
@@ -41,14 +42,14 @@ async function request(apiKey, method, params = {}) {
 
 /**
  * Get artists similar to the given artist, ranked by similarity score.
+ * Pass { mbid } for best results; falls back to { name } with autocorrect.
  * Returns up to `limit` results (max 100).
  * Response: data.similarartists.artist[] — each has .name, .match (0.0–1.0), .mbid
  */
-async function getSimilarArtists(apiKey, artistName, limit = 100) {
-  return request(apiKey, 'artist.getSimilarArtists', {
-    artist: artistName,
-    limit
-  });
+async function getSimilarArtists(apiKey, { name, mbid } = {}, limit = 100) {
+  const params = { limit, artist: name, autocorrect: 1 };
+  if (mbid) params.mbid = mbid;
+  return request(apiKey, 'artist.getSimilar', params);
 }
 
 /**
@@ -234,6 +235,16 @@ async function getUserTopTags(apiKey, username, limit = 50) {
   return request(apiKey, 'user.getTopTags', { user: username, limit });
 }
 
+// ── Playlist methods ─────────────────────────────────────────────────────────
+
+/**
+ * Get current week's track chart for a user.
+ * Response: data.weeklytrackchart.track[] — each has .name, .artist["#text"], .playcount
+ */
+async function getWeeklyTrackChart(apiKey, username) {
+  return request(apiKey, 'user.getWeeklyTrackChart', { user: username, limit: 100 });
+}
+
 // ── Ingestion adapter ─────────────────────────────────────────────────────────
 
 /**
@@ -321,6 +332,8 @@ module.exports = {
   getRecentTracks,
   getLovedTracks,
   getUserTopTags,
+  // Playlists
+  getWeeklyTrackChart,
   // Ingestion adapter
   fetchListens
 };

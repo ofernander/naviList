@@ -5,10 +5,36 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Playlists - naviList</title>
   <link rel="stylesheet" href="/css/main.css" />
+  <style>
+    .rb-req-toggle {
+      padding: 0.2rem 0.55rem;
+      border-radius: 4px;
+      border: 1px solid #ddddd8;
+      font-size: 0.76rem;
+      font-weight: 500;
+      cursor: pointer;
+      white-space: nowrap;
+      flex-shrink: 0;
+      transition: background 0.1s, color 0.1s;
+    }
+    .rb-req-toggle.is-required {
+      background: #f0f0ee;
+      color: #444;
+      border-color: #c8c8c2;
+    }
+    .rb-req-toggle.is-preferred {
+      background: #eef3ff;
+      color: #2255cc;
+      border-color: #b3c8ff;
+    }
+  </style>
 </head>
 <body>
   <nav>
-    <a href="/playlists" class="nav-brand">naviList</a>
+    <a href="/playlists" class="nav-brand">
+      <img src="/assets/navidrome.webp" class="nav-brand-icon" alt="" />
+      naviList
+    </a>
     <ul>
       <li><a href="/playlists" class="active">Playlists</a></li>
       <li><a href="/status">Services</a></li>
@@ -29,10 +55,14 @@
     <div class="pl-toolbar">
       <input type="text" class="pl-search" id="searchInput" placeholder="Search playlists..." />
       <span class="pl-filter-label">Filter:</span>
-      <button class="pl-filter-btn active" data-filter="all">All</button>
-      <button class="pl-filter-btn" data-filter="navilist">naviList</button>
-      <button class="pl-filter-btn" data-filter="listenbrainz">ListenBrainz</button>
-      <button class="pl-filter-btn" data-filter="manual">Manual</button>
+      <select id="filterSelect" class="pl-filter-select">
+        <option value="all">All</option>
+        <option value="navilist">naviList</option>
+        <option value="radio">Radio</option>
+        <option value="listenbrainz">ListenBrainz</option>
+        <option value="manual">Manual</option>
+        <option value="deactivated">Deactivated</option>
+      </select>
       <div class="pl-view-toggle">
         <button class="pl-view-btn active" id="viewBtnList" title="List view">☰</button>
         <button class="pl-view-btn" id="viewBtnCards" title="Card view">⊞</button>
@@ -41,9 +71,25 @@
 
     <button class="pl-new-wide btn" id="newPlaylistWideBtn">+ New Playlist</button>
 
-    <div class="pl-cards" id="plCards">
-      <!-- Populated by JS -->
+    <div id="plListHeader" style="display:none">
+      <div class="pl-list-col-header">
+        <input type="checkbox" id="selectAllChk" style="accent-color:#0084ff; cursor:pointer;" />
+        <span class="pl-col-hdr" style="text-align:center;" data-sort="type">Type</span>
+        <span class="pl-col-hdr" data-sort="name">Name</span>
+        <span class="pl-col-hdr pl-col-hdr-r" data-sort="tracks">Tracks</span>
+        <span class="pl-col-hdr pl-col-hdr-r" data-sort="duration">Duration</span>
+        <span class="pl-col-hdr pl-col-hdr-r" data-sort="added">Added</span>
+      </div>
     </div>
+    <div id="plSelectionBar" style="display:none" class="pl-selection-bar-multi">
+      <span id="selCount" class="pl-sel-count"></span>
+      <button class="btn btn-secondary btn-sm" id="selActivateBtn">Activate</button>
+      <button class="btn btn-secondary btn-sm" id="selDeactivateBtn">Deactivate</button>
+      <button class="btn btn-danger btn-sm" id="selDeleteBtn">Delete</button>
+      <button class="btn btn-secondary btn-sm" id="selClearBtn">Clear</button>
+    </div>
+
+    <div class="pl-cards" id="plCards"></div>
   </main>
 
   <!-- ── Detail view ────────────────────────────────────────────────────── -->
@@ -68,48 +114,209 @@
     <button class="pl-detail-back" id="rulesBackBtn">← Back</button>
     <div class="pl-detail-header">
       <div>
-        <div class="pl-detail-title" id="rulesTitle"></div>
-        <div class="pl-detail-meta">Define rules to automatically generate this playlist</div>
+        <input type="text" id="rulesNameInput" class="pl-builder-name-input" placeholder="Playlist name..." />
+        <div class="pl-detail-meta" id="rulesSubtitle">Define rules to automatically generate this playlist</div>
       </div>
     </div>
     <hr style="border:none; border-top: 0.5px solid #eeeee8; margin-bottom: 1.5rem;" />
 
-    <!-- Global settings -->
     <div class="rb-section">
       <div class="rb-section-label">Settings</div>
       <div class="rb-globals">
         <div class="rb-global-field">
-          <label for="rbLimit">Limit</label>
-          <input type="number" id="rbLimit" min="1" max="500" value="50" />
+          <input type="number" id="rbLimit" min="1" max="500" value="25" />
           <span style="font-size:0.82rem; color:#aaa;">tracks</span>
         </div>
-        <label class="rb-toggle">
-          <input type="checkbox" id="rbShuffle" checked />
-          Shuffle
-        </label>
         <div class="rb-global-field">
-          <label for="rbMaxPerArtist">Max per artist</label>
           <input type="number" id="rbMaxPerArtist" min="1" max="50" value="5" />
+          <span style="font-size:0.82rem; color:#aaa;">maximum tracks per artist</span>
         </div>
       </div>
     </div>
 
-    <!-- Rules -->
     <div class="rb-section">
       <div class="rb-section-label">Rules</div>
       <div class="rb-rules-list" id="rbRulesList"></div>
       <button class="rb-add-rule" id="rbAddRule">+ Add rule</button>
     </div>
 
-    <!-- Actions -->
+    <div class="rb-section" style="margin-top:1rem;">
+      <div class="rb-section-label">Auto-refresh</div>
+      <div class="rb-globals">
+        <div class="rb-global-field" style="flex-direction:column; align-items:flex-start; gap:0.4rem;">
+          <label for="rbRefreshCron">Cron schedule</label>
+          <input type="text" id="rbRefreshCron" placeholder="e.g. 0 6 * * *" style="width:160px; font-family:monospace;" />
+          <div style="font-size:0.78rem; color:#aaa; line-height:1.7;">
+            <code>* * * * *</code> every minute &nbsp;·&nbsp;
+            <code>0 * * * *</code> hourly &nbsp;·&nbsp;
+            <code>0 6 * * *</code> daily 6am &nbsp;·&nbsp;
+            <code>0 6 * * 1</code> Mon 6am &nbsp;·&nbsp;
+            <code>0 6 1 * *</code> 1st of month &nbsp;·&nbsp;
+            leave blank to disable
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div class="rb-actions">
       <button class="btn btn-secondary" id="rulesCancelBtn">Cancel</button>
-      <button class="btn" id="rulesSaveBtn">Save &amp; Generate</button>
+      <button class="btn" id="rulesPreviewBtn">Preview →</button>
+      <button class="btn" id="rulesSaveBtn" style="display:none">Save &amp; Generate</button>
       <span class="rb-status" id="rbStatus"></span>
+    </div>
+
+    <div id="rbPreviewPanel" style="display:none; margin-top:1.5rem;">
+      <hr style="border:none; border-top: 0.5px solid #eeeee8; margin-bottom:1rem;" />
+      <div class="rb-section-label" style="margin-bottom:0.75rem;">
+        Preview <span id="rbPreviewCount" style="font-weight:400; color:#aaa;"></span>
+      </div>
+      <div class="rb-preview-tracks" id="rbPreviewTracks"></div>
+      <div class="rb-actions" style="margin-top:1rem;">
+        <button class="btn btn-secondary" id="rbPreviewCancelBtn">Discard</button>
+        <button class="btn" id="rbSaveBtn">Save Playlist</button>
+        <span class="rb-status" id="rbSaveStatus"></span>
+      </div>
     </div>
   </main>
 
-  <!-- ── New playlist modal ─────────────────────────────────────────────── -->
+  <!-- ── Radio builder view ─────────────────────────────────────────────── -->
+  <main id="viewRadio" style="display:none">
+    <button class="pl-detail-back" id="radioBackBtn">← Back</button>
+    <div class="pl-detail-header">
+      <div>
+        <input type="text" id="radioNameInput" class="pl-builder-name-input" placeholder="Station name..." />
+        <div class="pl-detail-meta">Seed artists — naviList finds similar music from your library via Last.fm</div>
+      </div>
+    </div>
+    <hr style="border:none; border-top: 0.5px solid #eeeee8; margin-bottom: 1.5rem;" />
+
+    <div class="rb-section">
+      <div class="rb-section-label">Seed artists</div>
+      <div class="radio-seeds" id="radioSeedChips"></div>
+      <div class="radio-seed-input-row">
+        <input type="text" id="radioSeedInput" placeholder="Artist name..." list="radioArtistList" autocomplete="off" />
+        <datalist id="radioArtistList"></datalist>
+        <button class="btn btn-secondary btn-sm" id="radioAddSeedBtn">+ Add</button>
+      </div>
+    </div>
+
+    <div class="rb-section" style="margin-top:1.5rem;">
+      <div class="rb-section-label">Settings</div>
+      <div class="rb-globals">
+        <div class="rb-global-field">
+          <label>Depth</label>
+          <div class="radio-depth-options">
+            <label class="radio-depth-option"><input type="radio" name="radioDepth" value="0.5" /> Close</label>
+            <label class="radio-depth-option"><input type="radio" name="radioDepth" value="0.25" checked /> Medium</label>
+            <label class="radio-depth-option"><input type="radio" name="radioDepth" value="0.1" /> Wide</label>
+          </div>
+        </div>
+        <div class="rb-global-field">
+          <label for="radioTrackCount">Tracks</label>
+          <input type="number" id="radioTrackCount" min="10" max="200" value="50" style="width:70px;" />
+        </div>
+        <label class="rb-toggle">
+          <input type="checkbox" id="radioIncludeSeed" checked />
+          Include seed artists
+        </label>
+      </div>
+    </div>
+
+    <div class="rb-section" style="margin-top:1rem;">
+      <div class="rb-section-label">Auto-refresh</div>
+      <div class="rb-globals">
+        <div class="rb-global-field" style="flex-direction:column; align-items:flex-start; gap:0.4rem;">
+          <label for="radioRefreshCron">Cron schedule</label>
+          <input type="text" id="radioRefreshCron" placeholder="e.g. 0 6 * * *" style="width:160px; font-family:monospace;" />
+          <div style="font-size:0.78rem; color:#aaa; line-height:1.7;">
+            <code>* * * * *</code> every minute &nbsp;·&nbsp;
+            <code>0 * * * *</code> hourly &nbsp;·&nbsp;
+            <code>0 6 * * *</code> daily 6am &nbsp;·&nbsp;
+            <code>0 6 * * 1</code> Mon 6am &nbsp;·&nbsp;
+            <code>0 6 1 * *</code> 1st of month &nbsp;·&nbsp;
+            leave blank to disable
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="rb-actions" style="margin-top:1.5rem;">
+      <button class="btn btn-secondary" id="radioCancelBtn">Cancel</button>
+      <button class="btn" id="radioPreviewBtn">Preview →</button>
+      <span class="rb-status" id="radioStatus"></span>
+    </div>
+
+    <div id="radioPreviewPanel" style="display:none; margin-top:1.5rem;">
+      <hr style="border:none; border-top: 0.5px solid #eeeee8; margin-bottom:1rem;" />
+      <div class="rb-section-label" style="margin-bottom:0.75rem;">
+        Preview <span id="radioPreviewCount" style="font-weight:400; color:#aaa;"></span>
+      </div>
+      <div class="rb-preview-tracks" id="radioPreviewTracks"></div>
+      <div class="rb-actions" style="margin-top:1rem;">
+        <button class="btn btn-secondary" id="radioPreviewCancelBtn">Discard</button>
+        <button class="btn" id="radioSaveBtn">Save Playlist</button>
+        <span class="rb-status" id="radioSaveStatus"></span>
+      </div>
+    </div>
+  </main>
+
+  <!-- ── NSP builder view ──────────────────────────────────────────────────── -->
+  <main id="viewNsp" style="display:none">
+    <button class="pl-detail-back" id="nspBackBtn">← Back</button>
+    <div class="pl-detail-header">
+      <div>
+        <input type="text" id="nspNameInput" class="pl-builder-name-input" placeholder="Playlist name..." />
+        <div class="pl-detail-meta">Native Navidrome smart playlist — rules evaluated and refreshed by Navidrome directly</div>
+      </div>
+    </div>
+    <hr style="border:none; border-top: 0.5px solid #eeeee8; margin-bottom: 1.5rem;" />
+
+    <div class="rb-section">
+      <div class="rb-section-label">Conditions</div>
+      <div style="font-size:0.78rem; color:#aaa; margin-bottom:0.75rem;">All conditions must match. Use the “Any of” condition type for OR logic within a group.</div>
+      <div class="rb-rules-list" id="nspConditionsList"></div>
+      <button class="rb-add-rule" id="nspAddCondition">+ Add condition</button>
+    </div>
+
+    <div class="rb-section" style="margin-top:1.5rem;">
+      <div class="rb-section-label">Sort &amp; Limit</div>
+      <div class="rb-globals">
+        <div class="rb-global-field">
+          <label for="nspSortField" style="font-size:0.82rem; color:#aaa;">Sort by</label>
+          <select id="nspSortField" style="width:180px;"></select>
+        </div>
+        <div class="rb-global-field">
+          <select id="nspSortOrder" style="width:120px;">
+            <option value="random" selected>Random</option>
+            <option value="asc">Ascending</option>
+            <option value="desc">Descending</option>
+          </select>
+        </div>
+        <div class="rb-global-field">
+          <input type="number" id="nspLimit" min="1" max="1000" value="25" style="width:70px;" />
+          <span style="font-size:0.82rem; color:#aaa;">tracks</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="rb-actions" style="margin-top:1.5rem;">
+      <button class="btn btn-secondary" id="nspCancelBtn">Cancel</button>
+      <button class="btn" id="nspPreviewBtn">Preview JSON →</button>
+      <span class="rb-status" id="nspStatus"></span>
+    </div>
+
+    <div id="nspPreviewPanel" style="display:none; margin-top:1.5rem;">
+      <hr style="border:none; border-top: 0.5px solid #eeeee8; margin-bottom:1rem;" />
+      <div class="rb-section-label" style="margin-bottom:0.75rem;">Generated .nsp JSON</div>
+      <pre id="nspJsonPreview" style="background:#f5f5f3; border:0.5px solid #ddddd8; border-radius:6px; padding:1rem; font-size:0.78rem; overflow-x:auto; white-space:pre-wrap;"></pre>
+      <div class="rb-actions" style="margin-top:1rem;">
+        <button class="btn btn-secondary" id="nspPreviewCancelBtn">Discard</button>
+        <button class="btn" id="nspSaveBtn">Save Playlist</button>
+        <span class="rb-status" id="nspSaveStatus"></span>
+      </div>
+    </div>
+  </main>
+
   <!-- ── ListenBrainz playlists view ───────────────────────────────────────── -->
   <main id="viewLb" style="display:none">
     <button class="pl-detail-back" id="lbBackBtn">← All playlists</button>
@@ -123,30 +330,83 @@
     <div class="lb-cards" id="plLbList"></div>
   </main>
 
+  <!-- ── Last.fm playlists view ───────────────────────────────────────────── -->
+  <main id="viewLfm" style="display:none">
+    <button class="pl-detail-back" id="lfmBackBtn">← All playlists</button>
+    <div class="pl-page-header">
+      <div>
+        <h1>Last.fm Playlists</h1>
+        <p class="pl-page-sub">Review your Last.fm playlists and choose which to add to Navidrome</p>
+      </div>
+      <span id="plLfmStatus" class="history-source-status"></span>
+    </div>
+    <div class="lb-cards" id="plLfmList"></div>
+  </main>
+
+  <!-- ── New playlist modal ─────────────────────────────────────────────── -->
   <div class="modal-overlay" id="newPlaylistModal" style="display:none">
     <div class="modal">
       <h3>New playlist</h3>
       <p class="modal-sub">Choose how you want to build it</p>
-      <div class="pl-type-grid" style="grid-template-columns:1fr 1fr 1fr">
+      <div class="pl-type-grid" style="grid-template-columns:1fr 1fr 1fr; gap:0.75rem;">
         <div class="pl-type-option selected" data-type="navilist" id="typeSmart">
           <div class="pl-type-title">naviList</div>
-          <div class="pl-type-desc">Define rules — naviList generates and updates tracks automatically</div>
+          <div class="pl-type-desc">Rules-based playlist generation</div>
         </div>
-        <div class="pl-type-option" data-type="manual" id="typeManual">
-          <div class="pl-type-title">Manual</div>
-          <div class="pl-type-desc">Hand-pick tracks from your library yourself</div>
+        <div class="pl-type-option" data-type="nsp" id="typeNsp">
+          <div class="pl-type-title">Navidrome Smart Playlist</div>
+          <div class="pl-type-desc">Navidrome smart playlist wrapper</div>
+        </div>
+        <div class="pl-type-option" data-type="radio" id="typeRadio">
+          <div class="pl-type-title">Radio</div>
+          <div class="pl-type-desc">Similar artist playlist generation provided by Last.fm</div>
         </div>
         <div class="pl-type-option" data-type="listenbrainz" id="typeLb">
           <div class="pl-type-title">ListenBrainz</div>
-          <div class="pl-type-desc">Import and sync playlists from your ListenBrainz account</div>
+          <div class="pl-type-desc">Import ListenBrainz playlists</div>
+        </div>
+        <div class="pl-type-option" data-type="lastfm" id="typeLfm">
+          <div class="pl-type-title">Last.fm</div>
+          <div class="pl-type-desc">Import Last.fm playlists</div>
+        </div>
+        <div class="pl-type-option" data-type="manual" id="typeManual">
+          <div class="pl-type-title">Manual</div>
+          <div class="pl-type-desc">Manually create playlist from Navidrome library</div>
         </div>
       </div>
-      <input type="text" id="newPlaylistName" placeholder="Playlist name..." />
-      <p id="lbTypeNote" style="display:none; font-size:0.82rem; color:#aaa; margin-top:-0.5rem;">No name needed — playlists come from ListenBrainz</p>
       <div class="modal-actions">
         <button class="btn btn-secondary" id="cancelNewPlaylist">Cancel</button>
         <button class="btn" id="createPlaylistBtn">Continue →</button>
-        <span id="createStatus"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Export modal ────────────────────────────────────────────────────── -->
+  <div class="modal-overlay" id="exportModal" style="display:none">
+    <div class="modal" style="max-width:480px">
+      <h3>Export playlist</h3>
+      <p class="modal-sub">Choose a format to download</p>
+      <div class="pl-type-grid" style="grid-template-columns:1fr 1fr 1fr 1fr">
+        <div class="pl-type-option selected" data-format="m3u" style="height:88px">
+          <div class="pl-type-title">M3U</div>
+          <div class="pl-type-desc">Media player compatible</div>
+        </div>
+        <div class="pl-type-option" data-format="xspf" style="height:88px">
+          <div class="pl-type-title">XSPF</div>
+          <div class="pl-type-desc">XML playlist standard</div>
+        </div>
+        <div class="pl-type-option" data-format="csv" style="height:88px">
+          <div class="pl-type-title">CSV</div>
+          <div class="pl-type-desc">Spreadsheet / tabular</div>
+        </div>
+        <div class="pl-type-option" data-format="json" style="height:88px">
+          <div class="pl-type-title">JSON</div>
+          <div class="pl-type-desc">Structured data backup</div>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" id="exportCancelBtn">Cancel</button>
+        <button class="btn" id="exportDownloadBtn">↓ Download</button>
       </div>
     </div>
   </div>
@@ -158,13 +418,23 @@
     let searchQuery  = '';
     let selectedType = 'navilist';
 
-    let viewMode = localStorage.getItem('navilist_pl_view') || 'list';
+    let viewMode  = localStorage.getItem('navilist_pl_view')     || 'list';
+    let sortField = localStorage.getItem('navilist_pl_sort')     || 'name';
+    let sortDir   = localStorage.getItem('navilist_pl_sort_dir') || 'asc';
+    let selected  = new Set();
 
     // Rule builder state
-    let rbPlaylistId   = null;  // playlist being edited
-    let rbPlaylistName = '';
-    let rbReturnTo     = 'list'; // 'list' or 'detail'
-    let rbRules        = [];    // array of rule objects
+    let rbPlaylistName      = '';
+    let rbReturnTo          = 'list';
+    let rbRules             = [];
+    let rbMode              = 'create';
+    let rbEditingPlaylistId = null;
+    let rbPreviewTracks     = [];
+
+    // Radio builder state
+    let radioSeeds          = [];
+    let radioPreviewTracks  = [];
+    let radioPreviewConfig  = null;
 
     // ── Helpers ────────────────────────────────────────────────────────────
     function esc(str) {
@@ -181,76 +451,122 @@
       return h > 0 ? `${h}h ${m}m` : `${m}m`;
     }
 
-    function isSmartPlaylist(p) {
-      return p.comment?.startsWith('navilist:navilist') || false;
+    function fmtDate(unix) {
+      if (!unix) return '—';
+      return new Date(unix * 1000).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
     }
 
-    function isLbPlaylist(p) {
-      return p.comment?.startsWith('navilist:lb') || false;
-    }
+    function isSmartPlaylist(p)  { return p.comment?.startsWith('navilist:navilist') || false; }
+    function isLbPlaylist(p)     { return p.comment?.startsWith('navilist:lb')       || false; }
+    function isLfmPlaylist(p)    { return p.comment?.startsWith('navilist:lastfm')   || false; }
+    function isRadioPlaylist(p)  { return p.comment?.startsWith('navilist:radio')    || false; }
+    function isNspPlaylist(p)    { return p.id?.startsWith('nsp:') || p.comment?.startsWith('navilist:nsp') || false; }
+    function isInactive(p)       { return p.active === 0; }
 
     function getPlaylistType(p) {
       if (isSmartPlaylist(p))  return 'navilist';
+      if (isLfmPlaylist(p))    return 'lastfm';
       if (isLbPlaylist(p))     return 'listenbrainz';
+      if (isRadioPlaylist(p))  return 'radio';
+      if (isNspPlaylist(p))    return 'nsp';
       return 'manual';
     }
 
     function badgeClass(type) {
-      switch (type) {
-        case 'navilist':     return 'pl-badge-navilist';
-        case 'listenbrainz': return 'pl-badge-listenbrainz';
-        case 'lastfm':       return 'pl-badge-lastfm';
-        default:             return 'pl-badge-manual';
-      }
+      return 'pl-badge-' + (type || 'manual');
     }
 
     function badgeLabel(type) {
       switch (type) {
         case 'navilist':     return 'naviList';
+        case 'nsp':          return 'Navidrome';
         case 'listenbrainz': return 'ListenBrainz';
+        case 'radio':        return 'Radio';
         case 'lastfm':       return 'Last.fm';
         default:             return 'Manual';
       }
     }
 
     function parseRules(p) {
-      // Extract rules JSON from the comment field
       try {
         const json = p.comment?.replace(/^navilist:navilist\s*/, '');
         return json ? JSON.parse(json) : null;
-      } catch (e) {
-        return null;
+      } catch (e) { return null; }
+    }
+
+    function getSubscriptionInfo(p) {
+      const c = p.comment || '';
+      if (/^navilist:lb \{/.test(c)) {
+        try {
+          const data = JSON.parse(c.replace('navilist:lb ', ''));
+          return { type: 'lb', id: data.mbid };
+        } catch (e) {}
       }
+      if (/^navilist:lastfm \{/.test(c)) {
+        try { return { type: 'lfm', id: JSON.parse(c.replace('navilist:lastfm ', '')).lfm_id }; } catch (e) {}
+      }
+      return null;
+    }
+
+    async function unsubscribeFromMenu(p, sub) {
+      const route = sub.type === 'lb'
+        ? `/sync/lb-playlists/${sub.id}/unsubscribe`
+        : `/sync/lfm-playlists/${sub.id}/unsubscribe`;
+      const res  = await fetch(route, { method: 'POST' });
+      const data = await res.json();
+      if (data.ok) { await loadPlaylists(); }
+      else { alert(`\u2717 Unsubscribe failed: ${data.error}`); }
+    }
+
+    function updateSortArrows() {
+      document.querySelectorAll('.pl-col-hdr').forEach(el => {
+        const base = el.dataset.sort === 'type' ? 'Type'
+          : el.dataset.sort === 'name' ? 'Name'
+          : el.dataset.sort === 'tracks' ? 'Tracks'
+          : el.dataset.sort === 'duration' ? 'Duration'
+          : 'Added';
+        const arrow = el.dataset.sort === sortField ? (sortDir === 'asc' ? ' ↑' : ' ↓') : '';
+        el.textContent = base + arrow;
+        el.classList.toggle('pl-col-hdr-active', el.dataset.sort === sortField);
+      });
+    }
+
+    function updateSelectionBar() {
+      const bar = document.getElementById('plSelectionBar');
+      bar.style.display = selected.size > 0 ? '' : 'none';
+      document.getElementById('selCount').textContent = `${selected.size} selected`;
+      document.querySelectorAll('.pl-row-chk').forEach(chk => {
+        chk.checked = selected.has(chk.dataset.id);
+      });
+      const allChks = document.querySelectorAll('.pl-row-chk');
+      document.getElementById('selectAllChk').checked =
+        allChks.length > 0 && allChks.length === selected.size;
     }
 
     // ── Views ──────────────────────────────────────────────────────────────
-    function showListView() {
-      document.getElementById('viewList').style.display   = '';
-      document.getElementById('viewDetail').style.display = 'none';
-      document.getElementById('viewRules').style.display  = 'none';
-      document.getElementById('viewLb').style.display     = 'none';
+    function hideAllViews() {
+      ['viewList','viewDetail','viewRules','viewLb','viewRadio','viewLfm','viewNsp'].forEach(id => {
+        document.getElementById(id).style.display = 'none';
+      });
     }
 
-    function showDetailView() {
-      document.getElementById('viewList').style.display   = 'none';
-      document.getElementById('viewDetail').style.display = '';
-      document.getElementById('viewRules').style.display  = 'none';
-      document.getElementById('viewLb').style.display     = 'none';
+    function showListView()   { hideAllViews(); document.getElementById('viewList').style.display   = ''; }
+    function showDetailView() { hideAllViews(); document.getElementById('viewDetail').style.display = ''; }
+    function showRulesView()  { hideAllViews(); document.getElementById('viewRules').style.display  = ''; }
+    function showRadioView()  { hideAllViews(); document.getElementById('viewRadio').style.display  = ''; }
+    function showNspView()   { hideAllViews(); document.getElementById('viewNsp').style.display   = ''; }
+    function showManualView() { window.location.href = '/library?mode=manual'; }
+
+    async function showLfmView() {
+      hideAllViews();
+      document.getElementById('viewLfm').style.display = '';
+      await loadLfmPlaylists();
     }
 
-    function showRulesView() {
-      document.getElementById('viewList').style.display   = 'none';
-      document.getElementById('viewDetail').style.display = 'none';
-      document.getElementById('viewRules').style.display  = '';
-      document.getElementById('viewLb').style.display     = 'none';
-    }
-
-    function showLbView() {
-      document.getElementById('viewList').style.display   = 'none';
-      document.getElementById('viewDetail').style.display = 'none';
-      document.getElementById('viewRules').style.display  = 'none';
-      document.getElementById('viewLb').style.display     = '';
-      loadLbPlaylists();
+    async function showLbView() {
+      hideAllViews();
+      document.getElementById('viewLb').style.display = '';
+      await loadLbPlaylists();
     }
 
     // ── Load playlists ─────────────────────────────────────────────────────
@@ -272,162 +588,201 @@
 
       const filtered = allPlaylists.filter(p => {
         const matchSearch = !q || p.name.toLowerCase().includes(q);
-        const type = getPlaylistType(p);
+        const type     = getPlaylistType(p);
+        const inactive = isInactive(p);
         const matchFilter =
-          activeFilter === 'all' ||
-          activeFilter === type ||
-          (activeFilter === 'navilist' && type === 'navilist') ||
-          (activeFilter === 'manual' && type === 'manual');
+          (activeFilter === 'deactivated' && inactive) ||
+          (activeFilter === 'all' && !inactive) ||
+          (!inactive && (
+            activeFilter === type ||
+            (activeFilter === 'navilist' && type === 'navilist') ||
+            (activeFilter === 'radio'    && type === 'radio')    ||
+            (activeFilter === 'manual'   && type === 'manual')
+          ));
         return matchSearch && matchFilter;
       });
 
       if (!filtered.length) {
-        container.innerHTML = `<div class="pl-empty"><p>${allPlaylists.length === 0 ? 'No playlists yet. Create one to get started.' : 'No playlists match your filter.'}</p></div>`;
+        document.getElementById('plListHeader').style.display = 'none';
+        container.classList.remove('pl-list', 'pl-cards');
+        container.innerHTML = `<div class="pl-empty">${allPlaylists.length === 0 ? 'No playlists yet. Create one to get started.' : 'No playlists match your filter.'}</div>`;
         return;
       }
 
+      filtered.sort((a, b) => {
+        let av, bv;
+        switch (sortField) {
+          case 'type':     av = getPlaylistType(a);           bv = getPlaylistType(b);           break;
+          case 'tracks':   av = a.songCount  || 0;            bv = b.songCount  || 0;            break;
+          case 'duration': av = a.duration   || 0;            bv = b.duration   || 0;            break;
+          case 'added':    av = a.created_at || 0;            bv = b.created_at || 0;            break;
+          default:         av = (a.name || '').toLowerCase(); bv = (b.name || '').toLowerCase();
+        }
+        if (av < bv) return sortDir === 'asc' ? -1 : 1;
+        if (av > bv) return sortDir === 'asc' ?  1 : -1;
+        return 0;
+      });
+
       container.innerHTML = '';
       if (viewMode === 'list') {
+        document.getElementById('plListHeader').style.display = '';
+        updateSortArrows();
         container.classList.remove('pl-cards');
         container.classList.add('pl-list');
         filtered.forEach(p => container.appendChild(renderListRow(p)));
       } else {
+        document.getElementById('plListHeader').style.display = 'none';
         container.classList.remove('pl-list');
         container.classList.add('pl-cards');
         filtered.forEach(p => container.appendChild(renderCard(p)));
       }
+      updateSelectionBar();
+    }
+
+    function getListDisplayName(p) {
+      return p.lb_title || p.name;
     }
 
     function renderCard(p) {
       const type = getPlaylistType(p);
       const dur  = fmtDur(p.duration);
       const meta = [p.songCount ? `${p.songCount} tracks` : null, dur || null].filter(Boolean).join(' · ');
-
       const card = document.createElement('div');
       card.className = 'pl-card';
       card.innerHTML = `
         <div class="pl-card-top">
-          <div class="pl-card-name">${esc(p.name)}</div>
+          <div class="pl-card-name">${esc(getListDisplayName(p))}</div>
           <button class="pl-card-menu" title="Options">⋯</button>
         </div>
-        <div class="pl-card-desc">${esc(p.comment?.replace(/^navilist:(navilist|lb)\s*(\{.*\})?/, '').trim() || '')}</div>
+        <div class="pl-card-desc">${esc(p.comment?.replace(/^navilist:(navilist|lb|radio)\s*(\{.*\})?/, '').trim() || '')}</div>
         <div class="pl-card-footer">
           <span class="pl-badge ${badgeClass(type)}">${badgeLabel(type)}</span>
           <span class="pl-card-meta">${esc(meta)}</span>
-        </div>
-      `;
-
-      card.addEventListener('click', (e) => {
-        if (e.target.closest('.pl-card-menu')) return;
-        openDetail(p);
-      });
-
-      card.querySelector('.pl-card-menu').addEventListener('click', (e) => {
-        e.stopPropagation();
-        showCardMenu(e, p);
-      });
-
+        </div>`;
+      card.addEventListener('click', e => { if (!e.target.closest('.pl-card-menu')) openDetail(p); });
+      card.querySelector('.pl-card-menu').addEventListener('click', e => { e.stopPropagation(); showCardMenu(e, p); });
       return card;
     }
 
     function renderListRow(p) {
       const type = getPlaylistType(p);
       const dur  = fmtDur(p.duration);
-      const meta = [p.songCount ? `${p.songCount} tracks` : null, dur || null].filter(Boolean).join(' · ');
-
-      const row = document.createElement('div');
-      row.className = 'pl-list-row';
+      const row  = document.createElement('div');
+      row.className  = 'pl-list-row';
       row.dataset.id = p.id;
+      if (isInactive(p)) row.classList.add('is-inactive');
 
       const header = document.createElement('div');
       header.className = 'pl-list-row-header';
       header.innerHTML = `
+        <input type="checkbox" class="pl-row-chk" data-id="${esc(p.id)}" ${selected.has(p.id) ? 'checked' : ''} style="accent-color:#0084ff; cursor:pointer; flex-shrink:0;" />
         <span class="pl-badge ${badgeClass(type)}">${badgeLabel(type)}</span>
-        <span class="pl-list-row-name">${esc(p.name)}</span>
-        <span class="pl-list-row-meta">${esc(meta)}</span>
+        <span class="pl-list-row-name">${esc(getListDisplayName(p))}</span>
+        <span class="pl-list-row-meta">${p.songCount || '—'}</span>
+        <span class="pl-list-row-meta">${dur || '—'}</span>
+        <span class="pl-list-row-added">${fmtDate(p.created_at)}</span>
         <button class="pl-card-menu" title="Options">⋯</button>
-        <span class="pl-list-row-chevron">›</span>
-      `;
+        <span class="pl-list-row-chevron">›</span>`;
 
-      header.querySelector('.pl-card-menu').addEventListener('click', e => {
+      header.querySelector('.pl-row-chk').addEventListener('click', e => {
         e.stopPropagation();
-        showCardMenu(e, p);
+        if (e.target.checked) selected.add(p.id); else selected.delete(p.id);
+        updateSelectionBar();
       });
-
-      header.addEventListener('click', e => {
-        if (e.target.closest('.pl-card-menu')) return;
-        toggleListRow(row, p);
-      });
+      header.querySelector('.pl-card-menu').addEventListener('click', e => { e.stopPropagation(); showCardMenu(e, p); });
+      header.addEventListener('click', e => { if (!e.target.closest('.pl-card-menu')) toggleListRow(row, p); });
 
       const body = document.createElement('div');
-      body.className = 'pl-list-row-body';
+      body.className     = 'pl-list-row-body';
       body.style.display = 'none';
-
       row.appendChild(header);
       row.appendChild(body);
       return row;
     }
 
     async function toggleListRow(row, p) {
-      const body    = row.querySelector('.pl-list-row-body');
-      const isOpen  = row.classList.contains('is-open');
+      const body   = row.querySelector('.pl-list-row-body');
+      const isOpen = row.classList.contains('is-open');
 
-      // Collapse all other open rows
       document.querySelectorAll('.pl-list-row.is-open').forEach(r => {
-        if (r !== row) {
-          r.classList.remove('is-open');
-          r.querySelector('.pl-list-row-body').style.display = 'none';
-        }
+        if (r !== row) { r.classList.remove('is-open'); r.querySelector('.pl-list-row-body').style.display = 'none'; }
       });
 
-      if (isOpen) {
-        row.classList.remove('is-open');
-        body.style.display = 'none';
-        return;
-      }
+      if (isOpen) { row.classList.remove('is-open'); body.style.display = 'none'; return; }
 
       row.classList.add('is-open');
       body.style.display = '';
-
-      // Only fetch if not already loaded
       if (body.dataset.loaded) return;
       body.dataset.loaded = '1';
       body.innerHTML = '<div class="detail-loading">Loading…</div>';
 
-      // Action buttons
+      if (isNspPlaylist(p)) {
+        const actions = document.createElement('div');
+        actions.className = 'pl-list-row-actions';
+        const editBtn = document.createElement('button');
+        editBtn.className = 'btn btn-secondary btn-sm'; editBtn.textContent = 'Edit';
+        editBtn.addEventListener('click', () => {
+          const slug = p.nsp_slug || (p.id?.startsWith('nsp:') ? p.id.slice(4) : p.name.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, ''));
+          openNspBuilder(p.name, p.nsp_config, slug);
+        });
+        const copyBtn = document.createElement('button');
+        copyBtn.className = 'btn btn-secondary btn-sm'; copyBtn.textContent = 'Copy JSON';
+        copyBtn.addEventListener('click', () => {
+          navigator.clipboard.writeText(JSON.stringify(p.nsp_config, null, 2) || '{}');
+          copyBtn.textContent = 'Copied!';
+          setTimeout(() => { copyBtn.textContent = 'Copy JSON'; }, 1500);
+        });
+        const deleteBtn = document.createElement('button');
+        deleteBtn.className = 'btn btn-danger btn-sm'; deleteBtn.textContent = 'Delete';
+        deleteBtn.addEventListener('click', () => deletePlaylist(p));
+        actions.appendChild(editBtn); actions.appendChild(copyBtn); actions.appendChild(deleteBtn);
+        const json = JSON.stringify(p.nsp_config, null, 2) || '{}';
+        body.innerHTML = '';
+        body.appendChild(actions);
+        body.insertAdjacentHTML('beforeend', `<pre style="background:#f5f5f3; border:0.5px solid #ddddd8; border-radius:6px; padding:1rem; font-size:0.78rem; overflow-x:auto; white-space:pre-wrap; margin-top:0.75rem;">${esc(json)}</pre>`);
+        return;
+      }
+
       const actions = document.createElement('div');
       actions.className = 'pl-list-row-actions';
       const type = getPlaylistType(p);
 
       if (type === 'navilist') {
         const editBtn = document.createElement('button');
-        editBtn.className = 'btn btn-secondary btn-sm';
-        editBtn.textContent = 'Edit rules';
+        editBtn.className = 'btn btn-secondary btn-sm'; editBtn.textContent = 'Edit rules';
         editBtn.addEventListener('click', () => editRules(p));
         actions.appendChild(editBtn);
 
         const regenBtn = document.createElement('button');
-        regenBtn.className = 'btn btn-secondary btn-sm';
-        regenBtn.textContent = 'Regenerate';
+        regenBtn.className = 'btn btn-secondary btn-sm'; regenBtn.textContent = 'Regenerate';
         regenBtn.addEventListener('click', () => regenerate(p.id, regenBtn));
         actions.appendChild(regenBtn);
       }
 
       const addBtn = document.createElement('button');
-      addBtn.className = 'btn btn-secondary btn-sm';
-      addBtn.textContent = '+ Add tracks';
+      addBtn.className = 'btn btn-secondary btn-sm'; addBtn.textContent = '+ Add tracks';
       addBtn.addEventListener('click', () => addTracks(p.id));
       actions.appendChild(addBtn);
 
       const renameBtn = document.createElement('button');
-      renameBtn.className = 'btn btn-secondary btn-sm';
-      renameBtn.textContent = 'Rename';
+      renameBtn.className = 'btn btn-secondary btn-sm'; renameBtn.textContent = 'Rename';
       renameBtn.addEventListener('click', () => renamePlaylist(p));
       actions.appendChild(renameBtn);
 
+      if (isInactive(p)) {
+        const activateBtn = document.createElement('button');
+        activateBtn.className = 'btn btn-secondary btn-sm'; activateBtn.textContent = '▶ Activate';
+        activateBtn.addEventListener('click', () => activatePlaylist(p, activateBtn));
+        actions.appendChild(activateBtn);
+      } else {
+        const deactivateBtn = document.createElement('button');
+        deactivateBtn.className = 'btn btn-secondary btn-sm'; deactivateBtn.textContent = 'Deactivate';
+        deactivateBtn.addEventListener('click', () => deactivatePlaylist(p, deactivateBtn));
+        actions.appendChild(deactivateBtn);
+      }
+
       const deleteBtn = document.createElement('button');
-      deleteBtn.className = 'btn btn-danger btn-sm';
-      deleteBtn.textContent = 'Delete';
+      deleteBtn.className = 'btn btn-danger btn-sm'; deleteBtn.textContent = 'Delete';
       deleteBtn.addEventListener('click', () => deletePlaylist(p));
       actions.appendChild(deleteBtn);
 
@@ -436,10 +791,7 @@
         const data = await res.json();
         body.innerHTML = '';
         body.appendChild(actions);
-        if (!data.ok) {
-          body.insertAdjacentHTML('beforeend', '<div class="detail-empty">Failed to load.</div>');
-          return;
-        }
+        if (!data.ok) { body.insertAdjacentHTML('beforeend', '<div class="detail-empty">Failed to load.</div>'); return; }
         const trackDiv = document.createElement('div');
         trackDiv.className = 'pl-list-row-tracks';
         body.appendChild(trackDiv);
@@ -451,36 +803,24 @@
 
     function renderDetailInto(container, p, playlistId) {
       const tracks = Array.isArray(p.entry) ? p.entry : (p.entry ? [p.entry] : []);
+      if (!tracks.length) { container.innerHTML = '<div class="detail-empty">No tracks yet.</div>'; return; }
 
-      if (!tracks.length) {
-        container.innerHTML = '<div class="detail-empty">No tracks yet.</div>';
-        return;
-      }
-
-      let html = `
-        <div class="track-list">
-          <div class="track-list-header">
-            <span class="tc-num">#</span>
-            <span class="tc-title">Title / Artist</span>
-            <span class="tc-dur">Duration</span>
-            <span class="tc-action"></span>
-          </div>`;
-
+      const missingCount = tracks.filter(t => t.missing).length;
+      let html = '';
+      if (missingCount) html += `<div class="detail-loading" style="color:#bbb; font-size:0.82rem; padding:0.5rem 0.5rem 0;">${missingCount} track${missingCount > 1 ? 's' : ''} not in library</div>`;
+      html += `<div class="track-list"><div class="track-list-header">
+        <span class="tc-num">#</span><span class="tc-title">Title / Artist</span>
+        <span class="tc-dur">Duration</span><span class="tc-action"></span></div>`;
       tracks.forEach((t, i) => {
-        html += `
-          <div class="track-row">
-            <span class="tc-num">${i + 1}</span>
-            <span class="tc-title">
-              <span class="tl-title">${esc(t.title || '—')}</span>
-              <span class="tl-artist">${esc(t.artist || '—')}</span>
-            </span>
-            <span class="tc-dur">${fmtDur(t.duration)}</span>
-            <span class="tc-action">
-              <button class="btn-icon remove-track" data-playlist="${esc(playlistId)}" data-index="${i}" title="Remove">✕</button>
-            </span>
-          </div>`;
+        const missing = t.missing ? ' style="opacity:0.4"' : '';
+        const pill    = t.missing ? '<span class="lb-track-missing-pill">Not in library</span>' : `<button class="btn-icon remove-track" data-playlist="${esc(playlistId)}" data-index="${i}" title="Remove">✕</button>`;
+        html += `<div class="track-row"${missing}>
+          <span class="tc-num">${i + 1}</span>
+          <span class="tc-title"><span class="tl-title">${esc(t.title || '—')}</span><span class="tl-artist">${esc(t.artist || '—')}</span></span>
+          <span class="tc-dur">${t.missing ? '' : fmtDur(t.duration)}</span>
+          <span class="tc-action">${pill}</span>
+        </div>`;
       });
-
       html += '</div>';
       container.innerHTML = html;
 
@@ -504,28 +844,47 @@
       });
     }
 
-    // ── Card context menu ──────────────────────────────────────────────────────────────────
+    function renderPreviewTracks(containerId, tracks, onRemove) {
+      const el = document.getElementById(containerId);
+      if (!tracks.length) { el.innerHTML = '<div class="detail-empty">No tracks.</div>'; return; }
+      let html = `<div class="track-list"><div class="track-list-header">
+        <span class="tc-num">#</span><span class="tc-title">Title / Artist</span>
+        <span class="tc-dur">Duration</span><span class="tc-action"></span></div>`;
+      tracks.forEach((t, i) => {
+        html += `<div class="track-row">
+          <span class="tc-num">${i + 1}</span>
+          <span class="tc-title"><span class="tl-title">${esc(t.title || '—')}</span><span class="tl-artist">${esc(t.artist || '—')}</span></span>
+          <span class="tc-dur">${fmtDur(t.duration)}</span>
+          <span class="tc-action"><button class="btn-icon remove-preview-track" data-index="${i}" title="Remove">✕</button></span>
+        </div>`;
+      });
+      html += '</div>';
+      el.innerHTML = html;
+      el.querySelectorAll('.remove-preview-track').forEach(btn => {
+        btn.addEventListener('click', () => onRemove(parseInt(btn.dataset.index)));
+      });
+    }
+
+    // ── Card context menu ──────────────────────────────────────────────────
     function showCardMenu(e, p) {
       document.getElementById('cardMenu')?.remove();
-
       const menu = document.createElement('div');
       menu.id = 'cardMenu';
-      menu.style.cssText = `
-        position: fixed;
-        background: #fff;
-        border: 0.5px solid #ddddd8;
-        border-radius: 6px;
-        padding: 0.4rem 0;
-        min-width: 140px;
-        z-index: 200;
-        box-shadow: 0 4px 16px rgba(0,0,0,0.1);
-        top: ${e.clientY}px;
-        left: ${e.clientX}px;
-      `;
+      menu.style.cssText = `position:fixed; background:#fff; border:0.5px solid #ddddd8; border-radius:6px; padding:0.4rem 0; min-width:140px; z-index:200; box-shadow:0 4px 16px rgba(0,0,0,0.1); top:${e.clientY}px; left:${e.clientX}px;`;
 
-      const items = [
+      const sub = getSubscriptionInfo(p);
+
+      const items = sub ? [
+        { label: 'Open',        action: () => openDetail(p) },
+        { label: 'Export',      action: () => openExportModal(p) },
+        { label: 'Unsubscribe', action: () => unsubscribeFromMenu(p, sub), danger: true },
+      ] : [
         { label: 'Open',   action: () => openDetail(p) },
+        { label: 'Export', action: () => openExportModal(p) },
         { label: 'Rename', action: () => renamePlaylist(p) },
+        ...(isInactive(p)
+          ? [{ label: '▶ Activate', action: () => activatePlaylist(p, { disabled: false, textContent: '' }) }]
+          : [{ label: 'Deactivate', action: () => deactivatePlaylist(p, { disabled: false, textContent: '' }) }]),
         { label: 'Delete', action: () => deletePlaylist(p), danger: true },
       ];
 
@@ -545,49 +904,44 @@
 
     // ── Detail view ────────────────────────────────────────────────────────
     async function openDetail(p) {
+      // NSP playlists get their own detail view
+      if (isNspPlaylist(p)) { openNspDetail(p); return; }
       showDetailView();
       document.getElementById('detailName').textContent = p.name;
-
       const type  = getPlaylistType(p);
       const badge = document.getElementById('detailBadge');
-      badge.className  = `pl-badge ${badgeClass(type)}`;
+      badge.className   = `pl-badge ${badgeClass(type)}`;
       badge.textContent = badgeLabel(type);
-
       document.getElementById('detailMeta').textContent = 'Loading...';
-      document.getElementById('detailBody').innerHTML = '<div class="detail-loading">Loading...</div>';
+      document.getElementById('detailBody').innerHTML   = '<div class="detail-loading">Loading...</div>';
 
       const actions = document.getElementById('detailActions');
       actions.innerHTML = '';
 
       if (type === 'navilist') {
         const editBtn = document.createElement('button');
-        editBtn.className = 'btn btn-secondary btn-sm';
-        editBtn.textContent = 'Edit rules';
+        editBtn.className = 'btn btn-secondary btn-sm'; editBtn.textContent = 'Edit rules';
         editBtn.addEventListener('click', () => editRules(p));
         actions.appendChild(editBtn);
 
         const regenBtn = document.createElement('button');
-        regenBtn.className = 'btn btn-secondary btn-sm';
-        regenBtn.textContent = 'Regenerate';
+        regenBtn.className = 'btn btn-secondary btn-sm'; regenBtn.textContent = 'Regenerate';
         regenBtn.addEventListener('click', () => regenerate(p.id, regenBtn));
         actions.appendChild(regenBtn);
       }
 
       const addBtn = document.createElement('button');
-      addBtn.className = 'btn btn-secondary btn-sm';
-      addBtn.textContent = '+ Add tracks';
+      addBtn.className = 'btn btn-secondary btn-sm'; addBtn.textContent = '+ Add tracks';
       addBtn.addEventListener('click', () => addTracks(p.id));
       actions.appendChild(addBtn);
 
       const renameBtn = document.createElement('button');
-      renameBtn.className = 'btn btn-secondary btn-sm';
-      renameBtn.textContent = 'Rename';
+      renameBtn.className = 'btn btn-secondary btn-sm'; renameBtn.textContent = 'Rename';
       renameBtn.addEventListener('click', () => renamePlaylist(p));
       actions.appendChild(renameBtn);
 
       const deleteBtn = document.createElement('button');
-      deleteBtn.className = 'btn btn-danger btn-sm';
-      deleteBtn.textContent = 'Delete';
+      deleteBtn.className = 'btn btn-danger btn-sm'; deleteBtn.textContent = 'Delete';
       deleteBtn.addEventListener('click', () => deletePlaylist(p));
       actions.appendChild(deleteBtn);
 
@@ -603,40 +957,26 @@
 
     function renderDetail(p) {
       const tracks   = Array.isArray(p.entry) ? p.entry : (p.entry ? [p.entry] : []);
-      const totalDur = tracks.reduce((a, t) => a + (t.duration || 0), 0);
-      document.getElementById('detailMeta').textContent =
-        `${tracks.length} tracks · ${fmtDur(totalDur)}`;
+      const matched  = tracks.filter(t => !t.missing);
+      const totalDur = matched.reduce((a, t) => a + (t.duration || 0), 0);
+      const missingCount = tracks.filter(t => t.missing).length;
+      document.getElementById('detailMeta').textContent = `${matched.length} tracks · ${fmtDur(totalDur)}${missingCount ? ` · ${missingCount} not in library` : ''}`;
 
-      if (!tracks.length) {
-        document.getElementById('detailBody').innerHTML =
-          '<div class="detail-empty">No tracks yet. Use &ldquo;Edit rules&rdquo; to define rules and generate tracks.</div>';
-        return;
-      }
+      if (!tracks.length) { document.getElementById('detailBody').innerHTML = '<div class="detail-empty">No tracks yet.</div>'; return; }
 
-      let html = `
-        <div class="track-list">
-          <div class="track-list-header">
-            <span class="tc-num">#</span>
-            <span class="tc-title">Title / Artist</span>
-            <span class="tc-dur">Duration</span>
-            <span class="tc-action"></span>
-          </div>`;
-
+      let html = `<div class="track-list"><div class="track-list-header">
+        <span class="tc-num">#</span><span class="tc-title">Title / Artist</span>
+        <span class="tc-dur">Duration</span><span class="tc-action"></span></div>`;
       tracks.forEach((t, i) => {
-        html += `
-          <div class="track-row">
-            <span class="tc-num">${i + 1}</span>
-            <span class="tc-title">
-              <span class="tl-title">${esc(t.title || '—')}</span>
-              <span class="tl-artist">${esc(t.artist || '—')}</span>
-            </span>
-            <span class="tc-dur">${fmtDur(t.duration)}</span>
-            <span class="tc-action">
-              <button class="btn-icon remove-track" data-playlist="${esc(p.id)}" data-index="${i}" title="Remove">✕</button>
-            </span>
-          </div>`;
+        const missing = t.missing ? ' style="opacity:0.4"' : '';
+        const pill    = t.missing ? '<span class="lb-track-missing-pill">Not in library</span>' : `<button class="btn-icon remove-track" data-playlist="${esc(p.id)}" data-index="${i}" title="Remove">✕</button>`;
+        html += `<div class="track-row"${missing}>
+          <span class="tc-num">${i + 1}</span>
+          <span class="tc-title"><span class="tl-title">${esc(t.title || '—')}</span><span class="tl-artist">${esc(t.artist || '—')}</span></span>
+          <span class="tc-dur">${t.missing ? '' : fmtDur(t.duration)}</span>
+          <span class="tc-action">${pill}</span>
+        </div>`;
       });
-
       html += '</div>';
       document.getElementById('detailBody').innerHTML = html;
 
@@ -663,16 +1003,13 @@
     // ── Playlist actions ───────────────────────────────────────────────────
     function editRules(p) {
       const existing = parseRules(p);
-      openRuleBuilder(p.id, p.name, existing, 'detail');
+      openRuleBuilder(p.name, existing, 'detail', p.id);
     }
 
     async function regenerate(id, btn) {
-      const p = allPlaylists.find(pl => pl.id === id);
+      const p        = allPlaylists.find(pl => pl.id === id);
       const existing = parseRules(p);
-      if (!existing?.rules?.length) {
-        alert('No rules found for this playlist. Use "Edit rules" to define them first.');
-        return;
-      }
+      if (!existing?.rules?.length) { alert('No rules found. Use "Edit rules" first.'); return; }
       if (btn) { btn.disabled = true; btn.textContent = 'Regenerating...'; }
       try {
         const res  = await fetch(`/playlists/${id}/rules`, {
@@ -694,9 +1031,7 @@
       }
     }
 
-    function addTracks(id) {
-      window.location.href = `/library?addTo=${id}`;
-    }
+    function addTracks(id) { window.location.href = `/library?addTo=${id}`; }
 
     async function renamePlaylist(p) {
       const name = prompt('New name:', p.name);
@@ -706,32 +1041,54 @@
         body: JSON.stringify({ name: name.trim() })
       });
       const data = await res.json();
-      if (data.ok) {
-        await loadPlaylists();
-        showListView();
+      if (data.ok) { await loadPlaylists(); showListView(); }
+    }
+
+    async function deactivatePlaylist(p, btn) {
+      if (!confirm(`Remove "${p.name}" from Navidrome? It will stay in naviList and can be reactivated.`)) return;
+      btn.disabled = true; btn.textContent = 'Deactivating...';
+      try {
+        const res  = await fetch(`/playlists/${p.id}/deactivate`, { method: 'POST' });
+        const data = await res.json();
+        if (data.ok) { await loadPlaylists(); }
+        else { btn.disabled = false; btn.textContent = 'Deactivate'; alert(`✗ ${data.error}`); }
+      } catch (e) { btn.disabled = false; btn.textContent = 'Deactivate'; }
+    }
+
+    async function activatePlaylist(p, btn) {
+      btn.disabled = true; btn.textContent = 'Activating...';
+      try {
+        const res  = await fetch(`/playlists/${p.id}/activate`, { method: 'POST' });
+        const data = await res.json();
+        if (data.ok) { await loadPlaylists(); }
+        else { btn.disabled = false; btn.textContent = '▶ Activate'; alert(`✗ ${data.error}`); }
+      } catch (e) { btn.disabled = false; btn.textContent = '▶ Activate'; }
+    }
+
+    async function doDelete(p) {
+      if (isNspPlaylist(p)) {
+        const slug = p.nsp_slug || (p.id?.startsWith('nsp:') ? p.id.slice(4) : p.name.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, ''));
+        const res  = await fetch(`/nsp/${slug}/delete`, { method: 'POST' });
+        return res.json();
       }
+      const res = await fetch(`/playlists/${p.id}/delete`, { method: 'POST' });
+      return res.json();
     }
 
     async function deletePlaylist(p) {
       if (!confirm(`Delete "${p.name}"? This cannot be undone.`)) return;
-      const res  = await fetch(`/playlists/${p.id}/delete`, { method: 'POST' });
-      const data = await res.json();
-      if (data.ok) {
-        allPlaylists = allPlaylists.filter(pl => pl.id !== p.id);
-        renderCards();
-        showListView();
-      }
+      const data = await doDelete(p);
+      if (data.ok) { await loadPlaylists(); showListView(); }
+      else if (data.error) alert(`✗ ${data.error}`);
     }
 
     // ── Rule builder ───────────────────────────────────────────────────────
-
-    // Term definitions — controls what value input is shown per term
     const TERMS = {
-      stats:  { label: 'Stats',   valueType: 'stats-select' },
-      decade: { label: 'Decade',  valueType: 'text', placeholder: 'e.g. 1990s' },
-      tag:    { label: 'Tag',     valueType: 'text', placeholder: 'e.g. jazz' },
-      artist: { label: 'Artist',  valueType: 'text', placeholder: 'Artist name' },
-      mood:   { label: 'Mood',    valueType: 'text', placeholder: 'e.g. melancholic' },
+      stats:  { label: 'Stats',  valueType: 'stats-select' },
+      decade: { label: 'Decade', valueType: 'text', placeholder: 'e.g. 1990s' },
+      tag:    { label: 'Tag',    valueType: 'text', placeholder: 'e.g. jazz' },
+      artist: { label: 'Artist', valueType: 'text', placeholder: 'Artist name' },
+      mood:   { label: 'Mood',   valueType: 'text', placeholder: 'e.g. melancholic' },
     };
 
     const STATS_VALUES = [
@@ -748,79 +1105,67 @@
     ];
 
     const WINDOW_OPTIONS = [
-      { value: 'week',     label: 'Last week'     },
-      { value: 'month',   label: 'Last month'    },
-      { value: 'quarter', label: 'Last 3 months'  },
-      { value: 'year',    label: 'Last year'     },
+      { value: 'week',     label: 'Last week'    },
+      { value: 'month',    label: 'Last month'   },
+      { value: 'quarter',  label: 'Last 3 months' },
+      { value: 'year',     label: 'Last year'    },
       { value: 'all_time', label: 'All time'     },
     ];
 
     const PERIOD_OPTIONS = [
-      { value: '7day',    label: 'Last 7 days'   },
-      { value: '1month',  label: 'Last month'    },
+      { value: '7day',    label: 'Last 7 days'    },
+      { value: '1month',  label: 'Last month'     },
       { value: '3month',  label: 'Last 3 months'  },
       { value: '6month',  label: 'Last 6 months'  },
       { value: '12month', label: 'Last 12 months' },
-      { value: 'overall', label: 'All time'      },
+      { value: 'overall', label: 'All time'       },
     ];
 
     const SOURCE_OPTIONS = [
-      { value: 'lastfm',       label: 'Last.fm'       },
-      { value: 'listenbrainz', label: 'ListenBrainz'  },
+      { value: 'lastfm',       label: 'Last.fm'      },
+      { value: 'listenbrainz', label: 'ListenBrainz' },
     ];
 
-    // ── Genre list for tag autocomplete ─────────────────────────────────
-    let genreList = [];
-    async function loadGenres() {
-      try {
-        const res  = await fetch('/playlists/api/genres');
-        const data = await res.json();
-        genreList  = data.genres || [];
-      } catch (e) { /* silent fail */ }
-    }
-
-    // ── Artist list for artist autocomplete ────────────────────────────
+    let genreList  = [];
     let artistList = [];
-    async function loadArtists() {
-      try {
-        const res  = await fetch('/playlists/api/artists');
-        const data = await res.json();
-        artistList = data.artists || [];
-      } catch (e) { /* silent fail */ }
-    }
+    let albumList  = [];
+    async function loadGenres()  { try { const d = await (await fetch('/playlists/api/genres')).json();  genreList  = d.genres  || []; } catch (e) {} }
+    async function loadArtists() { try { const d = await (await fetch('/playlists/api/artists')).json(); artistList = d.artists || []; } catch (e) {} }
+    async function loadAlbums()  { try { const d = await (await fetch('/playlists/api/albums')).json();  albumList  = d.albums  || []; } catch (e) {} }
 
-    function openRuleBuilder(playlistId, playlistName, existingRules, returnTo) {
-      loadGenres();
-      loadArtists();
-      rbPlaylistId   = playlistId;
-      rbPlaylistName = playlistName;
-      rbReturnTo     = returnTo;
+    function openRuleBuilder(playlistName, existingRules, returnTo, editingId = null) {
+      loadGenres(); loadArtists();
+      rbPlaylistName      = playlistName;
+      rbReturnTo          = returnTo;
+      rbMode              = editingId ? 'edit' : 'create';
+      rbEditingPlaylistId = editingId || null;
+      rbPreviewTracks     = [];
 
-      // Populate from existing rules or start with one blank rule
       if (existingRules?.rules?.length) {
-        document.getElementById('rbLimit').value        = existingRules.limit          ?? 50;
-        document.getElementById('rbShuffle').checked   = existingRules.shuffle        ?? true;
+        document.getElementById('rbLimit').value         = existingRules.limit          ?? 25;
         document.getElementById('rbMaxPerArtist').value = existingRules.max_per_artist ?? 5;
-        rbRules = existingRules.rules.map(r => ({ ...r }));
+        rbRules = existingRules.rules.map(r => ({ ...r, required: r.required !== false }));
       } else {
-        document.getElementById('rbLimit').value        = 50;
-        document.getElementById('rbShuffle').checked   = true;
+        document.getElementById('rbLimit').value         = 25;
         document.getElementById('rbMaxPerArtist').value = 5;
         rbRules = [defaultRule()];
       }
 
-      document.getElementById('rulesTitle').textContent = playlistName;
-      document.getElementById('rbStatus').textContent   = '';
-      const saveBtn = document.getElementById('rulesSaveBtn');
-      saveBtn.disabled    = false;
-      saveBtn.textContent = 'Save & Generate';
+      document.getElementById('rulesNameInput').value       = playlistName;
+      document.getElementById('rbStatus').textContent       = '';
+      document.getElementById('rbPreviewPanel').style.display = 'none';
+
+      document.getElementById('rulesPreviewBtn').style.display = rbMode === 'create' ? '' : 'none';
+      document.getElementById('rulesSaveBtn').style.display    = rbMode === 'edit'   ? '' : 'none';
+      document.getElementById('rulesSaveBtn').disabled    = false;
+      document.getElementById('rulesSaveBtn').textContent = 'Save & Generate';
+
       renderRuleRows();
       showRulesView();
+      if (rbMode === 'create') setTimeout(() => document.getElementById('rulesNameInput').focus(), 50);
     }
 
-    function defaultRule() {
-      return { term: 'decade', value: '', weight: 1, mode: 'easy', options: {} };
-    }
+    function defaultRule() { return { term: 'decade', value: '', weight: 1, mode: 'easy', options: {}, required: true }; }
 
     function renderRuleRows() {
       const list = document.getElementById('rbRulesList');
@@ -830,94 +1175,72 @@
 
     function buildRuleRow(rule, index) {
       const row = document.createElement('div');
-      row.className = 'rb-rule';
-      row.dataset.index = index;
+      row.className = 'rb-rule'; row.dataset.index = index;
 
-      // Term select
       const termSel = document.createElement('select');
       termSel.setAttribute('aria-label', 'Term');
       Object.entries(TERMS).forEach(([key, def]) => {
         const opt = document.createElement('option');
-        opt.value = key;
-        opt.textContent = def.label;
+        opt.value = key; opt.textContent = def.label;
         if (key === rule.term) opt.selected = true;
         termSel.appendChild(opt);
       });
 
-      // Value input (rebuilt when term changes)
       const valueWrap = document.createElement('div');
       valueWrap.style.minWidth = '0';
       renderValueInput(valueWrap, rule);
 
-      // Weight — labelled wrapper
-      const weightWrap  = document.createElement('div');
-      weightWrap.className = 'rb-weight-wrap';
-      const weightLabel = document.createElement('span');
-      weightLabel.textContent = 'Weight';
-      const weightInput = document.createElement('input');
-      weightInput.type  = 'number';
-      weightInput.min   = '1';
-      weightInput.max   = '10';
-      weightInput.value = rule.weight ?? 1;
-      weightInput.setAttribute('aria-label', 'Weight');
-      weightWrap.appendChild(weightLabel);
-      weightWrap.appendChild(weightInput);
-
-      // Mode
-      const modeSel = document.createElement('select');
-      modeSel.setAttribute('aria-label', 'Mode');
-      ['easy', 'medium', 'hard'].forEach(m => {
-        const opt = document.createElement('option');
-        opt.value = m;
-        opt.textContent = m.charAt(0).toUpperCase() + m.slice(1);
-        if (m === (rule.mode || 'easy')) opt.selected = true;
-        modeSel.appendChild(opt);
-      });
-
-      // Remove button
-      const removeBtn = document.createElement('button');
-      removeBtn.className   = 'rb-rule-remove';
-      removeBtn.textContent = '✕';
-      removeBtn.title       = 'Remove rule';
-
-      // Wire events
-      termSel.addEventListener('change', () => {
-        rbRules[index].term    = termSel.value;
-        rbRules[index].value   = termSel.value === 'stats' ? 'top_played' : '';
-        rbRules[index].options = {};
-        renderValueInput(valueWrap, rbRules[index]);
-        schedulePreview(index);
-      });
-
-      weightInput.addEventListener('change', () => {
-        rbRules[index].weight = parseInt(weightInput.value) || 1;
-      });
-
-      modeSel.addEventListener('change', () => {
-        rbRules[index].mode = modeSel.value;
-        schedulePreview(index);
-      });
-
-      removeBtn.addEventListener('click', () => {
-        rbRules.splice(index, 1);
+      // Required / Preferred toggle
+      const reqToggle = document.createElement('button');
+      reqToggle.className   = `rb-req-toggle ${rule.required !== false ? 'is-required' : 'is-preferred'}`;
+      reqToggle.textContent = rule.required !== false ? 'Required' : 'Preferred';
+      reqToggle.title       = 'Toggle Required / Preferred';
+      reqToggle.addEventListener('click', () => {
+        rbRules[index].required = rbRules[index].required === false ? true : false;
         renderRuleRows();
       });
 
-      // Preview count — always present, updated by runPreview
+      const weightWrap = document.createElement('div');
+      weightWrap.className    = 'rb-weight-wrap';
+      weightWrap.style.display = rule.required !== false ? 'none' : '';
+      const weightLabel = document.createElement('span'); weightLabel.textContent = 'Weight';
+      const weightInput = document.createElement('input');
+      weightInput.type  = 'number'; weightInput.min = '1'; weightInput.max = '10'; weightInput.style.width = '60px';
+      weightInput.value = rule.weight ?? 1; weightInput.setAttribute('aria-label', 'Weight');
+      weightWrap.appendChild(weightLabel); weightWrap.appendChild(weightInput);
+
+      const modeSel = document.createElement('select');
+      modeSel.setAttribute('aria-label', 'Mode');
+      modeSel.style.cssText = 'width:90px; flex-shrink:0;';
+      ['easy', 'medium', 'hard'].forEach(m => {
+        const opt = document.createElement('option');
+        opt.value = m; opt.textContent = m.charAt(0).toUpperCase() + m.slice(1);
+        if (m === (rule.mode || 'easy')) opt.selected = true;
+        modeSel.appendChild(opt);
+      });
+      modeSel.style.display = rule.required !== false ? '' : 'none';
+
+      const removeBtn = document.createElement('button');
+      removeBtn.className = 'rb-rule-remove'; removeBtn.textContent = '✕'; removeBtn.title = 'Remove rule';
+
+      termSel.addEventListener('change', () => {
+        rbRules[index].term = termSel.value;
+        rbRules[index].value = termSel.value === 'stats' ? 'top_played' : '';
+        rbRules[index].options = {};
+        renderValueInput(valueWrap, rbRules[index]);
+        scheduleRuleCountPreview();
+      });
+      weightInput.addEventListener('change', () => { rbRules[index].weight = parseInt(weightInput.value) || 1; });
+      modeSel.addEventListener('change', () => { rbRules[index].mode = modeSel.value; scheduleRuleCountPreview(); });
+      removeBtn.addEventListener('click', () => { rbRules.splice(index, 1); renderRuleRows(); });
+
       const previewSpan = document.createElement('span');
-      previewSpan.className = 'rb-preview-count';
-      previewSpan.textContent = '';
+      previewSpan.className = 'rb-preview-count'; previewSpan.textContent = '';
 
-      row.appendChild(termSel);
-      row.appendChild(valueWrap);
-      row.appendChild(weightWrap);
-      row.appendChild(modeSel);
-      row.appendChild(removeBtn);
-      row.appendChild(previewSpan);
-
-      // Trigger initial preview
-      schedulePreview(index);
-
+      row.appendChild(termSel); row.appendChild(valueWrap);
+      row.appendChild(reqToggle); row.appendChild(weightWrap);
+      row.appendChild(modeSel); row.appendChild(removeBtn); row.appendChild(previewSpan);
+      scheduleRuleCountPreview();
       return row;
     }
 
@@ -931,296 +1254,231 @@
         wrap.style.cssText = 'display:flex; gap:0.4rem; min-width:0; width:100%;';
 
         const sel = document.createElement('select');
-        sel.setAttribute('aria-label', 'Value');
-        sel.style.flex = '1';
+        sel.setAttribute('aria-label', 'Value'); sel.style.flex = '1';
         STATS_VALUES.forEach(sv => {
           const opt = document.createElement('option');
-          opt.value = sv.value;
-          opt.textContent = sv.label;
-          // Match stored value — top_played_history maps to top_played + source:history
-          const currentVal = rule.options?.source === 'history' && rule.value === 'top_played'
-            ? 'top_played_history'
-            : rule.value;
+          opt.value = sv.value; opt.textContent = sv.label;
+          const currentVal = rule.options?.source === 'history' && rule.value === 'top_played' ? 'top_played_history' : rule.value;
           if (sv.value === currentVal) opt.selected = true;
           sel.appendChild(opt);
         });
 
-        // Window dropdown — shown conditionally
         const windowSel = document.createElement('select');
-        windowSel.setAttribute('aria-label', 'Window');
-        windowSel.style.cssText = 'width:120px; flex-shrink:0;';
+        windowSel.setAttribute('aria-label', 'Window'); windowSel.style.cssText = 'width:120px; flex-shrink:0;';
         WINDOW_OPTIONS.forEach(wo => {
-          const opt = document.createElement('option');
-          opt.value = wo.value;
-          opt.textContent = wo.label;
+          const opt = document.createElement('option'); opt.value = wo.value; opt.textContent = wo.label;
           if (wo.value === (rule.options?.window || 'month')) opt.selected = true;
           windowSel.appendChild(opt);
         });
 
-        // Period dropdown — shown for top_artists
         const periodSel = document.createElement('select');
-        periodSel.setAttribute('aria-label', 'Period');
-        periodSel.style.cssText = 'width:130px; flex-shrink:0;';
+        periodSel.setAttribute('aria-label', 'Period'); periodSel.style.cssText = 'width:130px; flex-shrink:0;';
         PERIOD_OPTIONS.forEach(po => {
-          const opt = document.createElement('option');
-          opt.value = po.value;
-          opt.textContent = po.label;
+          const opt = document.createElement('option'); opt.value = po.value; opt.textContent = po.label;
           if (po.value === (rule.options?.period || 'overall')) opt.selected = true;
           periodSel.appendChild(opt);
         });
 
-        // Source dropdown — shown for top_artists
         const sourceSel = document.createElement('select');
-        sourceSel.setAttribute('aria-label', 'Source');
-        sourceSel.style.cssText = 'width:120px; flex-shrink:0;';
+        sourceSel.setAttribute('aria-label', 'Source'); sourceSel.style.cssText = 'width:120px; flex-shrink:0;';
         SOURCE_OPTIONS.forEach(so => {
-          const opt = document.createElement('option');
-          opt.value = so.value;
-          opt.textContent = so.label;
+          const opt = document.createElement('option'); opt.value = so.value; opt.textContent = so.label;
           if (so.value === (rule.options?.source || 'lastfm')) opt.selected = true;
           sourceSel.appendChild(opt);
         });
 
         function syncWindowVisibility() {
           const sv = STATS_VALUES.find(s => s.value === sel.value);
-          windowSel.style.display  = sv?.hasWindow  ? '' : 'none';
-          periodSel.style.display  = sv?.hasPeriod  ? '' : 'none';
-          sourceSel.style.display  = sv?.hasSource  ? '' : 'none';
+          windowSel.style.display = sv?.hasWindow ? '' : 'none';
+          periodSel.style.display = sv?.hasPeriod ? '' : 'none';
+          sourceSel.style.display = sv?.hasSource ? '' : 'none';
         }
         syncWindowVisibility();
 
         sel.addEventListener('change', () => {
-          const sv = STATS_VALUES.find(s => s.value === sel.value);
-          // Map top_played_history → top_played + source:history
           if (sel.value === 'top_played_history') {
-            rule.value = 'top_played';
-            rule.options = { ...rule.options, source: 'history' };
+            rule.value = 'top_played'; rule.options = { ...rule.options, source: 'history' };
           } else {
-            rule.value = sel.value;
-            const opts = { ...rule.options };
-            delete opts.source;
-            rule.options = opts;
+            rule.value = sel.value; const opts = { ...rule.options }; delete opts.source; rule.options = opts;
           }
-          syncWindowVisibility();
-          schedulePreview(null);
+          syncWindowVisibility(); scheduleRuleCountPreview();
         });
+        windowSel.addEventListener('change', () => { rule.options = { ...rule.options, window: windowSel.value }; scheduleRuleCountPreview(); });
+        periodSel.addEventListener('change', () => { rule.options = { ...rule.options, period: periodSel.value }; scheduleRuleCountPreview(); });
+        sourceSel.addEventListener('change', () => { rule.options = { ...rule.options, source: sourceSel.value }; scheduleRuleCountPreview(); });
 
-        windowSel.addEventListener('change', () => {
-          rule.options = { ...rule.options, window: windowSel.value };
-          schedulePreview(null);
-        });
-
-        periodSel.addEventListener('change', () => {
-          rule.options = { ...rule.options, period: periodSel.value };
-          schedulePreview(null);
-        });
-
-        sourceSel.addEventListener('change', () => {
-          rule.options = { ...rule.options, source: sourceSel.value };
-          schedulePreview(null);
-        });
-
-        wrap.appendChild(sel);
-        wrap.appendChild(windowSel);
-        wrap.appendChild(periodSel);
-        wrap.appendChild(sourceSel);
+        wrap.appendChild(sel); wrap.appendChild(windowSel); wrap.appendChild(periodSel); wrap.appendChild(sourceSel);
         container.appendChild(wrap);
       } else {
         const input = document.createElement('input');
-        input.type        = 'text';
-        input.placeholder = def.placeholder || '';
-        input.value       = rule.value || '';
+        input.type = 'text'; input.placeholder = def.placeholder || ''; input.value = rule.value || '';
         input.setAttribute('aria-label', 'Value');
 
-        // Attach datalist for decade term
         if (rule.term === 'decade') {
           const listId = `decade-list-${Date.now()}`;
-          const dl = document.createElement('datalist');
-          dl.id = listId;
-          const currentYear = new Date().getFullYear();
-          const startDecade = Math.floor(currentYear / 10) * 10;
-          for (let d = startDecade; d >= 1950; d -= 10) {
-            const opt = document.createElement('option');
-            opt.value = `${d}s`;
-            dl.appendChild(opt);
-          }
-          input.setAttribute('list', listId);
-          container.appendChild(dl);
+          const dl = document.createElement('datalist'); dl.id = listId;
+          const sy = Math.floor(new Date().getFullYear() / 10) * 10;
+          for (let d = sy; d >= 1950; d -= 10) { const o = document.createElement('option'); o.value = `${d}s`; dl.appendChild(o); }
+          input.setAttribute('list', listId); container.appendChild(dl);
         }
-
-        // Attach datalist for tag term
         if (rule.term === 'tag' && genreList.length) {
           const listId = `genre-list-${Date.now()}`;
-          const dl = document.createElement('datalist');
-          dl.id = listId;
-          genreList.forEach(g => {
-            const opt = document.createElement('option');
-            opt.value = g;
-            dl.appendChild(opt);
-          });
-          input.setAttribute('list', listId);
-          container.appendChild(dl);
+          const dl = document.createElement('datalist'); dl.id = listId;
+          genreList.forEach(g => { const o = document.createElement('option'); o.value = g; dl.appendChild(o); });
+          input.setAttribute('list', listId); container.appendChild(dl);
         }
-
-        // Attach datalist for artist term
         if (rule.term === 'artist' && artistList.length) {
           const listId = `artist-list-${Date.now()}`;
-          const dl = document.createElement('datalist');
-          dl.id = listId;
-          artistList.forEach(a => {
-            const opt = document.createElement('option');
-            opt.value = a;
-            dl.appendChild(opt);
-          });
-          input.setAttribute('list', listId);
-          container.appendChild(dl);
+          const dl = document.createElement('datalist'); dl.id = listId;
+          artistList.forEach(a => { const o = document.createElement('option'); o.value = a; dl.appendChild(o); });
+          input.setAttribute('list', listId); container.appendChild(dl);
         }
 
         let debounce;
         input.addEventListener('input', () => {
-          rule.value = input.value;
-          clearTimeout(debounce);
-          debounce = setTimeout(() => schedulePreview(null), 400);
+          rule.value = input.value; clearTimeout(debounce);
+          debounce = setTimeout(() => scheduleRuleCountPreview(), 400);
         });
         container.appendChild(input);
       }
     }
 
-    // Preview — debounced, fires for the whole ruleset
-    let previewTimer = null;
-    function schedulePreview() {
-      clearTimeout(previewTimer);
-      previewTimer = setTimeout(runPreview, 500);
-    }
+    let ruleCountTimer = null;
+    function scheduleRuleCountPreview() { clearTimeout(ruleCountTimer); ruleCountTimer = setTimeout(runRuleCountPreview, 500); }
 
-    async function runPreview() {
-      if (!rbPlaylistId) return;
+    async function runRuleCountPreview() {
+      if (rbMode !== 'edit' || !rbEditingPlaylistId) return;
       const rules = buildRulesPayload();
       if (!rules.rules.length) return;
-
       try {
-        const res  = await fetch(`/playlists/${rbPlaylistId}/preview`, {
+        const res  = await fetch(`/playlists/${rbEditingPlaylistId}/preview`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ rules })
         });
         const data = await res.json();
         if (!data.ok) return;
-
-        // Update each row with its preview count
-        const rows = document.querySelectorAll('.rb-rule');
-        rows.forEach((row, i) => {
-          const prev = data.preview[i];
-          if (!prev) return;
-
-          const span = row.querySelector('.rb-preview-count');
-          if (!span) return;
+        document.querySelectorAll('.rb-rule').forEach((row, i) => {
+          const prev = data.preview[i]; const span = row.querySelector('.rb-preview-count');
+          if (!prev || !span) return;
           span.className = `rb-preview-count ${prev.count > 0 ? 'has-tracks' : 'no-tracks'}`;
           span.textContent = `${prev.count} tracks`;
         });
-      } catch (e) {
-        // Preview is best-effort — silent fail
-      }
+      } catch (e) {}
     }
 
     function buildRulesPayload() {
       return {
         version:        1,
-        limit:          parseInt(document.getElementById('rbLimit').value)          || 50,
-        shuffle:        document.getElementById('rbShuffle').checked,
-        max_per_artist: parseInt(document.getElementById('rbMaxPerArtist').value)  || null,
-        rules:   rbRules.filter(r => r.value !== '').map(r => ({
-          term:    r.term,
-          value:   r.value,
-          weight:  r.weight  || 1,
-          mode:    r.mode    || 'easy',
-          options: r.options || {}
+        limit:          parseInt(document.getElementById('rbLimit').value)         || 50,
+        shuffle:        true,
+        max_per_artist: parseInt(document.getElementById('rbMaxPerArtist').value) || null,
+        rules: rbRules.filter(r => r.value !== '' && !(Array.isArray(r.value) && !r.value.length)).map(r => ({
+          term: r.term, value: r.value, weight: r.weight || 1, mode: r.mode || 'easy', options: r.options || {}, required: r.required !== false
         }))
       };
     }
 
-    // Save & generate
-    document.getElementById('rulesSaveBtn').addEventListener('click', async () => {
-      const rules  = buildRulesPayload();
-      const status = document.getElementById('rbStatus');
+    document.getElementById('rulesPreviewBtn').addEventListener('click', async () => {
+      const name      = document.getElementById('rulesNameInput').value.trim();
+      const rules     = buildRulesPayload();
+      const status    = document.getElementById('rbStatus');
+      const previewBtn = document.getElementById('rulesPreviewBtn');
 
-      if (!rules.rules.length) {
-        status.textContent = 'Add at least one rule';
-        status.className = 'rb-status status-err';
-        return;
-      }
+      if (!name)              { status.textContent = 'Add a playlist name'; status.className = 'rb-status status-err'; return; }
+      if (!rules.rules.length){ status.textContent = 'Add at least one rule'; status.className = 'rb-status status-err'; return; }
 
-      const saveBtn = document.getElementById('rulesSaveBtn');
-      saveBtn.disabled     = true;
-      saveBtn.textContent  = 'Saving...';
-      status.textContent   = '';
-      status.className     = 'rb-status';
+      previewBtn.disabled = true; previewBtn.textContent = 'Previewing...'; status.textContent = '';
 
       try {
-        const res  = await fetch(`/playlists/${rbPlaylistId}/rules`, {
+        const res  = await fetch('/playlists/preview-navilist', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ rules })
         });
         const data = await res.json();
-
         if (data.ok) {
-          status.textContent  = `✓ Generated ${data.count} tracks`;
-          status.className    = 'rb-status status-ok';
-          await loadPlaylists();
-          // Return to detail view after short delay
-          setTimeout(async () => {
-            const updated = allPlaylists.find(p => p.id === rbPlaylistId);
-            if (updated) openDetail(updated);
-          }, 800);
+          rbPreviewTracks = data.tracks;
+          rbPlaylistName  = name;
+          document.getElementById('rbPreviewCount').textContent = `— ${data.count} tracks`;
+          renderPreviewTracks('rbPreviewTracks', rbPreviewTracks, (idx) => {
+            rbPreviewTracks.splice(idx, 1);
+            renderPreviewTracks('rbPreviewTracks', rbPreviewTracks, arguments.callee);
+            document.getElementById('rbPreviewCount').textContent = `— ${rbPreviewTracks.length} tracks`;
+          });
+          document.getElementById('rbPreviewPanel').style.display = '';
+          document.getElementById('rbSaveStatus').textContent     = '';
         } else {
-          status.textContent  = `✗ ${data.error || data.errors?.join(', ')}`;
-          status.className    = 'rb-status status-err';
-          saveBtn.disabled    = false;
-          saveBtn.textContent = 'Save & Generate';
+          status.textContent = `✗ ${data.error || data.errors?.join(', ')}`; status.className = 'rb-status status-err';
         }
-      } catch (e) {
-        status.textContent  = '✗ Request failed';
-        status.className    = 'rb-status status-err';
-        saveBtn.disabled    = false;
-        saveBtn.textContent = 'Save & Generate';
-      }
+      } catch (e) { status.textContent = '✗ Request failed'; status.className = 'rb-status status-err'; }
+      finally { previewBtn.disabled = false; previewBtn.textContent = 'Preview →'; }
     });
 
-    // Cancel
+    document.getElementById('rbSaveBtn').addEventListener('click', async () => {
+      const status  = document.getElementById('rbSaveStatus');
+      const saveBtn = document.getElementById('rbSaveBtn');
+      if (!rbPreviewTracks.length) { status.textContent = 'Nothing to save — run Preview first'; status.className = 'rb-status status-err'; return; }
+      saveBtn.disabled = true; saveBtn.textContent = 'Saving...';
+      try {
+        const refreshCron = document.getElementById('rbRefreshCron').value.trim() || null;
+        const res  = await fetch('/playlists/save-navilist', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: rbPlaylistName, rules: buildRulesPayload(), trackIds: rbPreviewTracks.map(t => t.id), refresh_cron: refreshCron })
+        });
+        const data = await res.json();
+        if (data.ok) {
+          await loadPlaylists();
+          setTimeout(() => { const c = allPlaylists.find(p => p.id === data.playlistId); if (c) openDetail(c); else showListView(); }, 400);
+        } else {
+          status.textContent = `✗ ${data.error}`; status.className = 'rb-status status-err';
+          saveBtn.disabled = false; saveBtn.textContent = 'Save Playlist';
+        }
+      } catch (e) { status.textContent = '✗ Request failed'; status.className = 'rb-status status-err'; saveBtn.disabled = false; saveBtn.textContent = 'Save Playlist'; }
+    });
+
+    document.getElementById('rulesSaveBtn').addEventListener('click', async () => {
+      const rules   = buildRulesPayload();
+      const status  = document.getElementById('rbStatus');
+      const saveBtn = document.getElementById('rulesSaveBtn');
+      if (!rules.rules.length) { status.textContent = 'Add at least one rule'; status.className = 'rb-status status-err'; return; }
+      saveBtn.disabled = true; saveBtn.textContent = 'Saving...'; status.textContent = ''; status.className = 'rb-status';
+      try {
+        const res  = await fetch(`/playlists/${rbEditingPlaylistId}/rules`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ rules })
+        });
+        const data = await res.json();
+        if (data.ok) {
+          status.textContent = `✓ ${data.count} tracks`; status.className = 'rb-status status-ok';
+          await loadPlaylists();
+          setTimeout(() => { const u = allPlaylists.find(p => p.id === rbEditingPlaylistId); if (u) openDetail(u); }, 800);
+        } else {
+          status.textContent = `✗ ${data.error || data.errors?.join(', ')}`; status.className = 'rb-status status-err';
+          saveBtn.disabled = false; saveBtn.textContent = 'Save & Generate';
+        }
+      } catch (e) { status.textContent = '✗ Request failed'; status.className = 'rb-status status-err'; saveBtn.disabled = false; saveBtn.textContent = 'Save & Generate'; }
+    });
+
+    document.getElementById('rbPreviewCancelBtn').addEventListener('click', () => {
+      rbPreviewTracks = []; document.getElementById('rbPreviewPanel').style.display = 'none';
+    });
+
     document.getElementById('rulesCancelBtn').addEventListener('click', () => {
-      if (rbReturnTo === 'detail') {
-        const p = allPlaylists.find(pl => pl.id === rbPlaylistId);
-        if (p) { openDetail(p); return; }
-      }
+      if (rbReturnTo === 'detail' && rbEditingPlaylistId) { const p = allPlaylists.find(pl => pl.id === rbEditingPlaylistId); if (p) { openDetail(p); return; } }
       showListView();
     });
-
-    // Back button on rules view
     document.getElementById('rulesBackBtn').addEventListener('click', () => {
-      if (rbReturnTo === 'detail') {
-        const p = allPlaylists.find(pl => pl.id === rbPlaylistId);
-        if (p) { openDetail(p); return; }
-      }
+      if (rbReturnTo === 'detail' && rbEditingPlaylistId) { const p = allPlaylists.find(pl => pl.id === rbEditingPlaylistId); if (p) { openDetail(p); return; } }
       showListView();
     });
-
-    // Add rule
-    document.getElementById('rbAddRule').addEventListener('click', () => {
-      rbRules.push(defaultRule());
-      renderRuleRows();
-    });
+    document.getElementById('rbAddRule').addEventListener('click', () => { rbRules.push(defaultRule()); renderRuleRows(); });
 
     // ── New playlist modal ─────────────────────────────────────────────────
     document.getElementById('newPlaylistWideBtn').addEventListener('click', () => {
       document.getElementById('newPlaylistModal').style.display = 'flex';
-      document.getElementById('newPlaylistName').value = '';
-      document.getElementById('createStatus').textContent = '';
-      document.getElementById('newPlaylistName').focus();
     });
-
     document.getElementById('cancelNewPlaylist').addEventListener('click', () => {
       document.getElementById('newPlaylistModal').style.display = 'none';
     });
-
     document.getElementById('newPlaylistModal').addEventListener('click', (e) => {
       if (e.target === e.currentTarget) e.currentTarget.style.display = 'none';
     });
@@ -1230,49 +1488,41 @@
         document.querySelectorAll('.pl-type-option').forEach(o => o.classList.remove('selected'));
         opt.classList.add('selected');
         selectedType = opt.dataset.type;
-        const isLb = selectedType === 'listenbrainz';
-        document.getElementById('newPlaylistName').style.display = isLb ? 'none' : '';
-        document.getElementById('lbTypeNote').style.display      = isLb ? '' : 'none';
       });
     });
 
-    document.getElementById('createPlaylistBtn').addEventListener('click', async () => {
-      const status = document.getElementById('createStatus');
+    document.getElementById('createPlaylistBtn').addEventListener('click', () => {
+      document.getElementById('newPlaylistModal').style.display = 'none';
 
-      // ListenBrainz type — no playlist creation needed, go straight to LB view
-      if (selectedType === 'listenbrainz') {
-        document.getElementById('newPlaylistModal').style.display = 'none';
-        showLbView();
+      if (selectedType === 'navilist') {
+        openRuleBuilder('', null, 'list');
         return;
       }
-
-      const name = document.getElementById('newPlaylistName').value.trim();
-      if (!name) { status.textContent = 'Name required'; status.className = 'status-err'; return; }
-
-      status.textContent = 'Creating...'; status.className = 'status-pending';
-
-      const res  = await fetch('/playlists/create', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name })
-      });
-      const data = await res.json();
-
-      if (data.ok) {
-        document.getElementById('newPlaylistModal').style.display = 'none';
-        await loadPlaylists();
-
-        if (selectedType === 'navilist') {
-          const created = allPlaylists.find(p => p.name === name);
-          if (created) openRuleBuilder(created.id, created.name, null, 'list');
-        } else {
-          showListView();
-        }
-      } else {
-        status.textContent = `✗ ${data.error}`; status.className = 'status-err';
+      if (selectedType === 'radio') {
+        radioSeeds = []; radioPreviewTracks = []; radioPreviewConfig = null;
+        renderRadioSeeds();
+        document.getElementById('radioNameInput').value            = '';
+        document.getElementById('radioRefreshCron').value           = '';
+        document.getElementById('radioStatus').textContent          = '';
+        document.getElementById('radioPreviewPanel').style.display = 'none';
+        document.getElementById('radioPreviewBtn').disabled        = false;
+        document.getElementById('radioPreviewBtn').textContent     = 'Preview →';
+        showRadioView();
+        setTimeout(() => document.getElementById('radioNameInput').focus(), 50);
+        loadArtists().then(() => {
+          const dl = document.getElementById('radioArtistList');
+          dl.innerHTML = '';
+          artistList.forEach(a => { const o = document.createElement('option'); o.value = a; dl.appendChild(o); });
+        });
+        return;
       }
+      if (selectedType === 'nsp') { openNspBuilder(null, null); return; }
+      if (selectedType === 'listenbrainz') { showLbView(); return; }
+      if (selectedType === 'lastfm')       { showLfmView(); return; }
+      if (selectedType === 'manual')       { showManualView(); return; }
     });
 
-    // ── View toggle ──────────────────────────────────────────────────────────────────
+    // ── View toggle ────────────────────────────────────────────────────────
     function applyViewMode(mode) {
       viewMode = mode;
       localStorage.setItem('navilist_pl_view', mode);
@@ -1280,25 +1530,12 @@
       document.getElementById('viewBtnList').classList.toggle('active',  mode === 'list');
       renderCards();
     }
-
     document.getElementById('viewBtnCards').addEventListener('click', () => applyViewMode('cards'));
     document.getElementById('viewBtnList').addEventListener('click',  () => applyViewMode('list'));
-
-    // Apply saved view mode button state on init
-    if (viewMode === 'list') {
-      document.getElementById('viewBtnCards').classList.remove('active');
-      document.getElementById('viewBtnList').classList.add('active');
-    }
+    if (viewMode === 'list') { document.getElementById('viewBtnCards').classList.remove('active'); document.getElementById('viewBtnList').classList.add('active'); }
 
     // ── Filters & search ───────────────────────────────────────────────────
-    document.querySelectorAll('.pl-filter-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        document.querySelectorAll('.pl-filter-btn').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        activeFilter = btn.dataset.filter;
-        renderCards();
-      });
-    });
+    document.getElementById('filterSelect').addEventListener('change', e => { activeFilter = e.target.value; renderCards(); });
 
     let searchTimer;
     document.getElementById('searchInput').addEventListener('input', (e) => {
@@ -1306,24 +1543,329 @@
       searchTimer = setTimeout(() => { searchQuery = e.target.value; renderCards(); }, 200);
     });
 
-    // ── Back button (detail view) ──────────────────────────────────────────
-    document.getElementById('backBtn').addEventListener('click', () => {
-      showListView();
-      loadPlaylists();
+    document.getElementById('backBtn').addEventListener('click', () => { showListView(); loadPlaylists(); });
+
+    // ── Radio builder ──────────────────────────────────────────────────────
+    function renderRadioSeeds() {
+      const chips = document.getElementById('radioSeedChips');
+      chips.innerHTML = '';
+      radioSeeds.forEach((name, i) => {
+        const chip = document.createElement('div');
+        chip.className = 'radio-seed-chip';
+        chip.innerHTML = `<span>${esc(name)}</span><button title="Remove">✕</button>`;
+        chip.querySelector('button').addEventListener('click', () => { radioSeeds.splice(i, 1); renderRadioSeeds(); });
+        chips.appendChild(chip);
+      });
+    }
+
+    function addRadioSeed() {
+      const input = document.getElementById('radioSeedInput');
+      const name  = input.value.trim();
+      if (!name || radioSeeds.includes(name)) { input.value = ''; return; }
+      radioSeeds.push(name); input.value = ''; renderRadioSeeds();
+    }
+
+    document.getElementById('radioAddSeedBtn').addEventListener('click', addRadioSeed);
+    document.getElementById('radioSeedInput').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addRadioSeed(); } });
+    document.getElementById('radioCancelBtn').addEventListener('click', () => showListView());
+    document.getElementById('radioBackBtn').addEventListener('click',   () => showListView());
+
+    document.getElementById('radioPreviewBtn').addEventListener('click', async () => {
+      const stationName = document.getElementById('radioNameInput').value.trim();
+      const status      = document.getElementById('radioStatus');
+      const previewBtn  = document.getElementById('radioPreviewBtn');
+
+      if (!stationName)       { status.textContent = 'Add a station name'; status.className = 'rb-status status-err'; return; }
+      if (!radioSeeds.length) { status.textContent = 'Add at least one seed artist'; status.className = 'rb-status status-err'; return; }
+
+      const depth        = parseFloat(document.querySelector('input[name="radioDepth"]:checked')?.value || '0.25');
+      const track_count  = parseInt(document.getElementById('radioTrackCount').value) || 50;
+      const include_seed = document.getElementById('radioIncludeSeed').checked;
+
+      previewBtn.disabled = true; previewBtn.textContent = 'Previewing...'; status.textContent = ''; status.className = 'rb-status';
+
+      try {
+        const res  = await fetch('/playlists/preview-radio', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ artists: radioSeeds, depth, track_count, include_seed })
+        });
+        const data = await res.json();
+        if (data.ok) {
+          radioPreviewTracks = data.tracks;
+          radioPreviewConfig = data.config;
+          document.getElementById('radioPreviewCount').textContent = `— ${data.count} tracks`;
+          renderPreviewTracks('radioPreviewTracks', radioPreviewTracks, (idx) => {
+            radioPreviewTracks.splice(idx, 1);
+            renderPreviewTracks('radioPreviewTracks', radioPreviewTracks, arguments.callee);
+            document.getElementById('radioPreviewCount').textContent = `— ${radioPreviewTracks.length} tracks`;
+          });
+          document.getElementById('radioPreviewPanel').style.display = '';
+          document.getElementById('radioSaveStatus').textContent     = '';
+        } else { status.textContent = `✗ ${data.error}`; status.className = 'rb-status status-err'; }
+      } catch (e) { status.textContent = '✗ Request failed'; status.className = 'rb-status status-err'; }
+      finally { previewBtn.disabled = false; previewBtn.textContent = 'Preview →'; }
     });
 
-    // ── LB view (playlists page) ───────────────────────────────────────
-    let lbPlaylistData = []; // cached list from last Load
+    document.getElementById('radioSaveBtn').addEventListener('click', async () => {
+      const stationName = document.getElementById('radioNameInput').value.trim();
+      const status      = document.getElementById('radioSaveStatus');
+      const saveBtn     = document.getElementById('radioSaveBtn');
+      if (!radioPreviewTracks.length) { status.textContent = 'Nothing to save — run Preview first'; status.className = 'rb-status status-err'; return; }
+      saveBtn.disabled = true; saveBtn.textContent = 'Saving...';
+      try {
+        const refreshCron = document.getElementById('radioRefreshCron').value.trim() || null;
+        const res  = await fetch('/playlists/save-radio', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: stationName, config: radioPreviewConfig, trackIds: radioPreviewTracks.map(t => t.id), refresh_cron: refreshCron })
+        });
+        const data = await res.json();
+        if (data.ok) {
+          await loadPlaylists();
+          setTimeout(() => { const c = allPlaylists.find(p => p.id === data.playlistId); if (c) openDetail(c); else showListView(); }, 400);
+        } else {
+          status.textContent = `✗ ${data.error}`; status.className = 'rb-status status-err';
+          saveBtn.disabled = false; saveBtn.textContent = 'Save Playlist';
+        }
+      } catch (e) { status.textContent = '✗ Request failed'; status.className = 'rb-status status-err'; saveBtn.disabled = false; saveBtn.textContent = 'Save Playlist'; }
+    });
+
+    document.getElementById('radioPreviewCancelBtn').addEventListener('click', () => {
+      radioPreviewTracks = []; radioPreviewConfig = null;
+      document.getElementById('radioPreviewPanel').style.display = 'none';
+    });
+
+    // ── NSP detail ──────────────────────────────────────────────────────────
+    function openNspDetail(p) {
+      showDetailView();
+      document.getElementById('detailName').textContent = p.name;
+      const badge = document.getElementById('detailBadge');
+      badge.className   = 'pl-badge pl-badge-nsp';
+      badge.textContent = 'Navidrome';
+      document.getElementById('detailMeta').textContent = 'Navidrome Smart Playlist — evaluated live by Navidrome';
+
+      const actions = document.getElementById('detailActions');
+      actions.innerHTML = '';
+
+      const editBtn = document.createElement('button');
+      editBtn.className = 'btn btn-secondary btn-sm'; editBtn.textContent = 'Edit';
+      editBtn.addEventListener('click', () => {
+        const slug = p.nsp_slug || p.id.replace('nsp:', '');
+        openNspBuilder(p.name, p.nsp_config, slug);
+      });
+      actions.appendChild(editBtn);
+
+      const deleteBtn = document.createElement('button');
+      deleteBtn.className = 'btn btn-danger btn-sm'; deleteBtn.textContent = 'Delete';
+      deleteBtn.addEventListener('click', () => deletePlaylist(p));
+      actions.appendChild(deleteBtn);
+
+      const json     = JSON.stringify(p.nsp_config, null, 2) || '{}';
+      const copyBtn  = document.createElement('button');
+      copyBtn.className = 'btn btn-secondary btn-sm'; copyBtn.textContent = 'Copy JSON';
+      copyBtn.addEventListener('click', () => {
+        navigator.clipboard.writeText(json);
+        copyBtn.textContent = 'Copied!';
+        setTimeout(() => { copyBtn.textContent = 'Copy JSON'; }, 1500);
+      });
+      actions.appendChild(copyBtn);
+
+      document.getElementById('detailBody').innerHTML = `
+        <pre style="background:#f5f5f3; border:0.5px solid #ddddd8; border-radius:6px; padding:1rem; font-size:0.78rem; overflow-x:auto; white-space:pre-wrap;">${esc(json)}</pre>`;
+    }
+
+    // ── NSP builder ────────────────────────────────────────────────────────
+    let nspFields          = [];
+    let nspOperatorsByType = {};
+    let nspOperatorLabels  = {};
+    let nspConditions      = [];
+    let nspEditingId       = null;
+
+    async function loadNspFields() {
+      if (nspFields.length) return;
+      try {
+        const d = await (await fetch('/nsp/api/fields')).json();
+        nspFields          = d.fields          || [];
+        nspOperatorsByType = d.operatorsByType  || {};
+        nspOperatorLabels  = d.operatorLabels   || {};
+        populateNspSortField();
+      } catch (e) {}
+    }
+
+    function populateNspSortField() {
+      const sel = document.getElementById('nspSortField');
+      sel.innerHTML = '';
+      const random = document.createElement('option');
+      random.value = 'random'; random.textContent = 'Random'; sel.appendChild(random);
+      nspFields.forEach(f => {
+        const opt = document.createElement('option');
+        opt.value = f.value; opt.textContent = f.label; sel.appendChild(opt);
+      });
+    }
+
+    function openNspBuilder(existingName, existingConfig, editingSlug = null) {
+      nspEditingId  = editingSlug || null;
+      nspConditions = existingConfig?.all ? existingConfig.all.map(c => ({ ...c })) : [];
+      if (!nspConditions.length) nspConditions = [defaultNspCondition()];
+      document.getElementById('nspNameInput').value            = existingName || '';
+      document.getElementById('nspLimit').value                = existingConfig?.limit ?? 25;
+      document.getElementById('nspSortOrder').value            = existingConfig?.order || 'random';
+      document.getElementById('nspStatus').textContent         = '';
+      document.getElementById('nspPreviewPanel').style.display = 'none';
+      loadNspFields().then(() => renderNspConditions());
+      loadArtists(); loadGenres(); loadAlbums();
+      showNspView();
+      setTimeout(() => document.getElementById('nspNameInput').focus(), 50);
+    }
+
+    function defaultNspCondition() { return { operator: 'gt', field: 'playcount', value: '-1' }; }
+
+    function renderNspConditions() {
+      const list = document.getElementById('nspConditionsList');
+      list.innerHTML = '';
+      nspConditions.forEach((cond, i) => list.appendChild(buildNspConditionRow(cond, i)));
+    }
+
+    function buildNspConditionRow(cond, index) {
+      const row = document.createElement('div');
+      row.className = 'rb-rule';
+      row.style.gridTemplateColumns = '180px 160px 1fr auto';
+      const fieldSel = document.createElement('select');
+      fieldSel.setAttribute('aria-label', 'Field'); fieldSel.style.width = '160px';
+      nspFields.forEach(f => {
+        const opt = document.createElement('option'); opt.value = f.value; opt.textContent = f.label;
+        if (f.value === cond.field) opt.selected = true; fieldSel.appendChild(opt);
+      });
+      const opSel = document.createElement('select');
+      opSel.setAttribute('aria-label', 'Operator'); opSel.style.width = '140px';
+      function getFieldType(v) { return nspFields.find(f => f.value === v)?.type || 'string'; }
+      function populateOps(fieldVal) {
+        opSel.innerHTML = '';
+        (nspOperatorsByType[getFieldType(fieldVal)] || []).forEach(op => {
+          const opt = document.createElement('option'); opt.value = op; opt.textContent = nspOperatorLabels[op] || op;
+          if (op === cond.operator) opt.selected = true; opSel.appendChild(opt);
+        });
+      }
+      populateOps(cond.field);
+      const valueWrap = document.createElement('div'); valueWrap.style.cssText = 'flex:1; min-width:0;';
+      function buildValueInput(fieldVal, opVal) {
+        valueWrap.innerHTML = '';
+        const ft = getFieldType(fieldVal);
+        if (ft === 'boolean') {
+          const sel = document.createElement('select'); sel.style.width = '90px';
+          ['true','false'].forEach(v => { const o = document.createElement('option'); o.value = v; o.textContent = v; if (v === String(cond.value)) o.selected = true; sel.appendChild(o); });
+          sel.addEventListener('change', () => { nspConditions[index].value = sel.value === 'true'; }); valueWrap.appendChild(sel);
+        } else if (opVal === 'inTheRange') {
+          const vals = Array.isArray(cond.value) ? cond.value : ['', ''];
+          const from = document.createElement('input'); from.type = 'text'; from.placeholder = 'from'; from.value = vals[0] || ''; from.style.cssText = 'width:80px; margin-right:0.3rem;';
+          const to   = document.createElement('input'); to.type = 'text'; to.placeholder = 'to'; to.value = vals[1] || ''; to.style.width = '80px';
+          from.addEventListener('input', () => { nspConditions[index].value = [from.value, to.value]; });
+          to.addEventListener('input',   () => { nspConditions[index].value = [from.value, to.value]; });
+          valueWrap.appendChild(from); valueWrap.appendChild(to);
+        } else if (opVal === 'inTheLast' || opVal === 'notInTheLast') {
+          const inp = document.createElement('input'); inp.type = 'number'; inp.min = '1'; inp.value = cond.value || 30; inp.style.width = '70px';
+          const lbl = document.createElement('span'); lbl.textContent = 'days'; lbl.style.cssText = 'font-size:0.82rem; color:#aaa; margin-left:0.3rem;';
+          inp.addEventListener('input', () => { nspConditions[index].value = parseInt(inp.value) || 30; });
+          valueWrap.appendChild(inp); valueWrap.appendChild(lbl);
+        } else {
+          const inp = document.createElement('input'); inp.type = ft === 'number' ? 'number' : 'text'; inp.value = cond.value !== undefined ? cond.value : ''; inp.setAttribute('aria-label', 'Value');
+          // Attach datalist for known string fields
+          if (ft === 'string') {
+            const listId = `nsp-dl-${index}-${Date.now()}`;
+            const dl = document.createElement('datalist'); dl.id = listId;
+            let suggestions = [];
+            if (fieldVal === 'artist' || fieldVal === 'albumartist') suggestions = artistList;
+            else if (fieldVal === 'album')  suggestions = albumList;
+            else if (fieldVal === 'genre')  suggestions = genreList;
+            if (suggestions.length) {
+              suggestions.forEach(s => { const o = document.createElement('option'); o.value = s; dl.appendChild(o); });
+              inp.setAttribute('list', listId);
+              valueWrap.appendChild(dl);
+            }
+          }
+          inp.addEventListener('input', () => { nspConditions[index].value = ft === 'number' ? (parseFloat(inp.value) || 0) : inp.value; }); valueWrap.appendChild(inp);
+        }
+      }
+      buildValueInput(cond.field, cond.operator);
+      fieldSel.addEventListener('change', () => { nspConditions[index].field = fieldSel.value; populateOps(fieldSel.value); nspConditions[index].operator = opSel.value; nspConditions[index].value = ''; buildValueInput(fieldSel.value, opSel.value); });
+      opSel.addEventListener('change', () => { nspConditions[index].operator = opSel.value; buildValueInput(fieldSel.value, opSel.value); });
+      const removeBtn = document.createElement('button'); removeBtn.className = 'rb-rule-remove'; removeBtn.textContent = '✕'; removeBtn.title = 'Remove';
+      removeBtn.addEventListener('click', () => { nspConditions.splice(index, 1); renderNspConditions(); });
+      row.appendChild(fieldSel); row.appendChild(opSel); row.appendChild(valueWrap); row.appendChild(removeBtn);
+      return row;
+    }
+
+    function buildNspPayload() {
+      const name  = document.getElementById('nspNameInput').value.trim();
+      const limit = parseInt(document.getElementById('nspLimit').value) || 25;
+      const order = document.getElementById('nspSortOrder').value;
+      const sort  = document.getElementById('nspSortField').value;
+      const payload = { name, all: nspConditions.filter(c => c.field && c.operator).map(c => ({ [c.operator]: { [c.field]: c.value } })), limit };
+      if (sort === 'random') { payload.sort = 'random'; } else { payload.sort = sort; payload.order = order; }
+      return payload;
+    }
+
+    document.getElementById('nspAddCondition').addEventListener('click', () => { nspConditions.push(defaultNspCondition()); renderNspConditions(); });
+
+    document.getElementById('nspPreviewBtn').addEventListener('click', () => {
+      const name = document.getElementById('nspNameInput').value.trim();
+      const status = document.getElementById('nspStatus');
+      if (!name) { status.textContent = 'Add a playlist name'; status.className = 'rb-status status-err'; return; }
+      if (!nspConditions.length) { status.textContent = 'Add at least one condition'; status.className = 'rb-status status-err'; return; }
+      status.textContent = '';
+      document.getElementById('nspJsonPreview').textContent = JSON.stringify(buildNspPayload(), null, 2);
+      document.getElementById('nspPreviewPanel').style.display = '';
+      document.getElementById('nspSaveStatus').textContent = '';
+    });
+
+    document.getElementById('nspPreviewCancelBtn').addEventListener('click', () => { document.getElementById('nspPreviewPanel').style.display = 'none'; });
+
+    document.getElementById('nspSaveBtn').addEventListener('click', async () => {
+      const name = document.getElementById('nspNameInput').value.trim();
+      const status = document.getElementById('nspSaveStatus');
+      const saveBtn = document.getElementById('nspSaveBtn');
+      saveBtn.disabled = true; saveBtn.textContent = 'Saving...';
+      try {
+        const res  = await fetch('/nsp/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, config: buildNspPayload(), existingSlug: nspEditingId || undefined }) });
+        const data = await res.json();
+        if (data.ok) {
+          await loadPlaylists();
+          // If editing, return to detail view with updated data
+          if (nspEditingId) {
+            const updated = allPlaylists.find(pl => pl.id === `nsp:${data.slug}`);
+            if (updated) { openNspDetail(updated); return; }
+          }
+          showListView();
+        }
+        else { status.textContent = `✗ ${data.error}`; status.className = 'rb-status status-err'; }
+      } catch (e) { status.textContent = '✗ Request failed'; status.className = 'rb-status status-err'; }
+      finally { saveBtn.disabled = false; saveBtn.textContent = 'Save Playlist'; }
+    });
+
+    document.getElementById('nspCancelBtn').addEventListener('click', () => showListView());
+    document.getElementById('nspBackBtn').addEventListener('click',   () => showListView());
+
+    // ── Manual builder ─────────────────────────────────────────────────────
+    // ── LB view
+
+    // ── LB view ────────────────────────────────────────────────────────────
+    let lbPlaylistData = [];
 
     function renderLbPlaylists(playlists) {
       lbPlaylistData = playlists;
       const container = document.getElementById('plLbList');
-      if (!playlists.length) {
-        container.innerHTML = '<div class="pl-empty"><p>No playlists found on your ListenBrainz account.</p></div>';
-        return;
-      }
+      if (!playlists.length) { container.innerHTML = '<div class="pl-empty">No playlists found on your ListenBrainz account.</div>'; return; }
       container.innerHTML = '';
       playlists.forEach(p => container.appendChild(buildLbCard(p)));
+    }
+
+    const LB_SOURCE_PATCH_LABELS = {
+      'weekly-exploration': 'Weekly Exploration',
+      'weekly-jams':        'Weekly Jams',
+      'daily-jams':         'Daily Jams',
+    };
+
+    function getLbDisplayTitle(p) {
+      return `ListenBrainz — ${p.title}`;
     }
 
     function buildLbCard(p) {
@@ -1333,157 +1875,95 @@
       const tracks      = p.tracks || [];
       const matched     = tracks.filter(t => t.matched).length;
       const statText    = tracks.length ? `${matched} of ${tracks.length} in library` : 'No tracks synced';
+      const isRotating   = !!p.source_patch;
+      const displayTitle = getLbDisplayTitle(p);
 
       const card = document.createElement('div');
       card.className = `lb-card${isEnabled ? ' is-enabled' : ''}${isSaved ? ' is-saved' : ''}`;
       card.dataset.mbid = p.lb_mbid;
 
-      const body = document.createElement('div');
-      body.className = 'lb-card-body';
-
-      const titleEl = document.createElement('div');
-      titleEl.className = 'lb-card-title';
-      titleEl.textContent = p.title;
-
+      const body = document.createElement('div'); body.className = 'lb-card-body';
+      const titleEl = document.createElement('div'); titleEl.className = 'lb-card-title'; titleEl.textContent = displayTitle;
       const badge = document.createElement('span');
-      const isRotating = !!p.slot_key;
       badge.className = `lb-pl-badge ${isGenerated ? 'lb-pl-generated' : 'lb-pl-user'}`;
       badge.textContent = isRotating ? '↻ Rotating' : (isGenerated ? 'Generated' : 'Mine');
       if (isRotating) badge.title = 'Updates automatically each week';
-
-      const stat = document.createElement('span');
-      stat.className = 'lb-card-stat';
-      stat.textContent = statText;
-
-      const actions = document.createElement('div');
-      actions.className = 'lb-card-actions';
-
+      const stat = document.createElement('span'); stat.className = 'lb-card-stat'; stat.textContent = statText;
+      const actions = document.createElement('div'); actions.className = 'lb-card-actions';
       const addBtn = document.createElement('button');
-      addBtn.className = 'btn btn-secondary btn-sm';
-      addBtn.textContent = isEnabled ? '✓ Enabled' : '+ Add';
+      addBtn.className = 'btn btn-secondary btn-sm'; addBtn.textContent = isEnabled ? '✓ Subscribed' : 'Subscribe';
       if (isEnabled) addBtn.style.color = '#27ae60';
-      addBtn.addEventListener('click', e => { e.stopPropagation(); importLbPlaylist(p, addBtn, card); });
-
-      if (isGenerated) {
-        const saveBtn = document.createElement('button');
-        saveBtn.className = 'btn btn-secondary btn-sm';
-        saveBtn.textContent = isSaved ? '🔒' : 'Save';
-        saveBtn.title = isSaved ? 'Saved this week' : 'Save this week';
-        if (isSaved) saveBtn.style.color = '#27ae60';
-        saveBtn.addEventListener('click', e => { e.stopPropagation(); saveLbWeek(p, saveBtn, card); });
-        actions.appendChild(saveBtn);
-      }
-      actions.appendChild(addBtn);
-
-      const chevron = document.createElement('span');
-      chevron.className = 'lb-card-chevron';
-      chevron.textContent = '›';
-
-      body.appendChild(titleEl);
-      body.appendChild(badge);
-      body.appendChild(stat);
-      body.appendChild(actions);
-      body.appendChild(chevron);
-      body.addEventListener('click', (e) => {
-        if (e.target.closest('.lb-card-actions')) return;
-        toggleLbCardTracks(card, tracks);
+      addBtn.addEventListener('click', e => {
+        e.stopPropagation();
+        if (addBtn.textContent === '✓ Subscribed') unsubscribeLbPlaylist(p, addBtn, card);
+        else importLbPlaylist(p, addBtn, card);
       });
-
-      const tracksPanel = document.createElement('div');
-      tracksPanel.className = 'lb-card-tracks';
-      tracksPanel.style.display = 'none';
-
-      card.appendChild(body);
-      card.appendChild(tracksPanel);
+      const saveBtn = document.createElement('button');
+      saveBtn.className = 'btn btn-secondary btn-sm'; saveBtn.textContent = isSaved ? '🔒' : 'Save';
+      saveBtn.title = isSaved ? 'Saved' : 'Save a copy';
+      if (isSaved) saveBtn.style.color = '#27ae60';
+      saveBtn.addEventListener('click', e => { e.stopPropagation(); saveLbWeek(p, saveBtn, card); });
+      actions.appendChild(saveBtn);
+      if (isGenerated) actions.appendChild(addBtn);
+      const chevron = document.createElement('span'); chevron.className = 'lb-card-chevron'; chevron.textContent = '›';
+      body.appendChild(titleEl); body.appendChild(badge); body.appendChild(stat); body.appendChild(actions); body.appendChild(chevron);
+      body.addEventListener('click', e => { if (!e.target.closest('.lb-card-actions')) toggleLbCardTracks(card, tracks); });
+      const tracksPanel = document.createElement('div'); tracksPanel.className = 'lb-card-tracks'; tracksPanel.style.display = 'none';
+      card.appendChild(body); card.appendChild(tracksPanel);
       return card;
     }
 
     function toggleLbCardTracks(card, tracks) {
-      const panel  = card.querySelector('.lb-card-tracks');
+      const panel = card.querySelector('.lb-card-tracks');
       const isOpen = panel.style.display !== 'none';
-
       if (isOpen) { panel.style.display = 'none'; card.classList.remove('is-open'); return; }
-
-      card.classList.add('is-open');
-      panel.style.display = '';
-
-      if (!tracks.length) {
-        panel.innerHTML = '<div class="lb-track-loading">No tracks cached. Run Sync All from Services.</div>';
-        return;
-      }
-
+      card.classList.add('is-open'); panel.style.display = '';
+      if (!tracks.length) { panel.innerHTML = '<div class="lb-track-loading">No tracks cached. Run Sync All from Services.</div>'; return; }
       const missingCount = tracks.filter(t => !t.matched).length;
-      let html = '';
-      if (missingCount > 0) {
-        html += `<div class="lb-track-loading">${tracks.filter(t => t.matched).length} of ${tracks.length} tracks in your library</div>`;
-      }
+      let html = missingCount > 0 ? `<div class="lb-track-loading">${tracks.filter(t => t.matched).length} of ${tracks.length} tracks in your library</div>` : '';
       html += tracks.map((t, i) => `
         <div class="lb-card-track${t.matched ? '' : ' is-missing'}">
           <span class="lb-track-num">${i + 1}</span>
-          <div class="lb-track-info">
-            <div class="lb-track-title">${esc(t.title)}</div>
-            <div class="lb-track-artist">${esc(t.artist)}</div>
-          </div>
+          <div class="lb-track-info"><div class="lb-track-title">${esc(t.title)}</div><div class="lb-track-artist">${esc(t.artist)}</div></div>
           ${t.matched ? '<span></span>' : '<span class="lb-track-missing-pill">Not in library</span>'}
-        </div>
-      `).join('');
+        </div>`).join('');
       panel.innerHTML = html;
     }
 
     async function importLbPlaylist(p, btn, card) {
-      btn.disabled = true;
-      btn.textContent = 'Adding…';
+      btn.disabled = true; btn.textContent = 'Subscribing…';
       try {
         const res  = await fetch(`/sync/lb-playlists/${p.lb_mbid}/import`, { method: 'POST' });
         const data = await res.json();
-        if (data.ok) {
-          btn.textContent = `✓ Added (${data.count} tracks)`;
-          btn.style.color = '#27ae60';
-          card.classList.add('is-enabled');
-        } else {
-          btn.disabled = false;
-          btn.textContent = '+ Add';
-          alert(`✗ ${data.error}`);
-        }
-      } catch (e) {
-        btn.disabled = false;
-        btn.textContent = '+ Add';
-      }
+        if (data.ok) { btn.textContent = '✓ Subscribed'; btn.style.color = '#27ae60'; card.classList.add('is-enabled'); }
+        else { btn.disabled = false; btn.textContent = 'Subscribe'; alert(`✗ ${data.error}`); }
+      } catch (e) { btn.disabled = false; btn.textContent = 'Subscribe'; }
+    }
+
+    async function unsubscribeLbPlaylist(p, btn, card) {
+      btn.disabled = true; btn.textContent = 'Unsubscribing…';
+      try {
+        const res  = await fetch(`/sync/lb-playlists/${p.lb_mbid}/unsubscribe`, { method: 'POST' });
+        const data = await res.json();
+        if (data.ok) { btn.textContent = 'Subscribe'; btn.style.color = ''; btn.disabled = false; card.classList.remove('is-enabled'); }
+        else { btn.disabled = false; btn.textContent = '✓ Subscribed'; alert(`✗ ${data.error}`); }
+      } catch (e) { btn.disabled = false; btn.textContent = '✓ Subscribed'; }
     }
 
     async function saveLbWeek(p, btn, card) {
-      const name = prompt('Save this week as:', p.title);
+      const defaultName = `ListenBrainz — ${p.title}`;
+      const name = prompt('Save as:', defaultName);
       if (!name?.trim()) return;
-      btn.disabled = true;
-      btn.textContent = 'Saving…';
+      btn.disabled = true; btn.textContent = 'Saving…';
       try {
         const res  = await fetch(`/sync/lb-playlists/${p.lb_mbid}/snapshot`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ name: name.trim() })
         });
         const data = await res.json();
-        if (data.ok) {
-          btn.textContent = '🔒 Saved';
-          btn.style.color = '#27ae60';
-          btn.title = `Saved as "${name.trim()}" (${data.count} tracks)`;
-        } else {
-          btn.disabled = false;
-          btn.textContent = 'Save';
-          alert(`✗ ${data.error}`);
-        }
-      } catch (e) {
-        btn.disabled = false;
-        btn.textContent = 'Save';
-      }
-    }
-
-    function timeAgoLb(unix) {
-      if (!unix) return null;
-      const diff = Math.floor(Date.now() / 1000) - unix;
-      if (diff < 60)    return `${diff}s ago`;
-      if (diff < 3600)  return `${Math.floor(diff / 60)}m ago`;
-      if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-      return `${Math.floor(diff / 86400)}d ago`;
+        if (data.ok) { btn.textContent = '🔒 Saved'; btn.style.color = '#27ae60'; btn.title = `Saved as "${name.trim()}" (${data.count} tracks)`; }
+        else { btn.disabled = false; btn.textContent = 'Save'; alert(`✗ ${data.error}`); }
+      } catch (e) { btn.disabled = false; btn.textContent = 'Save'; }
     }
 
     document.getElementById('lbBackBtn').addEventListener('click', () => showListView());
@@ -1495,33 +1975,223 @@
         const res  = await fetch('/sync/lb-playlists/cached');
         const data = await res.json();
         if (data.ok) {
-          if (!data.playlists.length) {
-            document.getElementById('plLbList').innerHTML =
-              '<div class="pl-empty"><p>No playlists synced yet. Go to Services and run Sync All for ListenBrainz first.</p></div>';
-          } else {
-            renderLbPlaylists(data.playlists);
-          }
+          if (!data.playlists.length) { document.getElementById('plLbList').innerHTML = '<div class="pl-empty">No playlists synced yet. Go to Services and run Sync All for ListenBrainz first.</div>'; }
+          else { renderLbPlaylists(data.playlists); }
           status.textContent = data.playlists.length ? `${data.playlists.length} playlists` : '';
-          status.className = 'history-source-status status-ok';
-        } else {
-          status.textContent = `✗ ${data.error}`;
-          status.className = 'history-source-status status-err';
-        }
-      } catch (e) {
-        status.textContent = '✗ Request failed';
-        status.className = 'history-source-status status-err';
-      }
+          status.className   = 'history-source-status status-ok';
+        } else { status.textContent = `✗ ${data.error}`; status.className = 'history-source-status status-err'; }
+      } catch (e) { status.textContent = '✗ Request failed'; status.className = 'history-source-status status-err'; }
     }
 
-    // ── Init ───────────────────────────────────────────────────────────────
-    const openId = new URLSearchParams(window.location.search).get('id');
-    const openLb = new URLSearchParams(window.location.search).get('lb');
-    loadPlaylists().then(() => {
-      if (openLb) { showLbView(); return; }
-      if (openId) {
-        const match = allPlaylists.find(p => p.id === openId);
-        if (match) openDetail(match);
+    // ── Last.fm view ──────────────────────────────────────────────────────
+    let lfmPlaylistData = [];
+
+    function renderLfmPlaylists(playlists) {
+      lfmPlaylistData = playlists;
+      const container = document.getElementById('plLfmList');
+      if (!playlists.length) { container.innerHTML = '<div class="pl-empty">No playlists synced yet. Go to Services and run Sync All for Last.fm first.</div>'; return; }
+      container.innerHTML = '';
+      playlists.forEach(p => container.appendChild(buildLfmCard(p)));
+    }
+
+    function buildLfmCard(p) {
+      const isAdded  = !!p.navidrome_id;
+      const tracks   = p.tracks || [];
+      const matched  = tracks.filter(t => t.matched).length;
+      const statText = tracks.length ? `${matched} of ${tracks.length} in library` : 'No tracks synced';
+
+      const card = document.createElement('div');
+      card.className = `lb-card${isAdded ? ' is-enabled' : ''}`;
+      card.dataset.lfmId = p.lfm_id;
+
+      const body    = document.createElement('div'); body.className = 'lb-card-body';
+      const titleEl = document.createElement('div'); titleEl.className = 'lb-card-title'; titleEl.textContent = p.title;
+
+      const badge = document.createElement('span');
+      badge.className   = 'lb-pl-badge lb-pl-generated';
+      badge.textContent = '↻ Rotating';
+      badge.title       = 'Updates automatically on each sync';
+
+      const stat    = document.createElement('span'); stat.className = 'lb-card-stat'; stat.textContent = statText;
+      const actions = document.createElement('div'); actions.className = 'lb-card-actions';
+
+      const saveBtn = document.createElement('button');
+      saveBtn.className = 'btn btn-secondary btn-sm'; saveBtn.textContent = 'Save';
+      saveBtn.title = 'Save a permanent copy of this playlist';
+      saveBtn.addEventListener('click', e => { e.stopPropagation(); saveLfmSnapshot(p, saveBtn); });
+      actions.appendChild(saveBtn);
+
+      const addBtn = document.createElement('button');
+      addBtn.className = 'btn btn-secondary btn-sm'; addBtn.textContent = isAdded ? '✓ Subscribed' : 'Subscribe';
+      if (isAdded) addBtn.style.color = '#27ae60';
+      addBtn.addEventListener('click', e => {
+        e.stopPropagation();
+        if (addBtn.textContent === '✓ Subscribed') unsubscribeLfmPlaylist(p, addBtn, card);
+        else importLfmPlaylist(p, addBtn, card);
+      });
+      actions.appendChild(addBtn);
+
+      const chevron = document.createElement('span'); chevron.className = 'lb-card-chevron'; chevron.textContent = '›';
+      body.appendChild(titleEl); body.appendChild(badge); body.appendChild(stat); body.appendChild(actions); body.appendChild(chevron);
+      body.addEventListener('click', e => { if (!e.target.closest('.lb-card-actions')) toggleLfmCardTracks(card, tracks); });
+
+      const tracksPanel = document.createElement('div'); tracksPanel.className = 'lb-card-tracks'; tracksPanel.style.display = 'none';
+      card.appendChild(body); card.appendChild(tracksPanel);
+      return card;
+    }
+
+    function toggleLfmCardTracks(card, tracks) {
+      const panel  = card.querySelector('.lb-card-tracks');
+      const isOpen = panel.style.display !== 'none';
+      if (isOpen) { panel.style.display = 'none'; card.classList.remove('is-open'); return; }
+      card.classList.add('is-open'); panel.style.display = '';
+      if (!tracks.length) { panel.innerHTML = '<div class="lb-track-loading">No tracks cached. Run Sync All from Services.</div>'; return; }
+      const missingCount = tracks.filter(t => !t.matched).length;
+      let html = missingCount > 0 ? `<div class="lb-track-loading">${tracks.filter(t => t.matched).length} of ${tracks.length} tracks in your library</div>` : '';
+      html += tracks.map((t, i) => `
+        <div class="lb-card-track${t.matched ? '' : ' is-missing'}">
+          <span class="lb-track-num">${i + 1}</span>
+          <div class="lb-track-info"><div class="lb-track-title">${esc(t.title)}</div><div class="lb-track-artist">${esc(t.artist)}</div></div>
+          ${t.matched ? '<span></span>' : '<span class="lb-track-missing-pill">Not in library</span>'}
+        </div>`).join('');
+      panel.innerHTML = html;
+    }
+
+    async function importLfmPlaylist(p, btn, card) {
+      btn.disabled = true; btn.textContent = 'Subscribing…';
+      try {
+        const res  = await fetch(`/sync/lfm-playlists/${p.lfm_id}/import`, { method: 'POST' });
+        const data = await res.json();
+        if (data.ok) { btn.textContent = '✓ Subscribed'; btn.style.color = '#27ae60'; card.classList.add('is-enabled'); }
+        else { btn.disabled = false; btn.textContent = 'Subscribe'; alert(`✗ ${data.error}`); }
+      } catch (e) { btn.disabled = false; btn.textContent = 'Subscribe'; }
+    }
+
+    async function unsubscribeLfmPlaylist(p, btn, card) {
+      btn.disabled = true; btn.textContent = 'Unsubscribing…';
+      try {
+        const res  = await fetch(`/sync/lfm-playlists/${p.lfm_id}/unsubscribe`, { method: 'POST' });
+        const data = await res.json();
+        if (data.ok) { btn.textContent = 'Subscribe'; btn.style.color = ''; btn.disabled = false; card.classList.remove('is-enabled'); }
+        else { btn.disabled = false; btn.textContent = '✓ Subscribed'; alert(`✗ ${data.error}`); }
+      } catch (e) { btn.disabled = false; btn.textContent = '✓ Subscribed'; }
+    }
+
+    async function saveLfmSnapshot(p, btn) {
+      const defaultName = p.title + ' — ' + new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+      const name = prompt('Save as:', defaultName);
+      if (!name?.trim()) return;
+      btn.disabled = true; btn.textContent = 'Saving…';
+      try {
+        const res  = await fetch(`/sync/lfm-playlists/${p.lfm_id}/snapshot`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: name.trim() })
+        });
+        const data = await res.json();
+        if (data.ok) { btn.textContent = '🔒 Saved'; btn.style.color = '#27ae60'; btn.title = `Saved as "${name.trim()}" (${data.count} tracks)`; }
+        else { btn.disabled = false; btn.textContent = 'Save'; alert(`✗ ${data.error}`); }
+      } catch (e) { btn.disabled = false; btn.textContent = 'Save'; }
+    }
+
+    document.getElementById('lfmBackBtn').addEventListener('click', () => showListView());
+
+    async function loadLfmPlaylists() {
+      const status = document.getElementById('plLfmStatus');
+      status.textContent = '';
+      try {
+        const res  = await fetch('/sync/lfm-playlists/cached');
+        const data = await res.json();
+        if (data.ok) {
+          renderLfmPlaylists(data.playlists);
+          status.textContent = data.playlists.length ? `${data.playlists.length} playlists` : '';
+          status.className   = 'history-source-status status-ok';
+        } else { status.textContent = `✗ ${data.error}`; status.className = 'history-source-status status-err'; }
+      } catch (e) { status.textContent = '✗ Request failed'; status.className = 'history-source-status status-err'; }
+    }
+
+    // ── Export modal ──────────────────────────────────────────────────────
+    let exportPlaylistId  = null;
+    let exportFormat      = 'm3u';
+
+    function openExportModal(p) {
+      exportPlaylistId = p.id;
+      exportFormat     = 'm3u';
+      // Reset selection
+      document.querySelectorAll('#exportModal .pl-type-option').forEach(o => {
+        o.classList.toggle('selected', o.dataset.format === 'm3u');
+      });
+      document.getElementById('exportModal').style.display = 'flex';
+    }
+
+    document.querySelectorAll('#exportModal .pl-type-option').forEach(opt => {
+      opt.addEventListener('click', () => {
+        document.querySelectorAll('#exportModal .pl-type-option').forEach(o => o.classList.remove('selected'));
+        opt.classList.add('selected');
+        exportFormat = opt.dataset.format;
+      });
+    });
+
+    document.getElementById('exportCancelBtn').addEventListener('click', () => {
+      document.getElementById('exportModal').style.display = 'none';
+    });
+    document.getElementById('exportModal').addEventListener('click', e => {
+      if (e.target === e.currentTarget) e.currentTarget.style.display = 'none';
+    });
+
+    document.getElementById('exportDownloadBtn').addEventListener('click', () => {
+      if (!exportPlaylistId) return;
+      window.location.href = `/playlists/${exportPlaylistId}/export?format=${exportFormat}`;
+      document.getElementById('exportModal').style.display = 'none';
+    });
+
+    // ── Sort + select ──────────────────────────────────────────────────────
+    document.getElementById('plListHeader').addEventListener('click', e => {
+      const col = e.target.closest('.pl-col-hdr');
+      if (!col) return;
+      const field = col.dataset.sort;
+      sortDir = sortField === field ? (sortDir === 'asc' ? 'desc' : 'asc') : 'asc';
+      sortField = field;
+      localStorage.setItem('navilist_pl_sort', sortField);
+      localStorage.setItem('navilist_pl_sort_dir', sortDir);
+      renderCards();
+    });
+
+    document.getElementById('selectAllChk').addEventListener('change', e => {
+      document.querySelectorAll('.pl-row-chk').forEach(chk => {
+        chk.checked = e.target.checked;
+        if (e.target.checked) selected.add(chk.dataset.id); else selected.delete(chk.dataset.id);
+      });
+      updateSelectionBar();
+    });
+
+    document.getElementById('selClearBtn').addEventListener('click', () => { selected.clear(); renderCards(); });
+    document.getElementById('selActivateBtn').addEventListener('click', async () => {
+      for (const id of [...selected]) { const p = allPlaylists.find(pl => pl.id === id); if (p && isInactive(p)) await fetch(`/playlists/${id}/activate`, { method: 'POST' }); }
+      selected.clear(); await loadPlaylists();
+    });
+    document.getElementById('selDeactivateBtn').addEventListener('click', async () => {
+      if (!confirm(`Deactivate ${selected.size} playlist(s)?`)) return;
+      for (const id of [...selected]) { const p = allPlaylists.find(pl => pl.id === id); if (p && !isInactive(p)) await fetch(`/playlists/${id}/deactivate`, { method: 'POST' }); }
+      selected.clear(); await loadPlaylists();
+    });
+    document.getElementById('selDeleteBtn').addEventListener('click', async () => {
+      if (!confirm(`Delete ${selected.size} playlist(s)? This cannot be undone.`)) return;
+      for (const id of [...selected]) {
+        const p = allPlaylists.find(pl => pl.id === id);
+        if (p) await doDelete(p);
+        else await fetch(`/playlists/${id}/delete`, { method: 'POST' });
       }
+      selected.clear(); await loadPlaylists();
+    });
+
+    // ── Init ───────────────────────────────────────────────────────────────
+    const openId  = new URLSearchParams(window.location.search).get('id');
+    const openLb  = new URLSearchParams(window.location.search).get('lb');
+    const openLfm = new URLSearchParams(window.location.search).get('lfm');
+    loadPlaylists().then(() => {
+      if (openLb)  { showLbView();  return; }
+      if (openLfm) { showLfmView(); return; }
+      if (openId) { const match = allPlaylists.find(p => p.id === openId); if (match) openDetail(match); }
     });
   </script>
 </body>

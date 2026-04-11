@@ -8,7 +8,10 @@
 </head>
 <body>
   <nav>
-    <a href="/playlists" class="nav-brand">naviList</a>
+    <a href="/playlists" class="nav-brand">
+      <img src="/assets/navidrome.webp" class="nav-brand-icon" alt="" />
+      naviList
+    </a>
     <ul>
       <li><a href="/playlists">Playlists</a></li>
       <li><a href="/status" class="active">Services</a></li>
@@ -58,6 +61,8 @@
             <div class="svc-job"><span class="svc-job-label">Top artists</span><span id="lastfmTopArtistsMeta">—</span></div>
             <div class="svc-job"><span class="svc-job-label">Top tracks</span><span id="lastfmTopTracksMeta">—</span></div>
             <div class="svc-job"><span class="svc-job-label">Artist tags</span><span id="lastfmArtistTagsMeta">—</span></div>
+            <div class="svc-job"><span class="svc-job-label">Similar artists</span><span id="lastfmSimilarMeta">—</span></div>
+            <div class="svc-job"><span class="svc-job-label">Playlists</span><span id="lastfmPlaylistsMeta">—</span></div>
           </div>
         </div>
 
@@ -83,6 +88,8 @@
           <div class="history-source-header">
             <span class="history-source-name">Lidarr</span>
             <span class="history-source-status" id="lidarrConnStatus"></span>
+            <button class="btn btn-secondary btn-sm" id="sendToLidarrBtn">Send Missing Artists</button>
+            <span class="history-source-status" id="lidarrSendStatus"></span>
           </div>
           <div class="svc-sub" id="lidarrUrl"></div>
           <div class="svc-jobs">
@@ -270,6 +277,11 @@
         document.getElementById('lastfmTopArtistsMeta').textContent  = `${topArtists} artist-period rows`;
         document.getElementById('lastfmTopTracksMeta').textContent   = `${topTracks} track-period rows`;
         document.getElementById('lastfmArtistTagsMeta').textContent  = `${tagsLfm} artists tagged`;
+        const similarArtists = countsRes.similarArtists || 0;
+        document.getElementById('lastfmSimilarMeta').textContent = `${similarArtists} artists cached`;
+        const lfmPl = countsRes.lfmPlaylists || 0;
+        document.getElementById('lastfmPlaylistsMeta').innerHTML =
+          `${lfmPl} playlist${lfmPl !== 1 ? 's' : ''} · <a href="/playlists?lfm=1" class="status-ok" style="font-size:0.8rem;">Manage →</a>`;
         document.getElementById('lbLovedMeta').textContent           = `${loved} loved · ${disliked} disliked`;
         document.getElementById('lbTopArtistsMeta').textContent      = `${topArtists} artist-period rows`;
         document.getElementById('lbTopTracksMeta').textContent       = `${topTracks} track-period rows`;
@@ -311,13 +323,27 @@
       }
     }
 
-    document.getElementById('syncLastfmAllBtn').addEventListener('click', () =>
-      runAllJobs(
-        ['history/lastfm?force=true', 'loved/lastfm', 'top-artists/lastfm', 'top-tracks/lastfm', 'artist-tags/lastfm'],
-        document.getElementById('syncLastfmAllBtn'),
-        document.getElementById('lastfmAllStatus')
-      )
-    );
+    document.getElementById('syncLastfmAllBtn').addEventListener('click', async () => {
+      const btn      = document.getElementById('syncLastfmAllBtn');
+      const statusEl = document.getElementById('lastfmAllStatus');
+      btn.disabled = true; btn.textContent = 'Syncing...';
+      statusEl.textContent = ''; statusEl.className = 'history-source-status status-pending';
+      try {
+        for (const route of ['history/lastfm?force=true', 'loved/lastfm', 'top-artists/lastfm', 'top-tracks/lastfm', 'artist-tags/lastfm']) {
+          await fetch(`/sync/${route}`, { method: 'POST' });
+          await new Promise(r => setTimeout(r, 300));
+        }
+        document.getElementById('lastfmPlaylistsMeta').textContent = 'Building cache…';
+        statusEl.textContent = 'Syncing playlists…';
+        await fetch('/sync/lfm-playlists', { method: 'POST' });
+        statusEl.textContent = '✓ Done'; statusEl.className = 'history-source-status status-ok';
+        setTimeout(() => loadAllStatus(), 500);
+      } catch (e) {
+        statusEl.textContent = '✗ Request failed'; statusEl.className = 'history-source-status status-err';
+      } finally {
+        btn.disabled = false; btn.textContent = 'Sync All';
+      }
+    });
 
     document.getElementById('syncLbAllBtn').addEventListener('click', async () => {
       const btn      = document.getElementById('syncLbAllBtn');
@@ -360,6 +386,22 @@
     }
 
     document.getElementById('refreshBtn').addEventListener('click', () => window.location.reload());
+
+    // ── Lidarr: send missing artists ────────────────────────────────────────
+    document.getElementById('sendToLidarrBtn').addEventListener('click', async () => {
+      const btn    = document.getElementById('sendToLidarrBtn');
+      const status = document.getElementById('lidarrSendStatus');
+      btn.disabled = true; status.textContent = 'Sending…'; status.className = 'history-source-status status-pending';
+      try {
+        const res  = await fetch('/sync/process-missing-artists', { method: 'POST' });
+        const data = await res.json();
+        status.textContent = data.ok ? '✓ Done' : `✗ ${data.error}`;
+        status.className   = `history-source-status ${data.ok ? 'status-ok' : 'status-err'}`;
+      } catch (e) {
+        status.textContent = '✗ Request failed'; status.className = 'history-source-status status-err';
+      }
+      btn.disabled = false;
+    });
 
     loadStatus();
     loadAllStatus();

@@ -32,9 +32,11 @@ app.use((req, res, next) => {
 
 // Routes
 app.get('/', (req, res) => res.redirect('/playlists'));
+app.get('/health', (req, res) => res.json({ ok: true }));
 app.use('/playlists', require('./lib/playlists'));
 app.use('/library', require('./lib/library'));
 app.use('/settings', require('./lib/settings'));
+app.use('/nsp', require('./lib/nsp'));
 const syncModule = require('./lib/sync');
 app.use('/sync', syncModule.router);
 syncModule.startAutoRefresh();
