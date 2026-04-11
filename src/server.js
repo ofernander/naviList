@@ -35,6 +35,7 @@ app.get('/', (req, res) => res.redirect('/playlists'));
 app.use('/playlists', require('./lib/playlists'));
 app.use('/library', require('./lib/library'));
 app.use('/settings', require('./lib/settings'));
+app.use('/nsp', require('./lib/nsp'));
 const syncModule = require('./lib/sync');
 app.use('/sync', syncModule.router);
 syncModule.startAutoRefresh();

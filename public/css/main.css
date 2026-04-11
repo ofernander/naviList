@@ -336,11 +336,18 @@ select:focus {
   padding: 0.15rem 0.6rem;
   border-radius: 4px;
   font-weight: 500;
+  background: #e6f3ff;
+  color: #0066cc;
+  white-space: nowrap;
 }
 
-.pl-badge-smart  { background: #e6f3ff; color: #0066cc; }
-.pl-badge-manual { background: #f0f0f0; color: #777; }
-.pl-badge-lastfm { background: #ffe0e0; color: #c0392b; }
+.pl-badge-navilist,
+.pl-badge-nsp,
+.pl-badge-radio,
+.pl-badge-manual,
+.pl-badge-lastfm,
+.pl-badge-listenbrainz,
+.pl-badge-smart { background: #e6f3ff; color: #0066cc; }
 
 /* ── Empty state ─────────────────────────────────────────────────────────── */
 .pl-empty {
@@ -1044,8 +1051,7 @@ select:focus {
 }
 
 /* ── Extra badge types ────────────────────────────────────────────────── */
-.pl-badge-lastfm       { background: #fdecea; color: #d51007; }
-.pl-badge-listenbrainz { background: #fef3ea; color: #c05e00; }
+
 
 /* ── LB playlist rows ────────────────────────────────────────────────── */
 .lb-cards {
@@ -1334,7 +1340,6 @@ select:focus {
 .log-error { color: #c0392b; }
 
 /* ── Radio builder ─────────────────────────────────────────────── */
-.pl-badge-radio { background: #fff3e0; color: #e65c00; }
 
 .radio-seeds {
   display: flex;

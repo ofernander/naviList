@@ -67,7 +67,9 @@ router.post('/', (req, res) => {
     'listenbrainz_token', 'listenbrainz_username',
     'lidarr_url', 'lidarr_api_key', 'lidarr_root_folder',
     'lidarr_quality_profile_id', 'lidarr_metadata_profile_id',
-    'deezer_artist_images'
+    'lidarr_auto_add',
+    'deezer_artist_images',
+    'nsp_path'
   ];
 
   const upsert = db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)');

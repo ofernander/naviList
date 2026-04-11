@@ -15,5 +15,11 @@
   },
   "devDependencies": {
     "nodemon": "^3.1.0"
+  },
+  "author": "ofernander",
+  "license": "GPL-3.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ofernander/naviList"
   }
 }

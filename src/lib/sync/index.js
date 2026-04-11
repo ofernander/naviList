@@ -70,12 +70,8 @@ function getSettings() {
 
 async function processMissingArtists() {
   const settings = getSettings();
-  if (!settings.lidarr_url || !settings.lidarr_api_key) {
-    logger.info('sync', 'processMissingArtists: Lidarr not configured — skipping');
-    return;
-  }
-  if (!settings.lidarr_root_folder || !settings.lidarr_quality_profile_id || !settings.lidarr_metadata_profile_id) {
-    logger.info('sync', 'processMissingArtists: Lidarr profiles not configured — skipping');
+  if (settings.lidarr_auto_add !== 'true') {
+    logger.debug('sync', 'processMissingArtists: lidarr_auto_add not enabled — skipping');
     return;
   }
 
@@ -484,6 +480,11 @@ router.post('/lfm-playlists', async (req, res) => {
     logger.error('sync', `lfm-playlists POST failed: ${e.message}`);
     res.json({ ok: false, error: e.message });
   }
+});
+
+router.post('/process-missing-artists', async (req, res) => {
+  res.json({ ok: true, message: 'Processing started' });
+  await processMissingArtists();
 });
 
 // ── Routes — Status ───────────────────────────────────────────────────────────

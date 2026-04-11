@@ -260,6 +260,63 @@
     </div>
   </main>
 
+  <!-- ── NSP builder view ──────────────────────────────────────────────────── -->
+  <main id="viewNsp" style="display:none">
+    <button class="pl-detail-back" id="nspBackBtn">← Back</button>
+    <div class="pl-detail-header">
+      <div>
+        <input type="text" id="nspNameInput" class="pl-builder-name-input" placeholder="Playlist name..." />
+        <div class="pl-detail-meta">Native Navidrome smart playlist — rules evaluated and refreshed by Navidrome directly</div>
+      </div>
+    </div>
+    <hr style="border:none; border-top: 0.5px solid #eeeee8; margin-bottom: 1.5rem;" />
+
+    <div class="rb-section">
+      <div class="rb-section-label">Conditions</div>
+      <div style="font-size:0.78rem; color:#aaa; margin-bottom:0.75rem;">All conditions must match. Use the “Any of” condition type for OR logic within a group.</div>
+      <div class="rb-rules-list" id="nspConditionsList"></div>
+      <button class="rb-add-rule" id="nspAddCondition">+ Add condition</button>
+    </div>
+
+    <div class="rb-section" style="margin-top:1.5rem;">
+      <div class="rb-section-label">Sort &amp; Limit</div>
+      <div class="rb-globals">
+        <div class="rb-global-field">
+          <label for="nspSortField" style="font-size:0.82rem; color:#aaa;">Sort by</label>
+          <select id="nspSortField" style="width:180px;"></select>
+        </div>
+        <div class="rb-global-field">
+          <select id="nspSortOrder" style="width:120px;">
+            <option value="random" selected>Random</option>
+            <option value="asc">Ascending</option>
+            <option value="desc">Descending</option>
+          </select>
+        </div>
+        <div class="rb-global-field">
+          <input type="number" id="nspLimit" min="1" max="1000" value="25" style="width:70px;" />
+          <span style="font-size:0.82rem; color:#aaa;">tracks</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="rb-actions" style="margin-top:1.5rem;">
+      <button class="btn btn-secondary" id="nspCancelBtn">Cancel</button>
+      <button class="btn" id="nspPreviewBtn">Preview JSON →</button>
+      <span class="rb-status" id="nspStatus"></span>
+    </div>
+
+    <div id="nspPreviewPanel" style="display:none; margin-top:1.5rem;">
+      <hr style="border:none; border-top: 0.5px solid #eeeee8; margin-bottom:1rem;" />
+      <div class="rb-section-label" style="margin-bottom:0.75rem;">Generated .nsp JSON</div>
+      <pre id="nspJsonPreview" style="background:#f5f5f3; border:0.5px solid #ddddd8; border-radius:6px; padding:1rem; font-size:0.78rem; overflow-x:auto; white-space:pre-wrap;"></pre>
+      <div class="rb-actions" style="margin-top:1rem;">
+        <button class="btn btn-secondary" id="nspPreviewCancelBtn">Discard</button>
+        <button class="btn" id="nspSaveBtn">Save Playlist</button>
+        <span class="rb-status" id="nspSaveStatus"></span>
+      </div>
+    </div>
+  </main>
+
   <!-- ── ListenBrainz playlists view ───────────────────────────────────────── -->
   <main id="viewLb" style="display:none">
     <button class="pl-detail-back" id="lbBackBtn">← All playlists</button>
@@ -291,26 +348,30 @@
     <div class="modal">
       <h3>New playlist</h3>
       <p class="modal-sub">Choose how you want to build it</p>
-      <div class="pl-type-grid" style="grid-template-columns:1fr 1fr 1fr 1fr 1fr">
+      <div class="pl-type-grid" style="grid-template-columns:1fr 1fr 1fr; gap:0.75rem;">
         <div class="pl-type-option selected" data-type="navilist" id="typeSmart">
           <div class="pl-type-title">naviList</div>
-          <div class="pl-type-desc">Rules-based, auto-updating playlists</div>
+          <div class="pl-type-desc">Rules-based playlist generation</div>
+        </div>
+        <div class="pl-type-option" data-type="nsp" id="typeNsp">
+          <div class="pl-type-title">Navidrome Smart Playlist</div>
+          <div class="pl-type-desc">Navidrome smart playlist wrapper</div>
         </div>
         <div class="pl-type-option" data-type="radio" id="typeRadio">
           <div class="pl-type-title">Radio</div>
-          <div class="pl-type-desc">Similar artists from your library</div>
+          <div class="pl-type-desc">Similar artist playlist generation provided by Last.fm</div>
         </div>
         <div class="pl-type-option" data-type="listenbrainz" id="typeLb">
           <div class="pl-type-title">ListenBrainz</div>
-          <div class="pl-type-desc">Import your ListenBrainz playlists</div>
+          <div class="pl-type-desc">Import ListenBrainz playlists</div>
         </div>
         <div class="pl-type-option" data-type="lastfm" id="typeLfm">
           <div class="pl-type-title">Last.fm</div>
-          <div class="pl-type-desc">Import your Last.fm charts</div>
+          <div class="pl-type-desc">Import Last.fm playlists</div>
         </div>
         <div class="pl-type-option" data-type="manual" id="typeManual">
           <div class="pl-type-title">Manual</div>
-          <div class="pl-type-desc">Hand-pick tracks yourself</div>
+          <div class="pl-type-desc">Manually create playlist from Navidrome library</div>
         </div>
       </div>
       <div class="modal-actions">
@@ -399,6 +460,7 @@
     function isLbPlaylist(p)     { return p.comment?.startsWith('navilist:lb')       || false; }
     function isLfmPlaylist(p)    { return p.comment?.startsWith('navilist:lastfm')   || false; }
     function isRadioPlaylist(p)  { return p.comment?.startsWith('navilist:radio')    || false; }
+    function isNspPlaylist(p)    { return p.id?.startsWith('nsp:') || p.comment?.startsWith('navilist:nsp') || false; }
     function isInactive(p)       { return p.active === 0; }
 
     function getPlaylistType(p) {
@@ -406,22 +468,18 @@
       if (isLfmPlaylist(p))    return 'lastfm';
       if (isLbPlaylist(p))     return 'listenbrainz';
       if (isRadioPlaylist(p))  return 'radio';
+      if (isNspPlaylist(p))    return 'nsp';
       return 'manual';
     }
 
     function badgeClass(type) {
-      switch (type) {
-        case 'navilist':     return 'pl-badge-navilist';
-        case 'listenbrainz': return 'pl-badge-listenbrainz';
-        case 'radio':        return 'pl-badge-radio';
-        case 'lastfm':       return 'pl-badge-lastfm';
-        default:             return 'pl-badge-manual';
-      }
+      return 'pl-badge-' + (type || 'manual');
     }
 
     function badgeLabel(type) {
       switch (type) {
         case 'navilist':     return 'naviList';
+        case 'nsp':          return 'Navidrome';
         case 'listenbrainz': return 'ListenBrainz';
         case 'radio':        return 'Radio';
         case 'lastfm':       return 'Last.fm';
@@ -487,7 +545,7 @@
 
     // ── Views ──────────────────────────────────────────────────────────────
     function hideAllViews() {
-      ['viewList','viewDetail','viewRules','viewLb','viewRadio','viewLfm'].forEach(id => {
+      ['viewList','viewDetail','viewRules','viewLb','viewRadio','viewLfm','viewNsp'].forEach(id => {
         document.getElementById(id).style.display = 'none';
       });
     }
@@ -496,6 +554,7 @@
     function showDetailView() { hideAllViews(); document.getElementById('viewDetail').style.display = ''; }
     function showRulesView()  { hideAllViews(); document.getElementById('viewRules').style.display  = ''; }
     function showRadioView()  { hideAllViews(); document.getElementById('viewRadio').style.display  = ''; }
+    function showNspView()   { hideAllViews(); document.getElementById('viewNsp').style.display   = ''; }
     function showManualView() { window.location.href = '/library?mode=manual'; }
 
     async function showLfmView() {
@@ -657,6 +716,33 @@
       body.dataset.loaded = '1';
       body.innerHTML = '<div class="detail-loading">Loading…</div>';
 
+      if (isNspPlaylist(p)) {
+        const actions = document.createElement('div');
+        actions.className = 'pl-list-row-actions';
+        const editBtn = document.createElement('button');
+        editBtn.className = 'btn btn-secondary btn-sm'; editBtn.textContent = 'Edit';
+        editBtn.addEventListener('click', () => {
+          const slug = p.nsp_slug || (p.id?.startsWith('nsp:') ? p.id.slice(4) : p.name.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, ''));
+          openNspBuilder(p.name, p.nsp_config, slug);
+        });
+        const copyBtn = document.createElement('button');
+        copyBtn.className = 'btn btn-secondary btn-sm'; copyBtn.textContent = 'Copy JSON';
+        copyBtn.addEventListener('click', () => {
+          navigator.clipboard.writeText(JSON.stringify(p.nsp_config, null, 2) || '{}');
+          copyBtn.textContent = 'Copied!';
+          setTimeout(() => { copyBtn.textContent = 'Copy JSON'; }, 1500);
+        });
+        const deleteBtn = document.createElement('button');
+        deleteBtn.className = 'btn btn-danger btn-sm'; deleteBtn.textContent = 'Delete';
+        deleteBtn.addEventListener('click', () => deletePlaylist(p));
+        actions.appendChild(editBtn); actions.appendChild(copyBtn); actions.appendChild(deleteBtn);
+        const json = JSON.stringify(p.nsp_config, null, 2) || '{}';
+        body.innerHTML = '';
+        body.appendChild(actions);
+        body.insertAdjacentHTML('beforeend', `<pre style="background:#f5f5f3; border:0.5px solid #ddddd8; border-radius:6px; padding:1rem; font-size:0.78rem; overflow-x:auto; white-space:pre-wrap; margin-top:0.75rem;">${esc(json)}</pre>`);
+        return;
+      }
+
       const actions = document.createElement('div');
       actions.className = 'pl-list-row-actions';
       const type = getPlaylistType(p);
@@ -719,15 +805,20 @@
       const tracks = Array.isArray(p.entry) ? p.entry : (p.entry ? [p.entry] : []);
       if (!tracks.length) { container.innerHTML = '<div class="detail-empty">No tracks yet.</div>'; return; }
 
-      let html = `<div class="track-list"><div class="track-list-header">
+      const missingCount = tracks.filter(t => t.missing).length;
+      let html = '';
+      if (missingCount) html += `<div class="detail-loading" style="color:#bbb; font-size:0.82rem; padding:0.5rem 0.5rem 0;">${missingCount} track${missingCount > 1 ? 's' : ''} not in library</div>`;
+      html += `<div class="track-list"><div class="track-list-header">
         <span class="tc-num">#</span><span class="tc-title">Title / Artist</span>
         <span class="tc-dur">Duration</span><span class="tc-action"></span></div>`;
       tracks.forEach((t, i) => {
-        html += `<div class="track-row">
+        const missing = t.missing ? ' style="opacity:0.4"' : '';
+        const pill    = t.missing ? '<span class="lb-track-missing-pill">Not in library</span>' : `<button class="btn-icon remove-track" data-playlist="${esc(playlistId)}" data-index="${i}" title="Remove">✕</button>`;
+        html += `<div class="track-row"${missing}>
           <span class="tc-num">${i + 1}</span>
           <span class="tc-title"><span class="tl-title">${esc(t.title || '—')}</span><span class="tl-artist">${esc(t.artist || '—')}</span></span>
-          <span class="tc-dur">${fmtDur(t.duration)}</span>
-          <span class="tc-action"><button class="btn-icon remove-track" data-playlist="${esc(playlistId)}" data-index="${i}" title="Remove">✕</button></span>
+          <span class="tc-dur">${t.missing ? '' : fmtDur(t.duration)}</span>
+          <span class="tc-action">${pill}</span>
         </div>`;
       });
       html += '</div>';
@@ -813,6 +904,8 @@
 
     // ── Detail view ────────────────────────────────────────────────────────
     async function openDetail(p) {
+      // NSP playlists get their own detail view
+      if (isNspPlaylist(p)) { openNspDetail(p); return; }
       showDetailView();
       document.getElementById('detailName').textContent = p.name;
       const type  = getPlaylistType(p);
@@ -864,8 +957,10 @@
 
     function renderDetail(p) {
       const tracks   = Array.isArray(p.entry) ? p.entry : (p.entry ? [p.entry] : []);
-      const totalDur = tracks.reduce((a, t) => a + (t.duration || 0), 0);
-      document.getElementById('detailMeta').textContent = `${tracks.length} tracks · ${fmtDur(totalDur)}`;
+      const matched  = tracks.filter(t => !t.missing);
+      const totalDur = matched.reduce((a, t) => a + (t.duration || 0), 0);
+      const missingCount = tracks.filter(t => t.missing).length;
+      document.getElementById('detailMeta').textContent = `${matched.length} tracks · ${fmtDur(totalDur)}${missingCount ? ` · ${missingCount} not in library` : ''}`;
 
       if (!tracks.length) { document.getElementById('detailBody').innerHTML = '<div class="detail-empty">No tracks yet.</div>'; return; }
 
@@ -873,11 +968,13 @@
         <span class="tc-num">#</span><span class="tc-title">Title / Artist</span>
         <span class="tc-dur">Duration</span><span class="tc-action"></span></div>`;
       tracks.forEach((t, i) => {
-        html += `<div class="track-row">
+        const missing = t.missing ? ' style="opacity:0.4"' : '';
+        const pill    = t.missing ? '<span class="lb-track-missing-pill">Not in library</span>' : `<button class="btn-icon remove-track" data-playlist="${esc(p.id)}" data-index="${i}" title="Remove">✕</button>`;
+        html += `<div class="track-row"${missing}>
           <span class="tc-num">${i + 1}</span>
           <span class="tc-title"><span class="tl-title">${esc(t.title || '—')}</span><span class="tl-artist">${esc(t.artist || '—')}</span></span>
-          <span class="tc-dur">${fmtDur(t.duration)}</span>
-          <span class="tc-action"><button class="btn-icon remove-track" data-playlist="${esc(p.id)}" data-index="${i}" title="Remove">✕</button></span>
+          <span class="tc-dur">${t.missing ? '' : fmtDur(t.duration)}</span>
+          <span class="tc-action">${pill}</span>
         </div>`;
       });
       html += '</div>';
@@ -968,11 +1065,21 @@
       } catch (e) { btn.disabled = false; btn.textContent = '▶ Activate'; }
     }
 
+    async function doDelete(p) {
+      if (isNspPlaylist(p)) {
+        const slug = p.nsp_slug || (p.id?.startsWith('nsp:') ? p.id.slice(4) : p.name.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, ''));
+        const res  = await fetch(`/nsp/${slug}/delete`, { method: 'POST' });
+        return res.json();
+      }
+      const res = await fetch(`/playlists/${p.id}/delete`, { method: 'POST' });
+      return res.json();
+    }
+
     async function deletePlaylist(p) {
       if (!confirm(`Delete "${p.name}"? This cannot be undone.`)) return;
-      const res  = await fetch(`/playlists/${p.id}/delete`, { method: 'POST' });
-      const data = await res.json();
-      if (data.ok) { allPlaylists = allPlaylists.filter(pl => pl.id !== p.id); renderCards(); showListView(); }
+      const data = await doDelete(p);
+      if (data.ok) { await loadPlaylists(); showListView(); }
+      else if (data.error) alert(`✗ ${data.error}`);
     }
 
     // ── Rule builder ───────────────────────────────────────────────────────
@@ -1021,8 +1128,10 @@
 
     let genreList  = [];
     let artistList = [];
+    let albumList  = [];
     async function loadGenres()  { try { const d = await (await fetch('/playlists/api/genres')).json();  genreList  = d.genres  || []; } catch (e) {} }
     async function loadArtists() { try { const d = await (await fetch('/playlists/api/artists')).json(); artistList = d.artists || []; } catch (e) {} }
+    async function loadAlbums()  { try { const d = await (await fetch('/playlists/api/albums')).json();  albumList  = d.albums  || []; } catch (e) {} }
 
     function openRuleBuilder(playlistName, existingRules, returnTo, editingId = null) {
       loadGenres(); loadArtists();
@@ -1407,6 +1516,7 @@
         });
         return;
       }
+      if (selectedType === 'nsp') { openNspBuilder(null, null); return; }
       if (selectedType === 'listenbrainz') { showLbView(); return; }
       if (selectedType === 'lastfm')       { showLfmView(); return; }
       if (selectedType === 'manual')       { showManualView(); return; }
@@ -1523,6 +1633,216 @@
       radioPreviewTracks = []; radioPreviewConfig = null;
       document.getElementById('radioPreviewPanel').style.display = 'none';
     });
+
+    // ── NSP detail ──────────────────────────────────────────────────────────
+    function openNspDetail(p) {
+      showDetailView();
+      document.getElementById('detailName').textContent = p.name;
+      const badge = document.getElementById('detailBadge');
+      badge.className   = 'pl-badge pl-badge-nsp';
+      badge.textContent = 'Navidrome';
+      document.getElementById('detailMeta').textContent = 'Navidrome Smart Playlist — evaluated live by Navidrome';
+
+      const actions = document.getElementById('detailActions');
+      actions.innerHTML = '';
+
+      const editBtn = document.createElement('button');
+      editBtn.className = 'btn btn-secondary btn-sm'; editBtn.textContent = 'Edit';
+      editBtn.addEventListener('click', () => {
+        const slug = p.nsp_slug || p.id.replace('nsp:', '');
+        openNspBuilder(p.name, p.nsp_config, slug);
+      });
+      actions.appendChild(editBtn);
+
+      const deleteBtn = document.createElement('button');
+      deleteBtn.className = 'btn btn-danger btn-sm'; deleteBtn.textContent = 'Delete';
+      deleteBtn.addEventListener('click', () => deletePlaylist(p));
+      actions.appendChild(deleteBtn);
+
+      const json     = JSON.stringify(p.nsp_config, null, 2) || '{}';
+      const copyBtn  = document.createElement('button');
+      copyBtn.className = 'btn btn-secondary btn-sm'; copyBtn.textContent = 'Copy JSON';
+      copyBtn.addEventListener('click', () => {
+        navigator.clipboard.writeText(json);
+        copyBtn.textContent = 'Copied!';
+        setTimeout(() => { copyBtn.textContent = 'Copy JSON'; }, 1500);
+      });
+      actions.appendChild(copyBtn);
+
+      document.getElementById('detailBody').innerHTML = `
+        <pre style="background:#f5f5f3; border:0.5px solid #ddddd8; border-radius:6px; padding:1rem; font-size:0.78rem; overflow-x:auto; white-space:pre-wrap;">${esc(json)}</pre>`;
+    }
+
+    // ── NSP builder ────────────────────────────────────────────────────────
+    let nspFields          = [];
+    let nspOperatorsByType = {};
+    let nspOperatorLabels  = {};
+    let nspConditions      = [];
+    let nspEditingId       = null;
+
+    async function loadNspFields() {
+      if (nspFields.length) return;
+      try {
+        const d = await (await fetch('/nsp/api/fields')).json();
+        nspFields          = d.fields          || [];
+        nspOperatorsByType = d.operatorsByType  || {};
+        nspOperatorLabels  = d.operatorLabels   || {};
+        populateNspSortField();
+      } catch (e) {}
+    }
+
+    function populateNspSortField() {
+      const sel = document.getElementById('nspSortField');
+      sel.innerHTML = '';
+      const random = document.createElement('option');
+      random.value = 'random'; random.textContent = 'Random'; sel.appendChild(random);
+      nspFields.forEach(f => {
+        const opt = document.createElement('option');
+        opt.value = f.value; opt.textContent = f.label; sel.appendChild(opt);
+      });
+    }
+
+    function openNspBuilder(existingName, existingConfig, editingSlug = null) {
+      nspEditingId  = editingSlug || null;
+      nspConditions = existingConfig?.all ? existingConfig.all.map(c => ({ ...c })) : [];
+      if (!nspConditions.length) nspConditions = [defaultNspCondition()];
+      document.getElementById('nspNameInput').value            = existingName || '';
+      document.getElementById('nspLimit').value                = existingConfig?.limit ?? 25;
+      document.getElementById('nspSortOrder').value            = existingConfig?.order || 'random';
+      document.getElementById('nspStatus').textContent         = '';
+      document.getElementById('nspPreviewPanel').style.display = 'none';
+      loadNspFields().then(() => renderNspConditions());
+      loadArtists(); loadGenres(); loadAlbums();
+      showNspView();
+      setTimeout(() => document.getElementById('nspNameInput').focus(), 50);
+    }
+
+    function defaultNspCondition() { return { operator: 'gt', field: 'playcount', value: '-1' }; }
+
+    function renderNspConditions() {
+      const list = document.getElementById('nspConditionsList');
+      list.innerHTML = '';
+      nspConditions.forEach((cond, i) => list.appendChild(buildNspConditionRow(cond, i)));
+    }
+
+    function buildNspConditionRow(cond, index) {
+      const row = document.createElement('div');
+      row.className = 'rb-rule';
+      row.style.gridTemplateColumns = '180px 160px 1fr auto';
+      const fieldSel = document.createElement('select');
+      fieldSel.setAttribute('aria-label', 'Field'); fieldSel.style.width = '160px';
+      nspFields.forEach(f => {
+        const opt = document.createElement('option'); opt.value = f.value; opt.textContent = f.label;
+        if (f.value === cond.field) opt.selected = true; fieldSel.appendChild(opt);
+      });
+      const opSel = document.createElement('select');
+      opSel.setAttribute('aria-label', 'Operator'); opSel.style.width = '140px';
+      function getFieldType(v) { return nspFields.find(f => f.value === v)?.type || 'string'; }
+      function populateOps(fieldVal) {
+        opSel.innerHTML = '';
+        (nspOperatorsByType[getFieldType(fieldVal)] || []).forEach(op => {
+          const opt = document.createElement('option'); opt.value = op; opt.textContent = nspOperatorLabels[op] || op;
+          if (op === cond.operator) opt.selected = true; opSel.appendChild(opt);
+        });
+      }
+      populateOps(cond.field);
+      const valueWrap = document.createElement('div'); valueWrap.style.cssText = 'flex:1; min-width:0;';
+      function buildValueInput(fieldVal, opVal) {
+        valueWrap.innerHTML = '';
+        const ft = getFieldType(fieldVal);
+        if (ft === 'boolean') {
+          const sel = document.createElement('select'); sel.style.width = '90px';
+          ['true','false'].forEach(v => { const o = document.createElement('option'); o.value = v; o.textContent = v; if (v === String(cond.value)) o.selected = true; sel.appendChild(o); });
+          sel.addEventListener('change', () => { nspConditions[index].value = sel.value === 'true'; }); valueWrap.appendChild(sel);
+        } else if (opVal === 'inTheRange') {
+          const vals = Array.isArray(cond.value) ? cond.value : ['', ''];
+          const from = document.createElement('input'); from.type = 'text'; from.placeholder = 'from'; from.value = vals[0] || ''; from.style.cssText = 'width:80px; margin-right:0.3rem;';
+          const to   = document.createElement('input'); to.type = 'text'; to.placeholder = 'to'; to.value = vals[1] || ''; to.style.width = '80px';
+          from.addEventListener('input', () => { nspConditions[index].value = [from.value, to.value]; });
+          to.addEventListener('input',   () => { nspConditions[index].value = [from.value, to.value]; });
+          valueWrap.appendChild(from); valueWrap.appendChild(to);
+        } else if (opVal === 'inTheLast' || opVal === 'notInTheLast') {
+          const inp = document.createElement('input'); inp.type = 'number'; inp.min = '1'; inp.value = cond.value || 30; inp.style.width = '70px';
+          const lbl = document.createElement('span'); lbl.textContent = 'days'; lbl.style.cssText = 'font-size:0.82rem; color:#aaa; margin-left:0.3rem;';
+          inp.addEventListener('input', () => { nspConditions[index].value = parseInt(inp.value) || 30; });
+          valueWrap.appendChild(inp); valueWrap.appendChild(lbl);
+        } else {
+          const inp = document.createElement('input'); inp.type = ft === 'number' ? 'number' : 'text'; inp.value = cond.value !== undefined ? cond.value : ''; inp.setAttribute('aria-label', 'Value');
+          // Attach datalist for known string fields
+          if (ft === 'string') {
+            const listId = `nsp-dl-${index}-${Date.now()}`;
+            const dl = document.createElement('datalist'); dl.id = listId;
+            let suggestions = [];
+            if (fieldVal === 'artist' || fieldVal === 'albumartist') suggestions = artistList;
+            else if (fieldVal === 'album')  suggestions = albumList;
+            else if (fieldVal === 'genre')  suggestions = genreList;
+            if (suggestions.length) {
+              suggestions.forEach(s => { const o = document.createElement('option'); o.value = s; dl.appendChild(o); });
+              inp.setAttribute('list', listId);
+              valueWrap.appendChild(dl);
+            }
+          }
+          inp.addEventListener('input', () => { nspConditions[index].value = ft === 'number' ? (parseFloat(inp.value) || 0) : inp.value; }); valueWrap.appendChild(inp);
+        }
+      }
+      buildValueInput(cond.field, cond.operator);
+      fieldSel.addEventListener('change', () => { nspConditions[index].field = fieldSel.value; populateOps(fieldSel.value); nspConditions[index].operator = opSel.value; nspConditions[index].value = ''; buildValueInput(fieldSel.value, opSel.value); });
+      opSel.addEventListener('change', () => { nspConditions[index].operator = opSel.value; buildValueInput(fieldSel.value, opSel.value); });
+      const removeBtn = document.createElement('button'); removeBtn.className = 'rb-rule-remove'; removeBtn.textContent = '✕'; removeBtn.title = 'Remove';
+      removeBtn.addEventListener('click', () => { nspConditions.splice(index, 1); renderNspConditions(); });
+      row.appendChild(fieldSel); row.appendChild(opSel); row.appendChild(valueWrap); row.appendChild(removeBtn);
+      return row;
+    }
+
+    function buildNspPayload() {
+      const name  = document.getElementById('nspNameInput').value.trim();
+      const limit = parseInt(document.getElementById('nspLimit').value) || 25;
+      const order = document.getElementById('nspSortOrder').value;
+      const sort  = document.getElementById('nspSortField').value;
+      const payload = { name, all: nspConditions.filter(c => c.field && c.operator).map(c => ({ [c.operator]: { [c.field]: c.value } })), limit };
+      if (sort === 'random') { payload.sort = 'random'; } else { payload.sort = sort; payload.order = order; }
+      return payload;
+    }
+
+    document.getElementById('nspAddCondition').addEventListener('click', () => { nspConditions.push(defaultNspCondition()); renderNspConditions(); });
+
+    document.getElementById('nspPreviewBtn').addEventListener('click', () => {
+      const name = document.getElementById('nspNameInput').value.trim();
+      const status = document.getElementById('nspStatus');
+      if (!name) { status.textContent = 'Add a playlist name'; status.className = 'rb-status status-err'; return; }
+      if (!nspConditions.length) { status.textContent = 'Add at least one condition'; status.className = 'rb-status status-err'; return; }
+      status.textContent = '';
+      document.getElementById('nspJsonPreview').textContent = JSON.stringify(buildNspPayload(), null, 2);
+      document.getElementById('nspPreviewPanel').style.display = '';
+      document.getElementById('nspSaveStatus').textContent = '';
+    });
+
+    document.getElementById('nspPreviewCancelBtn').addEventListener('click', () => { document.getElementById('nspPreviewPanel').style.display = 'none'; });
+
+    document.getElementById('nspSaveBtn').addEventListener('click', async () => {
+      const name = document.getElementById('nspNameInput').value.trim();
+      const status = document.getElementById('nspSaveStatus');
+      const saveBtn = document.getElementById('nspSaveBtn');
+      saveBtn.disabled = true; saveBtn.textContent = 'Saving...';
+      try {
+        const res  = await fetch('/nsp/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, config: buildNspPayload(), existingSlug: nspEditingId || undefined }) });
+        const data = await res.json();
+        if (data.ok) {
+          await loadPlaylists();
+          // If editing, return to detail view with updated data
+          if (nspEditingId) {
+            const updated = allPlaylists.find(pl => pl.id === `nsp:${data.slug}`);
+            if (updated) { openNspDetail(updated); return; }
+          }
+          showListView();
+        }
+        else { status.textContent = `✗ ${data.error}`; status.className = 'rb-status status-err'; }
+      } catch (e) { status.textContent = '✗ Request failed'; status.className = 'rb-status status-err'; }
+      finally { saveBtn.disabled = false; saveBtn.textContent = 'Save Playlist'; }
+    });
+
+    document.getElementById('nspCancelBtn').addEventListener('click', () => showListView());
+    document.getElementById('nspBackBtn').addEventListener('click',   () => showListView());
 
     // ── Manual builder ─────────────────────────────────────────────────────
     // ── LB view
@@ -1856,7 +2176,11 @@
     });
     document.getElementById('selDeleteBtn').addEventListener('click', async () => {
       if (!confirm(`Delete ${selected.size} playlist(s)? This cannot be undone.`)) return;
-      for (const id of [...selected]) await fetch(`/playlists/${id}/delete`, { method: 'POST' });
+      for (const id of [...selected]) {
+        const p = allPlaylists.find(pl => pl.id === id);
+        if (p) await doDelete(p);
+        else await fetch(`/playlists/${id}/delete`, { method: 'POST' });
+      }
       selected.clear(); await loadPlaylists();
     });
 

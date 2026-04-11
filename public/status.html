@@ -88,6 +88,8 @@
           <div class="history-source-header">
             <span class="history-source-name">Lidarr</span>
             <span class="history-source-status" id="lidarrConnStatus"></span>
+            <button class="btn btn-secondary btn-sm" id="sendToLidarrBtn">Send Missing Artists</button>
+            <span class="history-source-status" id="lidarrSendStatus"></span>
           </div>
           <div class="svc-sub" id="lidarrUrl"></div>
           <div class="svc-jobs">
@@ -384,6 +386,22 @@
     }
 
     document.getElementById('refreshBtn').addEventListener('click', () => window.location.reload());
+
+    // ── Lidarr: send missing artists ────────────────────────────────────────
+    document.getElementById('sendToLidarrBtn').addEventListener('click', async () => {
+      const btn    = document.getElementById('sendToLidarrBtn');
+      const status = document.getElementById('lidarrSendStatus');
+      btn.disabled = true; status.textContent = 'Sending…'; status.className = 'history-source-status status-pending';
+      try {
+        const res  = await fetch('/sync/process-missing-artists', { method: 'POST' });
+        const data = await res.json();
+        status.textContent = data.ok ? '✓ Done' : `✗ ${data.error}`;
+        status.className   = `history-source-status ${data.ok ? 'status-ok' : 'status-err'}`;
+      } catch (e) {
+        status.textContent = '✗ Request failed'; status.className = 'history-source-status status-err';
+      }
+      btn.disabled = false;
+    });
 
     loadStatus();
     loadAllStatus();

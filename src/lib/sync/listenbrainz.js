@@ -312,7 +312,7 @@ async function syncLbPlaylists(db, settings) {
         const id       = matchLocal(resolved, trackTitle, cache);
         if (id) trackIds.push(id); else missingArtists.add(artistName);
       }
-      if (missingArtists.size && settings.lb_lidarr_enabled === 'true')
+      if (missingArtists.size)
         writeMissingArtists(db, [...missingArtists], 'lb_playlist');
       if (!trackIds.length) { logger.info('sync', `lb-sync: ${mbid} — no matched tracks`); continue; }
 

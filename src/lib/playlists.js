@@ -43,7 +43,7 @@ router.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, '..', '..', 'public', 'playlists.html'));
 });
 
-// GET /playlists/api/list — merge active (from ND) with inactive (from local DB)
+// GET /playlists/api/list — merge active (from ND) with inactive (from local DB) + NSP files
 router.get('/api/list', async (req, res) => {
   const active   = await navidrome.getPlaylists(db);
   const inactive = db.prepare(`
@@ -54,8 +54,6 @@ router.get('/api/list', async (req, res) => {
   const createdAt = {};
   db.prepare('SELECT navidrome_id, created_at FROM navilist_playlists').all()
     .forEach(r => { createdAt[r.navidrome_id] = r.created_at; });
-  // Attach lb_slot_key + lb_title to LB subscribed playlists so the frontend
-  // can compute friendly display names.
   const lbCache  = db.prepare('SELECT lb_mbid, source_patch, title FROM lb_playlist_cache').all();
   const lbByMbid = new Map(lbCache.map(r => [r.lb_mbid, r]));
 
@@ -71,9 +69,33 @@ router.get('/api/list', async (req, res) => {
     return p;
   }
 
+  // NSP files from filesystem
+  const { listNspFiles, getNspPath } = require('./nsp');
+  const nspPath  = getNspPath();
+  const nspFiles = listNspFiles(nspPath || '');
+  const nspByName = new Map(nspFiles.map(f => [f.name.toLowerCase(), f]));
+  const ndNames   = new Set(active.map(p => p.name?.toLowerCase()));
+
+  // Tag ND playlists that match a .nsp file
+  const taggedActive = active.map(p => {
+    const nspEntry = nspByName.get(p.name?.toLowerCase());
+    if (nspEntry) return { ...p, comment: 'navilist:nsp', nsp_slug: nspEntry.slug, nsp_config: nspEntry.config };
+    return p;
+  });
+
+  // Only show filesystem stubs for NSP files not yet picked up by ND
+  const nspPlaylists = nspFiles
+    .filter(f => !ndNames.has(f.name?.toLowerCase()))
+    .map(f => ({
+      id: `nsp:${f.slug}`, name: f.name, comment: 'navilist:nsp',
+      active: 1, songCount: null, duration: null, created_at: null,
+      nsp_slug: f.slug, nsp_config: f.config,
+    }));
+
   const playlists = [
-    ...active.map(p => enrichPlaylist({ ...p, active: 1, created_at: createdAt[p.id] || null })),
-    ...inactive.map(enrichPlaylist)
+    ...taggedActive.map(p => enrichPlaylist({ ...p, active: 1, created_at: createdAt[p.id] || null })),
+    ...inactive.map(enrichPlaylist),
+    ...nspPlaylists,
   ];
   res.json({ ok: true, playlists });
 });
@@ -86,6 +108,16 @@ router.get('/api/genres', (req, res) => {
     ORDER BY genre ASC
   `).all().map(r => r.genre);
   res.json({ ok: true, genres });
+});
+
+// GET /playlists/api/albums — distinct album list for autocomplete
+router.get('/api/albums', (req, res) => {
+  const albums = db.prepare(`
+    SELECT DISTINCT album FROM tracks
+    WHERE album IS NOT NULL AND album != ''
+    ORDER BY album ASC
+  `).all().map(r => r.album);
+  res.json({ ok: true, albums });
 });
 
 // GET /playlists/api/artists — distinct artist list for autocomplete
@@ -119,6 +151,44 @@ router.get('/api/:id', async (req, res) => {
 
   const playlist = await navidrome.getPlaylist(db, id);
   if (!playlist) return res.json({ ok: false, error: 'Not found' });
+
+  // For LB/LFM playlists, merge in missing tracks from cache
+  const localRow = db.prepare('SELECT comment FROM navilist_playlists WHERE navidrome_id = ?').get(id);
+  const comment  = localRow?.comment || playlist.comment || '';
+  logger.debug('playlists', `api/${id} comment: "${comment}"`);
+
+  if (/^navilist:lb(-snapshot)?\s/.test(comment)) {
+    try {
+      const { mbid } = JSON.parse(comment.slice(comment.indexOf('{')));
+      const cached   = db.prepare('SELECT * FROM lb_playlist_tracks WHERE lb_mbid = ? ORDER BY position').all(mbid);
+      if (cached.length) {
+        const ndTracks  = Array.isArray(playlist.entry) ? playlist.entry : (playlist.entry ? [playlist.entry] : []);
+        const ndByTitle = new Map(ndTracks.map(t => [`${(t.artist||'').toLowerCase()}|||${(t.title||'').toLowerCase()}`, t]));
+        const merged    = cached.map(c => {
+          const key = `${(c.artist||'').toLowerCase()}|||${(c.title||'').toLowerCase()}`;
+          return ndByTitle.get(key) || { title: c.title, artist: c.artist, duration: 0, missing: true };
+        });
+        return res.json({ ok: true, playlist: { ...playlist, entry: merged } });
+      }
+    } catch (e) {}
+  }
+
+  if (/^navilist:lastfm(-snapshot)?\s/.test(comment)) {
+    try {
+      const { lfm_id } = JSON.parse(comment.slice(comment.indexOf('{')));
+      const cached     = db.prepare('SELECT * FROM lfm_playlist_tracks WHERE lfm_id = ? ORDER BY position').all(lfm_id);
+      if (cached.length) {
+        const ndTracks  = Array.isArray(playlist.entry) ? playlist.entry : (playlist.entry ? [playlist.entry] : []);
+        const ndByTitle = new Map(ndTracks.map(t => [`${(t.artist||'').toLowerCase()}|||${(t.title||'').toLowerCase()}`, t]));
+        const merged    = cached.map(c => {
+          const key = `${(c.artist||'').toLowerCase()}|||${(c.title||'').toLowerCase()}`;
+          return ndByTitle.get(key) || { title: c.title, artist: c.artist, duration: 0, missing: true };
+        });
+        return res.json({ ok: true, playlist: { ...playlist, entry: merged } });
+      }
+    } catch (e) {}
+  }
+
   res.json({ ok: true, playlist });
 });
 
@@ -490,6 +560,15 @@ router.post('/:id/activate', async (req, res) => {
 
   logger.info('playlists', `activated "${local.name}" → new ND id ${newId} (${trackIds.length} tracks)`);
   res.json({ ok: true, newId, count: trackIds.length });
+});
+
+// POST /playlists/:id/purge — remove from local DB only, no ND call (for stale NSP rows etc)
+router.post('/:id/purge', (req, res) => {
+  db.transaction(() => {
+    db.prepare('DELETE FROM navilist_playlist_tracks WHERE playlist_id = ?').run(req.params.id);
+    db.prepare('DELETE FROM navilist_playlists WHERE navidrome_id = ?').run(req.params.id);
+  })();
+  res.json({ ok: true });
 });
 
 // POST /playlists/:id/delete — delete from NL and ND (if active)

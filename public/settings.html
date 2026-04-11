@@ -59,6 +59,30 @@
             </div>
             <input type="hidden" name="music_folder_ids" id="musicFolderIds" value="" />
           </div>
+
+          <div class="folder-section">
+            <div class="folder-header">
+              <span class="folder-label">Library</span>
+            </div>
+            <label class="rb-toggle" style="flex-direction:row; align-items:center; gap:0.5rem; margin:0; font-size:0.8rem; color:#888;">
+              <input type="checkbox" name="deezer_artist_images" id="deezer_artist_images" value="true" style="accent-color:#5b6af0;" />
+              Fetch artist images from Deezer during library sync
+            </label>
+          </div>
+
+          <div class="folder-section">
+            <div class="folder-header">
+              <span class="folder-label">NSP Playlists</span>
+              <span class="history-source-status" id="nspStatus"></span>
+            </div>
+            <div class="svc-jobs">
+              <div class="svc-job svc-field">
+                <span class="svc-job-label">Output path</span>
+                <input type="text" name="nsp_path" id="nsp_path" placeholder="/app/nsp" />
+              </div>
+            </div>
+            <p style="font-size:0.78rem; color:#aaa; margin:0.5rem 0 0 0;">Path inside the naviList container where .nsp files are written. Must be mounted and visible to Navidrome via <code>PlaylistsPath</code>.</p>
+          </div>
         </div>
 
         <!-- ── Last.fm ───────────────────────────────────────────────── -->
@@ -94,13 +118,6 @@
               <span class="svc-job-label">Username</span>
               <input type="text" name="listenbrainz_username" id="listenbrainz_username" />
             </div>
-            <div class="svc-job">
-              <span class="svc-job-label"></span>
-              <label class="rb-toggle" style="flex-direction:row; align-items:center; gap:0.5rem; margin:0; font-size:0.8rem; color:#888;">
-                <input type="checkbox" name="lb_lidarr_enabled" id="lb_lidarr_enabled" value="true" style="accent-color:#5b6af0;" />
-                Auto-send missing playlist artists to Lidarr
-              </label>
-            </div>
           </div>
         </div>
 
@@ -110,6 +127,8 @@
             <span class="history-source-name">Lidarr</span>
             <span class="history-source-status" id="lidarrStatus"></span>
             <button type="button" class="btn btn-secondary btn-sm" id="testLidarr">Connect</button>
+            <button type="button" class="btn btn-secondary btn-sm" id="lidarrAutoAddToggle">Auto-add: Off</button>
+            <input type="hidden" name="lidarr_auto_add" id="lidarr_auto_add" value="false" />
           </div>
           <div class="svc-jobs">
             <div class="svc-job svc-field">
@@ -132,22 +151,6 @@
           <input type="hidden" id="lidarr_root_folder_h" name="lidarr_root_folder" />
           <input type="hidden" id="lidarr_quality_profile_id_h" name="lidarr_quality_profile_id" />
           <input type="hidden" id="lidarr_metadata_profile_id_h" name="lidarr_metadata_profile_id" />
-        </div>
-
-        <!-- ── Library ───────────────────────────────────────────────── -->
-        <div class="status-history-source">
-          <div class="history-source-header">
-            <span class="history-source-name">Library</span>
-          </div>
-          <div class="svc-jobs">
-            <div class="svc-job">
-              <span class="svc-job-label"></span>
-              <label class="rb-toggle" style="flex-direction:row; align-items:center; gap:0.5rem; margin:0; font-size:0.8rem; color:#888;">
-                <input type="checkbox" name="deezer_artist_images" id="deezer_artist_images" value="true" style="accent-color:#5b6af0;" />
-                Fetch artist images from Deezer during library sync
-              </label>
-            </div>
-          </div>
         </div>
 
       </div>
@@ -181,8 +184,24 @@
         const imgCb = document.getElementById('deezer_artist_images');
         if (imgCb) imgCb.checked = s.deezer_artist_images === 'true';
 
-        const lbLidarrCb = document.getElementById('lb_lidarr_enabled');
-        if (lbLidarrCb) lbLidarrCb.checked = s.lb_lidarr_enabled === 'true';
+        const nspEl = document.getElementById('nsp_path');
+        if (nspEl) nspEl.value = s.nsp_path || '';
+        const nspStatus = document.getElementById('nspStatus');
+        if (nspStatus) {
+          nspStatus.textContent = s.nsp_path ? '✓ Configured' : '— Not set';
+          nspStatus.className = 'history-source-status ' + (s.nsp_path ? 'status-ok' : '');
+        }
+
+        const autoAddCb = document.getElementById('lidarr_auto_add');
+        const autoAddToggle = document.getElementById('lidarrAutoAddToggle');
+        const autoAddOn = s.lidarr_auto_add === 'true';
+        if (autoAddCb) autoAddCb.value = autoAddOn ? 'true' : 'false';
+        if (autoAddToggle) {
+          autoAddToggle.textContent = autoAddOn ? 'Auto-add: On' : 'Auto-add: Off';
+          autoAddToggle.style.background = autoAddOn ? '#0084ff' : '';
+          autoAddToggle.style.color      = autoAddOn ? '#fff' : '';
+          autoAddToggle.style.borderColor = autoAddOn ? '#0084ff' : '';
+        }
 
         // Set status indicators
         const naviEl = document.getElementById('navidromeStatus');
@@ -291,6 +310,17 @@
         statusEl.textContent = '✗ Request failed';
         statusEl.className = 'status-err';
       }
+    });
+
+    document.getElementById('lidarrAutoAddToggle').addEventListener('click', () => {
+      const hidden = document.getElementById('lidarr_auto_add');
+      const btn    = document.getElementById('lidarrAutoAddToggle');
+      const on     = hidden.value !== 'true';
+      hidden.value        = on ? 'true' : 'false';
+      btn.textContent     = on ? 'Auto-add: On' : 'Auto-add: Off';
+      btn.style.background  = on ? '#0084ff' : '';
+      btn.style.color       = on ? '#fff' : '';
+      btn.style.borderColor = on ? '#0084ff' : '';
     });
 
     // ── Lidarr connect + profile dropdowns ───────────────────────────────

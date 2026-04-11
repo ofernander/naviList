@@ -34,6 +34,7 @@ const ENV_SETTINGS = {
   lidarr_root_folder:        process.env.LIDARR_ROOT_FOLDER,
   lidarr_quality_profile_id: process.env.LIDARR_QUALITY_PROFILE_ID,
   lidarr_metadata_profile_id: process.env.LIDARR_METADATA_PROFILE_ID,
+  nsp_path:                   process.env.NL_NSP_PATH,
 };
 
 const seedSetting = db.prepare('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)');

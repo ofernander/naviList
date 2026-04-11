@@ -283,6 +283,8 @@ async function syncLfmPlaylists(db, settings) {
       })();
 
       const matched = rows.filter(r => r.matched).length;
+      const missingArtists = [...new Set(rows.filter(r => !r.matched).map(r => r.artist).filter(Boolean))];
+      if (missingArtists.length) writeMissingArtists(db, missingArtists, 'lfm_playlist');
       logger.info('sync', `lfm-playlists: "${title}" — ${rows.length} tracks, ${matched} matched`);
 
       // Push to ND for subscribed playlists
