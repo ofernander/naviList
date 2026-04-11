@@ -5,6 +5,29 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Playlists - naviList</title>
   <link rel="stylesheet" href="/css/main.css" />
+  <style>
+    .rb-req-toggle {
+      padding: 0.2rem 0.55rem;
+      border-radius: 4px;
+      border: 1px solid #ddddd8;
+      font-size: 0.76rem;
+      font-weight: 500;
+      cursor: pointer;
+      white-space: nowrap;
+      flex-shrink: 0;
+      transition: background 0.1s, color 0.1s;
+    }
+    .rb-req-toggle.is-required {
+      background: #f0f0ee;
+      color: #444;
+      border-color: #c8c8c2;
+    }
+    .rb-req-toggle.is-preferred {
+      background: #eef3ff;
+      color: #2255cc;
+      border-color: #b3c8ff;
+    }
+  </style>
 </head>
 <body>
   <nav>
@@ -101,17 +124,12 @@
       <div class="rb-section-label">Settings</div>
       <div class="rb-globals">
         <div class="rb-global-field">
-          <label for="rbLimit">Limit</label>
-          <input type="number" id="rbLimit" min="1" max="500" value="50" />
+          <input type="number" id="rbLimit" min="1" max="500" value="25" />
           <span style="font-size:0.82rem; color:#aaa;">tracks</span>
         </div>
-        <label class="rb-toggle">
-          <input type="checkbox" id="rbShuffle" checked />
-          Shuffle
-        </label>
         <div class="rb-global-field">
-          <label for="rbMaxPerArtist">Max per artist</label>
           <input type="number" id="rbMaxPerArtist" min="1" max="50" value="5" />
+          <span style="font-size:0.82rem; color:#aaa;">maximum tracks per artist</span>
         </div>
       </div>
     </div>
@@ -1015,13 +1033,11 @@
       rbPreviewTracks     = [];
 
       if (existingRules?.rules?.length) {
-        document.getElementById('rbLimit').value         = existingRules.limit          ?? 50;
-        document.getElementById('rbShuffle').checked    = existingRules.shuffle        ?? true;
+        document.getElementById('rbLimit').value         = existingRules.limit          ?? 25;
         document.getElementById('rbMaxPerArtist').value = existingRules.max_per_artist ?? 5;
-        rbRules = existingRules.rules.map(r => ({ ...r }));
+        rbRules = existingRules.rules.map(r => ({ ...r, required: r.required !== false }));
       } else {
-        document.getElementById('rbLimit').value         = 50;
-        document.getElementById('rbShuffle').checked    = true;
+        document.getElementById('rbLimit').value         = 25;
         document.getElementById('rbMaxPerArtist').value = 5;
         rbRules = [defaultRule()];
       }
@@ -1040,7 +1056,7 @@
       if (rbMode === 'create') setTimeout(() => document.getElementById('rulesNameInput').focus(), 50);
     }
 
-    function defaultRule() { return { term: 'decade', value: '', weight: 1, mode: 'easy', options: {} }; }
+    function defaultRule() { return { term: 'decade', value: '', weight: 1, mode: 'easy', options: {}, required: true }; }
 
     function renderRuleRows() {
       const list = document.getElementById('rbRulesList');
@@ -1065,22 +1081,35 @@
       valueWrap.style.minWidth = '0';
       renderValueInput(valueWrap, rule);
 
+      // Required / Preferred toggle
+      const reqToggle = document.createElement('button');
+      reqToggle.className   = `rb-req-toggle ${rule.required !== false ? 'is-required' : 'is-preferred'}`;
+      reqToggle.textContent = rule.required !== false ? 'Required' : 'Preferred';
+      reqToggle.title       = 'Toggle Required / Preferred';
+      reqToggle.addEventListener('click', () => {
+        rbRules[index].required = rbRules[index].required === false ? true : false;
+        renderRuleRows();
+      });
+
       const weightWrap = document.createElement('div');
-      weightWrap.className = 'rb-weight-wrap';
+      weightWrap.className    = 'rb-weight-wrap';
+      weightWrap.style.display = rule.required !== false ? 'none' : '';
       const weightLabel = document.createElement('span'); weightLabel.textContent = 'Weight';
       const weightInput = document.createElement('input');
-      weightInput.type = 'number'; weightInput.min = '1'; weightInput.max = '10';
+      weightInput.type  = 'number'; weightInput.min = '1'; weightInput.max = '10'; weightInput.style.width = '60px';
       weightInput.value = rule.weight ?? 1; weightInput.setAttribute('aria-label', 'Weight');
       weightWrap.appendChild(weightLabel); weightWrap.appendChild(weightInput);
 
       const modeSel = document.createElement('select');
       modeSel.setAttribute('aria-label', 'Mode');
+      modeSel.style.cssText = 'width:90px; flex-shrink:0;';
       ['easy', 'medium', 'hard'].forEach(m => {
         const opt = document.createElement('option');
         opt.value = m; opt.textContent = m.charAt(0).toUpperCase() + m.slice(1);
         if (m === (rule.mode || 'easy')) opt.selected = true;
         modeSel.appendChild(opt);
       });
+      modeSel.style.display = rule.required !== false ? '' : 'none';
 
       const removeBtn = document.createElement('button');
       removeBtn.className = 'rb-rule-remove'; removeBtn.textContent = '✕'; removeBtn.title = 'Remove rule';
@@ -1099,7 +1128,8 @@
       const previewSpan = document.createElement('span');
       previewSpan.className = 'rb-preview-count'; previewSpan.textContent = '';
 
-      row.appendChild(termSel); row.appendChild(valueWrap); row.appendChild(weightWrap);
+      row.appendChild(termSel); row.appendChild(valueWrap);
+      row.appendChild(reqToggle); row.appendChild(weightWrap);
       row.appendChild(modeSel); row.appendChild(removeBtn); row.appendChild(previewSpan);
       scheduleRuleCountPreview();
       return row;
@@ -1231,10 +1261,10 @@
       return {
         version:        1,
         limit:          parseInt(document.getElementById('rbLimit').value)         || 50,
-        shuffle:        document.getElementById('rbShuffle').checked,
+        shuffle:        true,
         max_per_artist: parseInt(document.getElementById('rbMaxPerArtist').value) || null,
-        rules: rbRules.filter(r => r.value !== '').map(r => ({
-          term: r.term, value: r.value, weight: r.weight || 1, mode: r.mode || 'easy', options: r.options || {}
+        rules: rbRules.filter(r => r.value !== '' && !(Array.isArray(r.value) && !r.value.length)).map(r => ({
+          term: r.term, value: r.value, weight: r.weight || 1, mode: r.mode || 'easy', options: r.options || {}, required: r.required !== false
         }))
       };
     }

@@ -20,7 +20,7 @@ const logger = require('../utils/logger');
 const SUPPORTED_TERMS = ['artist', 'tag', 'stats', 'decade', 'mood'];
 const SUPPORTED_MODES = ['easy', 'medium', 'hard'];
 const SUPPORTED_STATS = ['top_played', 'recently_played', 'not_recently_played', 'unplayed', 'starred', 'highly_rated', 'loved', 'disliked', 'top_artists'];
-const DEFAULT_LIMIT   = 50;
+const DEFAULT_LIMIT   = 25;
 const DEFAULT_MODE    = 'easy';
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -37,10 +37,13 @@ function validateRules(rules) {
 
   (rules.rules || []).forEach((rule, i) => {
     if (!SUPPORTED_TERMS.includes(rule.term))    { errors.push(`rule[${i}]: unknown term "${rule.term}"`); }
-    if (rule.value === undefined || rule.value === null) { errors.push(`rule[${i}]: value is required`); }
+    if (rule.value === undefined || rule.value === null || rule.value === '') { errors.push(`rule[${i}]: value is required`); }
     if (rule.mode && !SUPPORTED_MODES.includes(rule.mode)) { errors.push(`rule[${i}]: unknown mode "${rule.mode}"`); }
     if (rule.weight !== undefined && (typeof rule.weight !== 'number' || rule.weight < 1)) {
       errors.push(`rule[${i}]: weight must be a positive integer`);
+    }
+    if (rule.required !== undefined && typeof rule.required !== 'boolean') {
+      errors.push(`rule[${i}]: required must be a boolean`);
     }
   });
 
@@ -78,27 +81,79 @@ async function generatePlaylist(db, rules) {
   }
 
   const limit        = rules.limit          ?? DEFAULT_LIMIT;
-  const shuffle      = rules.shuffle        ?? true;
+  const shuffle      = true;
   const maxPerArtist = rules.max_per_artist ?? 5;
 
-  // Resolve each rule to a pool
-  const pools = await Promise.all(
-    rules.rules.map(rule => resolveRule(db, rule).then(ids => {
-      logger.debug('pl_engine', `rule [${rule.term}:${rule.value}] resolved ${ids.length} tracks`);
+  // Split into required (filter) and preferred (boost) rules
+  const requiredRules  = rules.rules.filter(r => r.required !== false);
+  const preferredRules = rules.rules.filter(r => r.required === false);
+
+  // Resolve required rules
+  const resolvedRequired = await Promise.all(
+    requiredRules.map(rule => resolveRule(db, rule).then(ids => {
+      logger.debug('pl_engine', `required rule [${rule.term}:${rule.value}] resolved ${ids.length} tracks`);
       return { rule, ids };
     }))
   );
 
-  // Intersect all pools — a track must appear in every rule's pool to qualify.
-  // With a single rule, intersection is a no-op (full pool passes through).
-  const merged = intersect(pools);
-  logger.debug('pl_engine', `intersect result: ${merged.length} tracks from ${pools.length} pool(s)`);
+  // Group by term — union within group, intersect across groups
+  const termGroups = new Map();
+  for (const { rule, ids } of resolvedRequired) {
+    if (!termGroups.has(rule.term)) termGroups.set(rule.term, new Set());
+    ids.forEach(id => termGroups.get(rule.term).add(id));
+  }
+  logger.debug('pl_engine', `term groups: ${[...termGroups.entries()].map(([t, s]) => `${t}:${s.size}`).join(', ')}`);
 
-  // Shuffle to prevent artist clumping before truncating
-  if (shuffle) fisherYates(merged);
+  // Intersect across term groups — build sets once, not per-candidate
+  const termArrays = [...termGroups.values()].map(s => [...s]);
+  let merged;
+  if (termArrays.length === 0) {
+    merged = [];
+  } else if (termArrays.length === 1) {
+    merged = termArrays[0];
+  } else {
+    const otherSets = termArrays.slice(1).map(arr => new Set(arr));
+    merged = termArrays[0].filter(id => otherSets.every(s => s.has(id)));
+  }
+  logger.debug('pl_engine', `intersect result: ${merged.length} tracks from ${termGroups.size} term group(s)`);
+
+  if (!merged.length) {
+    logger.info('pl_engine', 'no tracks matched required rules');
+    return [];
+  }
+
+  // Score candidates against preferred rules
+  let scored;
+  if (preferredRules.length) {
+    const resolvedPreferred = await Promise.all(
+      preferredRules.map(rule => resolveRule(db, rule).then(ids => {
+        logger.debug('pl_engine', `preferred rule [${rule.term}:${rule.value}] resolved ${ids.length} tracks`);
+        return { rule, ids: new Set(ids) };
+      }))
+    );
+    const scoreMap = new Map();
+    for (const { rule, ids } of resolvedPreferred) {
+      const weight = rule.weight || 1;
+      for (const id of ids) {
+        scoreMap.set(id, (scoreMap.get(id) || 0) + weight);
+      }
+    }
+    // Sort by score descending, shuffle within equal-score tiers
+    const buckets = new Map();
+    for (const id of merged) {
+      const score = scoreMap.get(id) || 0;
+      if (!buckets.has(score)) buckets.set(score, []);
+      buckets.get(score).push(id);
+    }
+    if (shuffle) buckets.forEach(bucket => fisherYates(bucket));
+    scored = [...buckets.keys()].sort((a, b) => b - a).flatMap(s => buckets.get(s));
+  } else {
+    scored = merged;
+    if (shuffle) fisherYates(scored);
+  }
 
   // Apply per-artist cap if set
-  const capped = maxPerArtist ? capPerArtist(db, merged, maxPerArtist) : merged;
+  const capped = maxPerArtist ? capPerArtist(db, scored, maxPerArtist) : scored;
 
   // Apply disliked exclusion — remove any track the user has marked as disliked
   const dislikedSet = new Set(
@@ -107,7 +162,7 @@ async function generatePlaylist(db, rules) {
   const filtered = dislikedSet.size > 0 ? capped.filter(id => !dislikedSet.has(id)) : capped;
   if (dislikedSet.size > 0) logger.info('pl_engine', `excluded ${capped.length - filtered.length} disliked tracks`);
 
-  logger.info('pl_engine', `generated ${filtered.length} tracks from ${rules.rules.length} rules`);
+  logger.info('pl_engine', `generated ${filtered.length} tracks — ${requiredRules.length} required rule(s), ${preferredRules.length} preferred rule(s)`);
   logger.debug('pl_engine', `limit: ${limit}, shuffle: ${shuffle}, maxPerArtist: ${maxPerArtist}, disliked excluded: ${capped.length - filtered.length}`);
   return filtered.slice(0, limit);
 }
@@ -263,20 +318,22 @@ function resolveStats(db, rule, mode) {
 
 /**
  * decade — filter by tracks.year
- * value: "1990s" | "1990" | "90s"
+ * value: "1990s" | "1990" | "90s" — also accepts array for multiple decades (OR'd)
  */
 function resolveDecade(db, rule, _mode) {
-  const { start, end } = parseDecade(rule.value);
-  if (!start) {
-    logger.warn('pl_engine', `could not parse decade: ${rule.value}`);
-    return [];
+  const values  = Array.isArray(rule.value) ? rule.value : [rule.value];
+  const results = new Set();
+  for (const val of values) {
+    const { start, end } = parseDecade(val);
+    if (!start) { logger.warn('pl_engine', `could not parse decade: ${val}`); continue; }
+    const rows = db.prepare(`
+      SELECT id FROM tracks
+      WHERE year >= ? AND year < ?
+      ORDER BY year ASC
+    `).all(start, end);
+    rows.forEach(r => results.add(r.id));
   }
-  const rows = db.prepare(`
-    SELECT id FROM tracks
-    WHERE year >= ? AND year < ?
-    ORDER BY year ASC
-  `).all(start, end);
-  return rows.map(r => r.id);
+  return [...results];
 }
 
 /**
