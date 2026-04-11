@@ -23,3 +23,10 @@ services:
       - LIDARR_ROOT_FOLDER=${LIDARR_ROOT_FOLDER:-}
       - LIDARR_QUALITY_PROFILE_ID=${LIDARR_QUALITY_PROFILE_ID:-}
       - LIDARR_METADATA_PROFILE_ID=${LIDARR_METADATA_PROFILE_ID:-}
+      - NL_NSP_PATH=${NL_NSP_PATH:-}
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

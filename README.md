@@ -50,6 +50,12 @@ services:
     environment:
       - PORT=3000
       - LOG_LEVEL=info
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 ```
 
 ### 2. Environment variables
@@ -105,6 +111,14 @@ services:
       - ./nsp:/nsp
     environment:
       - PORT=3000
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    depends_on:
+      - navidrome
 ```
 
 In naviList Settings, set the NSP output path to `/nsp`.
