@@ -22,7 +22,7 @@ const {
   buildLfmTitle,
   buildLfmSnapshotTitle,
   runDetached,
-  writeMissingArtists
+  writeMissingArtists,
 } = require('./helpers');
 
 // ── Sync state ────────────────────────────────────────────────────────────────
@@ -503,6 +503,79 @@ router.get('/status', (req, res) => {
   });
 });
 
+// ── naviList / Radio playlist cron refresh ──────────────────────────────────
+
+const cron           = require('node-cron');
+const scheduledTasks = new Map(); // navidrome_id → cron.ScheduledTask
+
+async function refreshPlaylist(pl) {
+  const engine    = require('../pl_engine');
+  const navidrome = require('../../providers/navidrome');
+  const now       = Math.floor(Date.now() / 1000);
+  const comment   = pl.comment || '';
+
+  try {
+    if (comment.startsWith('navilist:navilist ')) {
+      const rules    = JSON.parse(comment.replace('navilist:navilist ', ''));
+      const trackIds = await engine.generatePlaylist(db, rules);
+      if (!trackIds.length) { logger.warn('sync', `cron-refresh: no tracks for "${pl.name}" — skipping`); return; }
+      const result = await navidrome.replacePlaylistTracks(db, pl.navidrome_id, trackIds);
+      if (!result.ok) { logger.warn('sync', `cron-refresh: replacePlaylistTracks failed for "${pl.name}": ${result.error}`); return; }
+      db.prepare('UPDATE navilist_playlists SET last_refreshed_at = ?, track_count = ? WHERE navidrome_id = ?')
+        .run(now, trackIds.length, pl.navidrome_id);
+      logger.info('sync', `cron-refresh: "${pl.name}" regenerated (${trackIds.length} tracks)`);
+
+    } else if (comment.startsWith('navilist:radio ')) {
+      const config   = JSON.parse(comment.replace('navilist:radio ', ''));
+      const trackIds = engine.resolveRadio(db, { artistIds: config.artistIds, depth: config.depth, includeSeed: config.include_seed });
+      if (!trackIds.length) { logger.warn('sync', `cron-refresh: no tracks for radio "${pl.name}" — skipping`); return; }
+      engine.fisherYates(trackIds);
+      const limited = trackIds.slice(0, config.track_count || 50);
+      const result  = await navidrome.replacePlaylistTracks(db, pl.navidrome_id, limited);
+      if (!result.ok) { logger.warn('sync', `cron-refresh: replacePlaylistTracks failed for radio "${pl.name}": ${result.error}`); return; }
+      db.prepare('UPDATE navilist_playlists SET last_refreshed_at = ?, track_count = ? WHERE navidrome_id = ?')
+        .run(now, limited.length, pl.navidrome_id);
+      logger.info('sync', `cron-refresh: radio "${pl.name}" regenerated (${limited.length} tracks)`);
+
+    } else {
+      logger.debug('sync', `cron-refresh: "${pl.name}" has unrecognised comment type — skipping`);
+    }
+  } catch (e) {
+    logger.error('sync', `cron-refresh: error refreshing "${pl.name}": ${e.message}`);
+  }
+}
+
+function schedulePlaylistRefresh(navidromeId, cronExpr) {
+  // Cancel any existing task for this playlist first
+  cancelPlaylistRefresh(navidromeId);
+
+  const task = cron.schedule(cronExpr, () => {
+    const pl = db.prepare('SELECT * FROM navilist_playlists WHERE navidrome_id = ? AND active = 1').get(navidromeId);
+    if (!pl) { cancelPlaylistRefresh(navidromeId); return; }
+    runDetached(`cron-refresh-${navidromeId}`, () => refreshPlaylist(pl));
+  });
+  scheduledTasks.set(navidromeId, task);
+  logger.info('sync', `cron-refresh: scheduled "${navidromeId}" with expression: ${cronExpr}`);
+}
+
+function cancelPlaylistRefresh(navidromeId) {
+  if (scheduledTasks.has(navidromeId)) {
+    scheduledTasks.get(navidromeId).stop();
+    scheduledTasks.delete(navidromeId);
+    logger.info('sync', `cron-refresh: cancelled schedule for "${navidromeId}"`);
+  }
+}
+
+function loadScheduledPlaylists() {
+  const rows = db.prepare(
+    'SELECT navidrome_id, name, refresh_cron FROM navilist_playlists WHERE refresh_cron IS NOT NULL AND active = 1'
+  ).all();
+  for (const row of rows) {
+    schedulePlaylistRefresh(row.navidrome_id, row.refresh_cron);
+  }
+  logger.info('sync', `cron-refresh: loaded ${rows.length} scheduled playlist(s) from DB`);
+}
+
 // ── Library sync runner ────────────────────────────────────────────────────────
 
 function runLibrarySync(reason) {
@@ -579,7 +652,10 @@ function startAutoRefresh() {
     runDetached('process-missing-artists', () => processMissingArtists());
   }, 30 * 60 * 1000);
 
-  logger.info('sync', 'auto-refresh scheduled: library poll every 5m, full sync every 6h, services every 30m');
+  // ── 5. On startup: load cron schedules for all naviList / Radio playlists ─────
+  loadScheduledPlaylists();
+
+  logger.info('sync', 'auto-refresh scheduled: library poll every 5m, full sync every 6h, services every 30m, playlist refresh via cron');
 }
 
 // ── Exports ───────────────────────────────────────────────────────────────────
@@ -589,6 +665,8 @@ module.exports = {
   getSyncState,
   getTagSyncState: () => tagSyncState,
   startAutoRefresh,
+  schedulePlaylistRefresh,
+  cancelPlaylistRefresh,
   sleep,
   buildMatchCacheLocal,
   matchLocal,

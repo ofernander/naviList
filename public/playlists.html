@@ -122,6 +122,24 @@
       <button class="rb-add-rule" id="rbAddRule">+ Add rule</button>
     </div>
 
+    <div class="rb-section" style="margin-top:1rem;">
+      <div class="rb-section-label">Auto-refresh</div>
+      <div class="rb-globals">
+        <div class="rb-global-field" style="flex-direction:column; align-items:flex-start; gap:0.4rem;">
+          <label for="rbRefreshCron">Cron schedule</label>
+          <input type="text" id="rbRefreshCron" placeholder="e.g. 0 6 * * *" style="width:160px; font-family:monospace;" />
+          <div style="font-size:0.78rem; color:#aaa; line-height:1.7;">
+            <code>* * * * *</code> every minute &nbsp;·&nbsp;
+            <code>0 * * * *</code> hourly &nbsp;·&nbsp;
+            <code>0 6 * * *</code> daily 6am &nbsp;·&nbsp;
+            <code>0 6 * * 1</code> Mon 6am &nbsp;·&nbsp;
+            <code>0 6 1 * *</code> 1st of month &nbsp;·&nbsp;
+            leave blank to disable
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div class="rb-actions">
       <button class="btn btn-secondary" id="rulesCancelBtn">Cancel</button>
       <button class="btn" id="rulesPreviewBtn">Preview →</button>
@@ -183,6 +201,24 @@
           <input type="checkbox" id="radioIncludeSeed" checked />
           Include seed artists
         </label>
+      </div>
+    </div>
+
+    <div class="rb-section" style="margin-top:1rem;">
+      <div class="rb-section-label">Auto-refresh</div>
+      <div class="rb-globals">
+        <div class="rb-global-field" style="flex-direction:column; align-items:flex-start; gap:0.4rem;">
+          <label for="radioRefreshCron">Cron schedule</label>
+          <input type="text" id="radioRefreshCron" placeholder="e.g. 0 6 * * *" style="width:160px; font-family:monospace;" />
+          <div style="font-size:0.78rem; color:#aaa; line-height:1.7;">
+            <code>* * * * *</code> every minute &nbsp;·&nbsp;
+            <code>0 * * * *</code> hourly &nbsp;·&nbsp;
+            <code>0 6 * * *</code> daily 6am &nbsp;·&nbsp;
+            <code>0 6 * * 1</code> Mon 6am &nbsp;·&nbsp;
+            <code>0 6 1 * *</code> 1st of month &nbsp;·&nbsp;
+            leave blank to disable
+          </div>
+        </div>
       </div>
     </div>
 
@@ -1244,9 +1280,10 @@
       if (!rbPreviewTracks.length) { status.textContent = 'Nothing to save — run Preview first'; status.className = 'rb-status status-err'; return; }
       saveBtn.disabled = true; saveBtn.textContent = 'Saving...';
       try {
+        const refreshCron = document.getElementById('rbRefreshCron').value.trim() || null;
         const res  = await fetch('/playlists/save-navilist', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: rbPlaylistName, rules: buildRulesPayload(), trackIds: rbPreviewTracks.map(t => t.id) })
+          body: JSON.stringify({ name: rbPlaylistName, rules: buildRulesPayload(), trackIds: rbPreviewTracks.map(t => t.id), refresh_cron: refreshCron })
         });
         const data = await res.json();
         if (data.ok) {
@@ -1326,7 +1363,8 @@
         radioSeeds = []; radioPreviewTracks = []; radioPreviewConfig = null;
         renderRadioSeeds();
         document.getElementById('radioNameInput').value            = '';
-        document.getElementById('radioStatus').textContent         = '';
+        document.getElementById('radioRefreshCron').value           = '';
+        document.getElementById('radioStatus').textContent          = '';
         document.getElementById('radioPreviewPanel').style.display = 'none';
         document.getElementById('radioPreviewBtn').disabled        = false;
         document.getElementById('radioPreviewBtn').textContent     = 'Preview →';
@@ -1435,9 +1473,10 @@
       if (!radioPreviewTracks.length) { status.textContent = 'Nothing to save — run Preview first'; status.className = 'rb-status status-err'; return; }
       saveBtn.disabled = true; saveBtn.textContent = 'Saving...';
       try {
+        const refreshCron = document.getElementById('radioRefreshCron').value.trim() || null;
         const res  = await fetch('/playlists/save-radio', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: stationName, config: radioPreviewConfig, trackIds: radioPreviewTracks.map(t => t.id) })
+          body: JSON.stringify({ name: stationName, config: radioPreviewConfig, trackIds: radioPreviewTracks.map(t => t.id), refresh_cron: refreshCron })
         });
         const data = await res.json();
         if (data.ok) {

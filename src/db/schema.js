@@ -211,8 +211,10 @@ module.exports = function (db) {
       active          INTEGER NOT NULL DEFAULT 1,
       track_count     INTEGER,
       duration        INTEGER,
-      created_at      INTEGER NOT NULL,
-      deactivated_at  INTEGER
+      created_at         INTEGER NOT NULL,
+      deactivated_at     INTEGER,
+      refresh_cron        TEXT,
+      last_refreshed_at  INTEGER
     );
 
     -- naviList playlist track snapshots

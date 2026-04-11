@@ -234,7 +234,7 @@ router.post('/preview-radio', async (req, res) => {
 
 // POST /playlists/save-radio — create in ND from previewed radio track list
 router.post('/save-radio', async (req, res) => {
-  const { name, config, trackIds } = req.body;
+  const { name, config, trackIds, refresh_cron } = req.body;
   if (!name?.trim())     return res.json({ ok: false, error: 'name required' });
   if (!config)           return res.json({ ok: false, error: 'config required' });
   if (!trackIds?.length) return res.json({ ok: false, error: 'trackIds required' });
@@ -248,6 +248,18 @@ router.post('/save-radio', async (req, res) => {
   const comment = `navilist:radio ${JSON.stringify(config)}`;
   await navidrome.updatePlaylist(db, playlistId, { comment });
   snapshotPlaylist(db, playlistId, name.trim(), comment, trackIds, null);
+
+  if (refresh_cron?.trim()) {
+    const nodeCron = require('node-cron');
+    if (nodeCron.validate(refresh_cron.trim())) {
+      db.prepare('UPDATE navilist_playlists SET refresh_cron = ? WHERE navidrome_id = ?')
+        .run(refresh_cron.trim(), playlistId);
+      const { schedulePlaylistRefresh } = require('./sync/index');
+      schedulePlaylistRefresh(playlistId, refresh_cron.trim());
+    } else {
+      logger.warn('playlists', `save-radio: invalid cron expression "${refresh_cron.trim()}" — skipping schedule`);
+    }
+  }
 
   logger.info('playlists', `radio playlist saved: "${name.trim()}" (${trackIds.length} tracks)`);
   res.json({ ok: true, playlistId, count: trackIds.length });
@@ -272,7 +284,7 @@ router.post('/preview-navilist', async (req, res) => {
 
 // POST /playlists/save-navilist — create in ND from previewed track list
 router.post('/save-navilist', async (req, res) => {
-  const { name, rules, trackIds } = req.body;
+  const { name, rules, trackIds, refresh_cron } = req.body;
   if (!name?.trim())     return res.json({ ok: false, error: 'name required' });
   if (!rules)            return res.json({ ok: false, error: 'rules required' });
   if (!trackIds?.length) return res.json({ ok: false, error: 'trackIds required' });
@@ -286,6 +298,18 @@ router.post('/save-navilist', async (req, res) => {
   const comment = `navilist:navilist ${JSON.stringify(rules)}`;
   await navidrome.updatePlaylist(db, playlistId, { comment });
   snapshotPlaylist(db, playlistId, name.trim(), comment, trackIds, null);
+
+  if (refresh_cron?.trim()) {
+    const nodeCron = require('node-cron');
+    if (nodeCron.validate(refresh_cron.trim())) {
+      db.prepare('UPDATE navilist_playlists SET refresh_cron = ? WHERE navidrome_id = ?')
+        .run(refresh_cron.trim(), playlistId);
+      const { schedulePlaylistRefresh } = require('./sync/index');
+      schedulePlaylistRefresh(playlistId, refresh_cron.trim());
+    } else {
+      logger.warn('playlists', `save-navilist: invalid cron expression "${refresh_cron.trim()}" — skipping schedule`);
+    }
+  }
 
   logger.info('playlists', `navilist playlist saved: "${name.trim()}" (${trackIds.length} tracks)`);
   res.json({ ok: true, playlistId, count: trackIds.length });
@@ -426,6 +450,8 @@ router.post('/:id/deactivate', async (req, res) => {
   const now = Math.floor(Date.now() / 1000);
   db.prepare('UPDATE navilist_playlists SET active = 0, deactivated_at = ? WHERE navidrome_id = ?').run(now, id);
   db.prepare('UPDATE lb_subscriptions SET navidrome_id = NULL WHERE navidrome_id = ?').run(id);
+  const { cancelPlaylistRefresh } = require('./sync/index');
+  cancelPlaylistRefresh(id);
   logger.info('playlists', `deactivated "${id}" — removed from ND, kept locally`);
   res.json({ ok: true });
 });
@@ -482,6 +508,9 @@ router.post('/:id/delete', async (req, res) => {
     db.prepare('DELETE FROM navilist_playlists WHERE navidrome_id = ?').run(id);
     db.prepare('UPDATE lb_subscriptions SET navidrome_id = NULL WHERE navidrome_id = ?').run(id);
   })();
+
+  const { cancelPlaylistRefresh } = require('./sync/index');
+  cancelPlaylistRefresh(id);
 
   logger.info('playlists', `deleted ${id} (was ${local?.active ? 'active' : 'inactive'})`);
   res.json({ ok: true });

@@ -135,5 +135,5 @@ module.exports = {
   buildLfmTitle,
   buildLfmSnapshotTitle,
   runDetached,
-  writeMissingArtists
+  writeMissingArtists,
 };
