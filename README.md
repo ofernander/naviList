@@ -77,33 +77,14 @@ PlaylistsPath = /music/playlists
 
 Mount the same path in both containers so they share the directory.
 
-Example combined compose:
+Example Navidrome compose section
 
 ```yaml
-services:
-  navidrome:
-    image: deluan/navidrome:latest
     volumes:
       - ./music:/music:ro
       - ./nsp:/music/playlists
     environment:
       - ND_PLAYLISTSPATH=/music/playlists
-
-  navilist:
-    image: ghcr.io/your-username/navilist:latest
-    volumes:
-      - ./data:/app/data
-      - ./nsp:/nsp
-    environment:
-      - PORT=3000
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
-    depends_on:
-      - navidrome
 ```
 
 In naviList Settings, set the NSP output path to `/nsp`.
