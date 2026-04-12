@@ -1,6 +1,6 @@
 services:
   navilist:
-    build: .
+    image: ghcr.io/ofernander/navilist:latest
     container_name: navilist
     restart: unless-stopped
     ports:

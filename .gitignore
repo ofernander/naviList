@@ -3,5 +3,6 @@ node_modules/
 *.db
 MISC/
 docker-compose.override.yml
-docker-compose.override.nas2.yml
+docker-compose.override.1.yml
+docker-compose.override.build.yml
 data
