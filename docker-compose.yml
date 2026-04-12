@@ -24,6 +24,7 @@ services:
       - LIDARR_QUALITY_PROFILE_ID=${LIDARR_QUALITY_PROFILE_ID:-}
       - LIDARR_METADATA_PROFILE_ID=${LIDARR_METADATA_PROFILE_ID:-}
       - NL_NSP_PATH=${NL_NSP_PATH:-}
+      - DATA_DIR=/app/data
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
       interval: 30s

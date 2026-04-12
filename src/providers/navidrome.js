@@ -274,6 +274,7 @@ async function syncPlaylistsToLocal(db) {
   let synced = 0;
   for (const p of playlists) {
     const detail = await getPlaylist(db, p.id);
+    await new Promise(r => setTimeout(r, 100));
     if (!detail) continue;
     const tracks = Array.isArray(detail.entry) ? detail.entry : (detail.entry ? [detail.entry] : []);
 
@@ -405,7 +406,7 @@ async function syncFolderPage(db, folderId, offset, upsertMany, seenIds, syncedA
 
 async function syncLibrary(db) {
   const deezer = require('./deezer'); // inline to avoid circular dep at module load
-  const IMAGE_DIR = '/app/data/artist-images';
+  const IMAGE_DIR = path.join(process.env.DATA_DIR || '/app/data', 'artist-images');
   fs.mkdirSync(IMAGE_DIR, { recursive: true });
 
   let total = 0;
@@ -528,9 +529,9 @@ async function syncLibrary(db) {
         const engine   = require('../lib/pl_engine');
         const playlists = await getPlaylists(db);
         for (const p of playlists) {
-          if (!p.comment?.startsWith('navilist:smart')) continue;
+          if (!p.comment?.startsWith('navilist:navilist')) continue;
           try {
-            const rules    = JSON.parse(p.comment.replace(/^navilist:smart\s*/, ''));
+            const rules    = JSON.parse(p.comment.replace(/^navilist:navilist\s*/, ''));
             const trackIds = await engine.generatePlaylist(db, rules);
             if (trackIds.length) await replacePlaylistTracks(db, p.id, trackIds);
             logger.info('navidrome', `regenerated smart playlist "${p.name}" (${trackIds.length} tracks)`);
@@ -554,5 +555,6 @@ module.exports = {
   getPlaylists, getPlaylist, createPlaylist,
   updatePlaylist, addTracksToPlaylist, removeTracksFromPlaylist, deletePlaylist,
   replacePlaylistTracks, syncLibrary, syncPlaylistsToLocal,
-  getNativeToken, getNdTrackCount
+  getNativeToken, getNdTrackCount,
+  getSettings, buildParams
 };

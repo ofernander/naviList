@@ -3,7 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Playlists - naviList</title>
+  <title>naviList</title>
+  <link rel="icon" href="/assets/favicon.webp" type="image/webp" />
   <link rel="stylesheet" href="/css/main.css" />
   <style>
     .rb-req-toggle {
@@ -32,7 +33,7 @@
 <body>
   <nav>
     <a href="/playlists" class="nav-brand">
-      <img src="/assets/navidrome.webp" class="nav-brand-icon" alt="" />
+      <img src="/assets/naviList_icon.png" class="nav-brand-icon" alt="" />
       naviList
     </a>
     <ul>
@@ -73,7 +74,7 @@
 
     <div id="plListHeader" style="display:none">
       <div class="pl-list-col-header">
-        <input type="checkbox" id="selectAllChk" style="accent-color:#0084ff; cursor:pointer;" />
+        <input type="checkbox" id="selectAllChk" style="accent-color:#8a79b7; cursor:pointer;" />
         <span class="pl-col-hdr" style="text-align:center;" data-sort="type">Type</span>
         <span class="pl-col-hdr" data-sort="name">Name</span>
         <span class="pl-col-hdr pl-col-hdr-r" data-sort="tracks">Tracks</span>
@@ -675,7 +676,7 @@
       const header = document.createElement('div');
       header.className = 'pl-list-row-header';
       header.innerHTML = `
-        <input type="checkbox" class="pl-row-chk" data-id="${esc(p.id)}" ${selected.has(p.id) ? 'checked' : ''} style="accent-color:#0084ff; cursor:pointer; flex-shrink:0;" />
+        <input type="checkbox" class="pl-row-chk" data-id="${esc(p.id)}" ${selected.has(p.id) ? 'checked' : ''} style="accent-color:#8a79b7; cursor:pointer; flex-shrink:0;" />
         <span class="pl-badge ${badgeClass(type)}">${badgeLabel(type)}</span>
         <span class="pl-list-row-name">${esc(getListDisplayName(p))}</span>
         <span class="pl-list-row-meta">${p.songCount || '—'}</span>

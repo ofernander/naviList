@@ -3,8 +3,6 @@ const router = express.Router();
 const path = require('path');
 const db = require('../db/index');
 const navidrome = require('../providers/navidrome');
-const mb        = require('../providers/musicbrainz');
-const lastfm    = require('../providers/lastfm');
 const engine    = require('./pl_engine');
 const logger = require('../utils/logger');
 
@@ -155,7 +153,6 @@ router.get('/api/:id', async (req, res) => {
   // For LB/LFM playlists, merge in missing tracks from cache
   const localRow = db.prepare('SELECT comment FROM navilist_playlists WHERE navidrome_id = ?').get(id);
   const comment  = localRow?.comment || playlist.comment || '';
-  logger.debug('playlists', `api/${id} comment: "${comment}"`);
 
   if (/^navilist:lb(-snapshot)?\s/.test(comment)) {
     try {
@@ -196,6 +193,9 @@ router.get('/api/:id', async (req, res) => {
 router.post('/preview-radio', async (req, res) => {
   const { artists, depth, track_count, include_seed } = req.body;
   if (!artists?.length) return res.json({ ok: false, error: 'at least one artist required' });
+
+  const mb     = require('../providers/musicbrainz');
+  const lastfm = require('../providers/lastfm');
 
   const settings = db.prepare('SELECT key, value FROM settings').all()
     .reduce((s, r) => { s[r.key] = r.value; return s; }, {});

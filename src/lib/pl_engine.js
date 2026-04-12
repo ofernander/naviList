@@ -484,21 +484,6 @@ function modeSlice(ids, mode) {
   }
 }
 
-// ── Intersection ─────────────────────────────────────────────────────────────
-
-/**
- * Intersect pools — only keep track IDs present in every pool.
- * With a single pool, returns it unchanged.
- * Order is taken from the first pool (preserves ranking of the primary rule).
- */
-function intersect(pools) {
-  if (!pools.length) return [];
-  if (pools.length === 1) return [...pools[0].ids];
-
-  const sets = pools.slice(1).map(p => new Set(p.ids));
-  return pools[0].ids.filter(id => sets.every(s => s.has(id)));
-}
-
 // ── Per-artist cap ───────────────────────────────────────────────────────────
 
 /**
@@ -525,40 +510,6 @@ function capPerArtist(db, ids, max) {
  * Round-robin interleave pools by weight, deduplicate on the fly.
  * Each pool contributes in proportion to its weight.
  */
-function interleave(pools, limit) {
-  const seen   = new Set();
-  const result = [];
-
-  // Build weighted cursor list: [{ids, cursor}] repeated by weight
-  const cursors = [];
-  for (const { rule, ids } of pools) {
-    const weight = rule.weight || 1;
-    for (let w = 0; w < weight; w++) {
-      cursors.push({ ids, cursor: 0 });
-    }
-  }
-
-  let progress = true;
-  while (result.length < limit && progress) {
-    progress = false;
-    for (const c of cursors) {
-      if (result.length >= limit) break;
-      // Advance cursor past already-seen IDs
-      while (c.cursor < c.ids.length && seen.has(c.ids[c.cursor])) c.cursor++;
-      if (c.cursor < c.ids.length) {
-        const id = c.ids[c.cursor++];
-        seen.add(id);
-        result.push(id);
-        progress = true;
-      }
-    }
-  }
-
-  return result;
-}
-
-// ── Utilities ─────────────────────────────────────────────────────────────────
-
 function fisherYates(arr) {
   for (let i = arr.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));

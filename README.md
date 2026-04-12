@@ -1,36 +1,23 @@
 # naviList
 
-naviList is a self-hosted playlist manager and generator for [Navidrome](https://www.navidrome.org/). It runs alongside Navidrome and extends it with rule-based playlist generation, external service integration, and intelligent library tooling — all without touching your music files.
+Self-hosted playlist manager and generator for [Navidrome](https://www.navidrome.org/). 
 
----
 
-## What it does
+![naviList Screenshot](docs/images/Screenshot.png)
 
-### Playlist generation
+## Features
 - **naviList playlists** — rules-based generation using stats, tags, artists, decades, and more. Rules are weighted and interleaved, not concatenated. Supports auto-refresh on a cron schedule.
-- **Radio playlists** — seed one or more artists and naviList finds similar music from your library using cached Last.fm similarity data. Adjustable depth (close / medium / wide).
-- **Navidrome Smart Playlists (NSP)** — a UI wrapper for Navidrome's native `.nsp` smart playlist format. Build conditions visually, naviList writes the file and Navidrome evaluates it live.
+- **Radio style playlists** — seed one or more artists and naviList finds similar music from your library using cached Last.fm similarity data. Adjustable depth (close / medium / wide).
+- **Navidrome Smart Playlists (NSP)** — a UI wrapper for Navidrome's native `.nsp` smart playlist format.
 - **Manual playlists** — browse your library and build playlists by hand.
 
-### External service integration
+## External service integration
 - **Last.fm** — syncs listen history, loved tracks, top artists, top tracks, artist tags, similar artists, and chart-based playlists (weekly, monthly, all-time). Subscribe to auto-updating playlists or save point-in-time snapshots.
 - **ListenBrainz** — syncs listen history, loved tracks, top artists, top tracks, and generated playlists (Weekly Jams, Weekly Exploration, Daily Jams). Same subscribe/snapshot model as Last.fm.
-- **Lidarr** — when a subscribed playlist contains artists not in your library, naviList can automatically queue them in Lidarr for download. Configurable as always-on or manually triggered.
+- **Lidarr** — when a subscribed playlist contains artists not in your library, naviList can automatically queue them in Lidarr for download.
 
-### Library tooling
-- Syncs your full Navidrome library into a local SQLite database for fast, offline querying.
-- Artist images fetched from Deezer at sync time and served locally.
-- Folder-level sync filtering — restrict syncs to specific Navidrome music folders.
-
----
-
-## Requirements
-
-- Docker and Docker Compose
-- A running Navidrome instance
-- Navidrome's `PlaylistsPath` configured and mounted (required for NSP playlists)
-
----
+## A.I. Disclosure 
+Coding agents were used extensively for the development of this project with oversight and understanding of all core functions. The developer is committed to actively maintaining and improving the project. 
 
 ## Quick start
 
@@ -60,8 +47,6 @@ services:
 
 ### 2. Environment variables
 
-All service credentials can be set via environment variables as seed values on first boot. If a setting has already been saved through the UI, the environment variable is ignored — UI-saved values always take precedence.
-
 | Variable | Default | Description |
 |---|---|---|
 | `PORT` | `3000` | HTTP port naviList listens on |
@@ -84,7 +69,7 @@ All service credentials can be set via environment variables as seed values on f
 
 ### 3. Navidrome configuration
 
-For NSP playlists to work, Navidrome must be pointed at the same directory naviList writes `.nsp` files to. In your Navidrome config:
+For NSP playlists to work, Navidrome must be pointed at the same directory naviList writes `.nsp` files to with proper permissions configured. In your Navidrome config:
 
 ```toml
 PlaylistsPath = /music/playlists
@@ -123,8 +108,6 @@ services:
 
 In naviList Settings, set the NSP output path to `/nsp`.
 
----
-
 ## Building from source
 
 ```bash
@@ -153,7 +136,6 @@ npm start
 docker build -t navilist .
 ```
 
----
 
 ## First run
 
@@ -166,17 +148,6 @@ docker build -t navilist .
 
 After initial setup, naviList polls Navidrome for library changes every 5 minutes and runs a full external service sync every 30 minutes automatically.
 
----
-
-## Stack
-
-- **Runtime** — Node.js
-- **Framework** — Express
-- **Database** — SQLite via `better-sqlite3`
-- **Scheduling** — `node-cron`
-- **Frontend** — Vanilla JS, no build step
-
----
 
 ## Project structure
 
@@ -212,14 +183,6 @@ public/
   css/main.css        — all styles
   assets/
 ```
-
----
-
-## Playlist engine rules reference
-
-See [`MISC/pl_engine.md`](MISC/pl_engine.md) for the full design document covering rule terms, weights, modes, and the interleaving algorithm.
-
----
 
 ## License
 
