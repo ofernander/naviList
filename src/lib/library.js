@@ -1,35 +1,14 @@
-const express = require('express');
-const router = express.Router();
-const path = require('path');
-const db = require('../db/index');
-const crypto = require('crypto');
-const fs = require('fs');
+const express   = require('express');
+const router    = express.Router();
+const path      = require('path');
+const db        = require('../db/index');
+const fs        = require('fs');
+const navidrome = require('../providers/navidrome');
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-function getSettings() {
-  const rows = db.prepare('SELECT key, value FROM settings').all();
-  const s = {};
-  rows.forEach(r => { s[r.key] = r.value; });
-  return s;
-}
-
-function md5(str) {
-  return crypto.createHash('md5').update(str).digest('hex');
-}
-
-function buildNaviParams(settings, extra = {}) {
-  const salt  = crypto.randomBytes(8).toString('hex');
-  const token = md5(settings.navidrome_password + salt);
-  return new URLSearchParams({
-    u: settings.navidrome_user,
-    t: token,
-    s: salt,
-    v: '1.16.1',
-    c: 'navilist',
-    f: 'json',
-    ...extra
-  });
-}
+// getSettings and buildNaviParams delegate to navidrome.js — single source of truth
+function getSettings()                      { return navidrome.getSettings(db); }
+function buildNaviParams(settings, extra)   { return navidrome.buildParams(settings, extra); }
 
 // ── GET /library — serve static HTML page ────────────────────────────────────
 router.get('/', (req, res) => {
@@ -39,7 +18,7 @@ router.get('/', (req, res) => {
 // ── GET /library/artistart/:artistId — serve cached image from disk ───────────
 // Images are downloaded during sync. If not found, return 404 (placeholder shown).
 router.get('/artistart/:artistId', (req, res) => {
-  const imgPath = path.join('/app/data/artist-images', `${req.params.artistId}.jpg`);
+  const imgPath = path.join(process.env.DATA_DIR || '/app/data', 'artist-images', `${req.params.artistId}.jpg`);
   if (fs.existsSync(imgPath)) {
     res.set('Cache-Control', 'public, max-age=604800');
     return res.sendFile(imgPath);

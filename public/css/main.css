@@ -10,6 +10,7 @@ body {
 nav {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 2rem;
   padding: 0.85rem 2rem;
   background: #ffffff;
@@ -40,7 +41,7 @@ nav ul {
 
 nav ul a { color: #aaa; text-decoration: none; font-size: 0.9rem; }
 nav ul a:hover { color: #1a1a1a; }
-nav ul a.active { color: #1a1a1a; border-bottom: 2px solid #0084ff; padding-bottom: 2px; }
+nav ul a.active { color: #1a1a1a; border-bottom: 2px solid #8a79b7; padding-bottom: 2px; }
 
 /* Pages that need full width — override main max-width */
 main {
@@ -62,7 +63,7 @@ h2 { font-size: 1.1rem; font-weight: 600; }
 .btn {
   display: inline-block;
   padding: 0.45rem 1.1rem;
-  background: #0084ff;
+  background: #8a79b7;
   color: #fff;
   border: none;
   border-radius: 6px;
@@ -132,7 +133,7 @@ input[type="url"]:focus,
 input[type="password"]:focus,
 select:focus {
   outline: none;
-  border-color: #0084ff;
+  border-color: #8a79b7;
 }
 
 /* Music folder selector */
@@ -147,8 +148,8 @@ select:focus {
   padding: 0.4rem 0.6rem; border-radius: 6px;
   background: #fafaf8; border: 0.5px solid #ddddd8;
 }
-.folder-row:hover { border-color: #0084ff; }
-.folder-row input[type="checkbox"] { width: 1rem; height: 1rem; accent-color: #0084ff; cursor: pointer; }
+.folder-row:hover { border-color: #8a79b7; }
+.folder-row input[type="checkbox"] { width: 1rem; height: 1rem; accent-color: #8a79b7; cursor: pointer; }
 .folder-hint { font-size: 0.82rem; color: #aaa; }
 
 /* ── Dashboard ───────────────────────────────────────────────────────────── */
@@ -221,7 +222,7 @@ select:focus {
   width: 240px;
 }
 
-.pl-search:focus { outline: none; border-color: #0084ff; }
+.pl-search:focus { outline: none; border-color: #8a79b7; }
 
 .pl-filter-select {
   padding: 0.45rem 0.6rem;
@@ -232,7 +233,7 @@ select:focus {
   font-size: 0.88rem;
   cursor: pointer;
 }
-.pl-filter-select:focus { outline: none; border-color: #0084ff; }
+.pl-filter-select:focus { outline: none; border-color: #8a79b7; }
 
 .pl-filter-label {
   font-size: 0.78rem;
@@ -272,8 +273,8 @@ select:focus {
 }
 
 .pl-card:hover {
-  border-color: #99ccff;
-  box-shadow: 0 2px 12px rgba(0,132,255,0.08);
+  border-color: #c4bde3;
+  box-shadow: 0 2px 12px rgba(138,121,183,0.08);
 }
 
 .pl-card-top {
@@ -336,8 +337,8 @@ select:focus {
   padding: 0.15rem 0.6rem;
   border-radius: 4px;
   font-weight: 500;
-  background: #e6f3ff;
-  color: #0066cc;
+  background: #eeecf7;
+  color: #6657a0;
   white-space: nowrap;
 }
 
@@ -347,7 +348,7 @@ select:focus {
 .pl-badge-manual,
 .pl-badge-lastfm,
 .pl-badge-listenbrainz,
-.pl-badge-smart { background: #e6f3ff; color: #0066cc; }
+.pl-badge-smart { background: #eeecf7; color: #6657a0; }
 
 /* ── Empty state ─────────────────────────────────────────────────────────── */
 .pl-empty {
@@ -369,7 +370,7 @@ select:focus {
   margin-bottom: 1.25rem;
   display: inline-block;
 }
-.pl-detail-back:hover { color: #0084ff; }
+.pl-detail-back:hover { color: #8a79b7; }
 
 .pl-detail-header {
   display: flex;
@@ -498,8 +499,8 @@ select:focus {
   height: 88px;
 }
 
-.pl-type-option:hover { border-color: #0084ff; }
-.pl-type-option.selected { border-color: #0084ff; background: #e6f3ff; }
+.pl-type-option:hover { border-color: #8a79b7; }
+.pl-type-option.selected { border-color: #8a79b7; background: #eeecf7; }
 
 .pl-type-title { font-size: 0.88rem; font-weight: 600; color: #1a1a1a; margin-bottom: 0.25rem; }
 .pl-type-desc  { font-size: 0.74rem; color: #999; line-height: 1.35; }
@@ -514,7 +515,7 @@ select:focus {
   font-size: 0.9rem;
   box-sizing: border-box;
 }
-.modal input[type="text"]:focus { outline: none; border-color: #0084ff; }
+.modal input[type="text"]:focus { outline: none; border-color: #8a79b7; }
 
 /* ── Library page (standalone /library) ─────────────────────────────────── */
 .library-page {
@@ -635,7 +636,7 @@ select:focus {
   gap: 0.4rem;
 }
 
-.album-card.has-selected .album-cover-wrap { outline: 2px solid #0084ff; outline-offset: 2px; }
+.album-card.has-selected .album-cover-wrap { outline: 2px solid #8a79b7; outline-offset: 2px; }
 
 .library-toolbar {
   display: flex;
@@ -664,8 +665,8 @@ select:focus {
   align-items: center;
   gap: 0.75rem;
   padding: 0.5rem 1.25rem;
-  background: #e6f3ff;
-  border-bottom: 0.5px solid #99ccff;
+  background: #eeecf7;
+  border-bottom: 0.5px solid #c4bde3;
   font-size: 0.85rem;
   flex-wrap: wrap;
   flex-shrink: 0;
@@ -688,7 +689,7 @@ select:focus {
   transition: transform 0.15s;
 }
 .album-card:hover { transform: translateY(-2px); }
-.album-card.expanded .album-cover-wrap { outline: 2px solid #0084ff; border-radius: 8px; }
+.album-card.expanded .album-cover-wrap { outline: 2px solid #8a79b7; border-radius: 8px; }
 
 .album-cover-wrap {
   position: relative;
@@ -729,7 +730,7 @@ select:focus {
   transition: opacity 0.15s;
 }
 .album-cover-wrap:hover .btn-select-album { opacity: 1; }
-.btn-select-album:hover { background: #e6f3ff; border-color: #0084ff; }
+.btn-select-album:hover { background: #eeecf7; border-color: #8a79b7; }
 
 .album-info { padding: 0.35rem 0.1rem 0; }
 .album-name { font-size: 0.78rem; font-weight: 600; color: #1a1a1a; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -759,7 +760,7 @@ select:focus {
   display: flex; align-items: center; gap: 0.4rem;
   font-size: 0.82rem; color: #555; cursor: pointer; flex-direction: row; margin: 0;
 }
-.expand-select-all input { accent-color: #0084ff; cursor: pointer; }
+.expand-select-all input { accent-color: #8a79b7; cursor: pointer; }
 
 .expand-track-row {
   display: grid;
@@ -772,10 +773,10 @@ select:focus {
   color: #2a2a2a;
 }
 .expand-track-row:hover   { background: #fafaf8; }
-.expand-track-row.selected { background: #e6f3ff; }
+.expand-track-row.selected { background: #eeecf7; }
 
 .et-check { display:flex; align-items:center; }
-.et-check input { accent-color: #0084ff; cursor: pointer; }
+.et-check input { accent-color: #8a79b7; cursor: pointer; }
 .et-num   { color: #ccc; text-align: right; }
 .et-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .et-dur   { color: #bbb; text-align: right; }
@@ -792,7 +793,7 @@ select:focus {
 }
 .artist-album-card { cursor: pointer; border-radius: 4px; }
 .artist-album-card:hover { opacity: 0.85; }
-.artist-album-card.expanded .artist-album-cover-wrap { outline: 2px solid #0084ff; border-radius: 4px; }
+.artist-album-card.expanded .artist-album-cover-wrap { outline: 2px solid #8a79b7; border-radius: 4px; }
 .artist-album-cover-wrap { position: relative; aspect-ratio: 1; border-radius: 4px; overflow: hidden; background: #eeeee8; }
 .artist-album-cover { width: 100%; height: 100%; object-fit: cover; display: block; }
 .artist-album-info  { padding: 0.3rem 0.1rem 0; }
@@ -858,7 +859,7 @@ select:focus {
   color: #1a1a1a;
 }
 
-.rb-global-field input[type="number"]:focus { outline: none; border-color: #0084ff; }
+.rb-global-field input[type="number"]:focus { outline: none; border-color: #8a79b7; }
 
 .rb-toggle {
   display: flex;
@@ -869,7 +870,7 @@ select:focus {
   cursor: pointer;
 }
 
-.rb-toggle input[type="checkbox"] { accent-color: #0084ff; cursor: pointer; }
+.rb-toggle input[type="checkbox"] { accent-color: #8a79b7; cursor: pointer; }
 
 .rb-rules-list {
   display: flex;
@@ -903,7 +904,7 @@ select:focus {
 }
 
 .rb-rule select:focus,
-.rb-rule input:focus { outline: none; border-color: #0084ff; }
+.rb-rule input:focus { outline: none; border-color: #8a79b7; }
 
 .rb-weight-wrap {
   display: flex;
@@ -945,16 +946,16 @@ select:focus {
   align-items: center;
   gap: 0.4rem;
   font-size: 0.85rem;
-  color: #0084ff;
+  color: #8a79b7;
   background: none;
-  border: 0.5px dashed #99ccff;
+  border: 0.5px dashed #c4bde3;
   border-radius: 6px;
   padding: 0.4rem 0.9rem;
   cursor: pointer;
   width: 100%;
   justify-content: center;
 }
-.rb-add-rule:hover { background: #e6f3ff; }
+.rb-add-rule:hover { background: #eeecf7; }
 
 .rb-actions {
   display: flex;
@@ -1133,9 +1134,9 @@ select:focus {
 .lb-pl-meta      { font-size: 0.75rem; color: #bbb; white-space: nowrap; }
 .lb-pl-badge     { font-size: 0.7rem; padding: 0.1rem 0.45rem; border-radius: 3px; font-weight: 500; white-space: nowrap; }
 .lb-pl-generated { background: #fef3ea; color: #c05e00; }
-.lb-pl-user      { background: #e6f3ff; color: #0066cc; }
+.lb-pl-user      { background: #eeecf7; color: #6657a0; }
 .lb-pl-toggle    { display: flex; align-items: center; gap: 0.3rem; font-size: 0.78rem; color: #888; cursor: pointer; white-space: nowrap; flex-direction: row; margin: 0; }
-.lb-pl-toggle input { accent-color: #0084ff; cursor: pointer; }
+.lb-pl-toggle input { accent-color: #8a79b7; cursor: pointer; }
 
 /* ── Playlist list view ──────────────────────────────────────────────── */
 .pl-view-toggle {
@@ -1154,7 +1155,7 @@ select:focus {
   cursor: pointer;
   line-height: 1;
 }
-.pl-view-btn.active { border-color: #0084ff; color: #0084ff; background: #e6f3ff; }
+.pl-view-btn.active { border-color: #8a79b7; color: #8a79b7; background: #eeecf7; }
 .pl-view-btn:hover:not(.active) { background: #f5f5f3; }
 
 .pl-list {
@@ -1205,13 +1206,13 @@ select:focus {
   align-items: center;
   gap: 0.75rem;
   padding: 0.5rem 1rem;
-  background: #e6f3ff;
-  border: 0.5px solid #99ccff;
+  background: #eeecf7;
+  border: 0.5px solid #c4bde3;
   border-top: none;
   border-bottom: none;
 }
 
-.pl-sel-count { font-size: 0.82rem; color: #0066cc; font-weight: 500; flex: 1; }
+.pl-sel-count { font-size: 0.82rem; color: #6657a0; font-weight: 500; flex: 1; }
 
 .pl-list-row-added {
   font-size: 0.75rem;
@@ -1354,18 +1355,18 @@ select:focus {
   align-items: center;
   gap: 0.3rem;
   padding: 0.25rem 0.6rem;
-  background: #e6f3ff;
-  border: 0.5px solid #99ccff;
+  background: #eeecf7;
+  border: 0.5px solid #c4bde3;
   border-radius: 20px;
   font-size: 0.82rem;
-  color: #0066cc;
+  color: #6657a0;
 }
 
 .radio-seed-chip button {
   background: none;
   border: none;
   cursor: pointer;
-  color: #0066cc;
+  color: #6657a0;
   font-size: 0.9rem;
   line-height: 1;
   padding: 0;
@@ -1396,7 +1397,7 @@ select:focus {
 }
 
 .radio-depth-option input[type="radio"] {
-  accent-color: #0084ff;
+  accent-color: #8a79b7;
   cursor: pointer;
 }
 
@@ -1424,7 +1425,7 @@ select:focus {
   outline: none;
   margin-bottom: 0.25rem;
 }
-.pl-builder-name-input:focus { border-bottom-color: #0084ff; }
+.pl-builder-name-input:focus { border-bottom-color: #8a79b7; }
 .pl-builder-name-input::placeholder { color: #ccc; font-weight: 400; }
 
 /* ── Manual creation banner (library page) ────────────────── */

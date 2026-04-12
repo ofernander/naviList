@@ -16,7 +16,7 @@ const path = require('path');
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
-const LOG_DIR   = '/app/data/logs';
+const LOG_DIR   = process.env.DATA_DIR ? path.join(process.env.DATA_DIR, 'logs') : '/app/data/logs';
 const LOG_FILE  = path.join(LOG_DIR, 'navilist.log');
 const MAX_SIZE  = 5 * 1024 * 1024; // 5MB
 const MAX_FILES = 3;
