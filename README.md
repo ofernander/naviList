@@ -26,7 +26,7 @@ Coding agents were used extensively for the development of this project with ove
 ```yaml
 services:
   navilist:
-    image: ghcr.io/your-username/navilist:latest
+    image: ghcr.io/ofernander/navilist:latest
     container_name: navilist
     restart: unless-stopped
     ports:
@@ -92,7 +92,7 @@ In naviList Settings, set the NSP output path to `/nsp`.
 ## Building from source
 
 ```bash
-git clone https://github.com/your-username/navilist.git
+git clone https://github.com/ofernander/navilist.git
 cd navilist
 npm install
 ```
