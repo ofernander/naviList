@@ -99,6 +99,14 @@ async function getAllProfiles(settings) {
 // ── Artist ────────────────────────────────────────────────────────────────────
 
 /**
+ * Get all artists currently in Lidarr. Returns raw array.
+ */
+async function getArtists(settings) {
+  const data = await request(settings, 'GET', '/artist');
+  return Array.isArray(data) ? data : [];
+}
+
+/**
  * Check if an artist is already monitored in Lidarr by MusicBrainz ID.
  * Returns { exists: bool, artist? }.
  */
@@ -154,6 +162,7 @@ module.exports = {
   getQualityProfiles,
   getMetadataProfiles,
   getAllProfiles,
+  getArtists,
   artistExists,
   addArtist
 };

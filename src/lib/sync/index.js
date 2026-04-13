@@ -79,6 +79,17 @@ async function processMissingArtists() {
   if (!pending.length) return;
 
   logger.info('sync', `processMissingArtists: processing ${pending.length} pending artists`);
+
+  // Fetch full Lidarr artist list once — check locally instead of per-artist API calls
+  let lidarrArtistIds = new Set();
+  try {
+    const existing = await lidarr.getArtists(settings);
+    existing.forEach(a => { if (a.foreignArtistId) lidarrArtistIds.add(a.foreignArtistId); });
+    logger.info('sync', `processMissingArtists: fetched ${lidarrArtistIds.size} existing Lidarr artists`);
+  } catch (e) {
+    logger.warn('sync', `processMissingArtists: could not fetch Lidarr artist list — will check per-artist: ${e.message}`);
+  }
+
   const setStatus = db.prepare('UPDATE missing_artists SET status = ?, mbid = ?, sent_at = ? WHERE id = ?');
 
   for (const artist of pending) {
@@ -90,13 +101,19 @@ async function processMissingArtists() {
         await sleep(500);
         continue;
       }
-      const result = await lidarr.addArtist(settings, artist.artist_name, mbid);
-      const now    = Math.floor(Date.now() / 1000);
-      if (result.ok) {
+      const now = Math.floor(Date.now() / 1000);
+      if (lidarrArtistIds.has(mbid)) {
+        logger.info('sync', `processMissingArtists: "${artist.artist_name}" already in Lidarr — marking sent`);
         setStatus.run('sent', mbid, now, artist.id);
-        logger.info('sync', `processMissingArtists: sent "${artist.artist_name}" to Lidarr${result.skipped ? ' (already existed)' : ''}`);
       } else {
-        logger.warn('sync', `processMissingArtists: Lidarr rejected "${artist.artist_name}": ${result.error}`);
+        const result = await lidarr.addArtist(settings, artist.artist_name, mbid);
+        if (result.ok) {
+          lidarrArtistIds.add(mbid);
+          setStatus.run('sent', mbid, now, artist.id);
+          logger.info('sync', `processMissingArtists: added "${artist.artist_name}" to Lidarr`);
+        } else {
+          logger.warn('sync', `processMissingArtists: Lidarr rejected "${artist.artist_name}": ${result.error}`);
+        }
       }
     } catch (e) {
       logger.warn('sync', `processMissingArtists: error processing "${artist.artist_name}": ${e.message}`);
