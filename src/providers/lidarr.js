@@ -10,18 +10,19 @@ const logger = require('../utils/logger');
  * Rate limit: none documented — no throttling needed for our use case
  */
 
-const TIMEOUT = 10000;
+const TIMEOUT_DEFAULT = 10000;
+const TIMEOUT_WRITE   = 60000;
 
 // ── Core request ──────────────────────────────────────────────────────────────
 
-async function request(settings, method, path, body = null) {
+async function request(settings, method, path, body = null, timeout = TIMEOUT_DEFAULT) {
   const base = (settings.lidarr_url || '').replace(/\/$/, '');
   const key  = settings.lidarr_api_key || '';
   if (!base || !key) throw new Error('Lidarr URL and API key required');
   logger.debug('lidarr', `request: ${method} ${path}${body ? ' ' + JSON.stringify(body) : ''}`);
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT);
+  const timer = setTimeout(() => controller.abort(), timeout);
 
   try {
     const opts = {
@@ -98,6 +99,14 @@ async function getAllProfiles(settings) {
 // ── Artist ────────────────────────────────────────────────────────────────────
 
 /**
+ * Get all artists currently in Lidarr. Returns raw array.
+ */
+async function getArtists(settings) {
+  const data = await request(settings, 'GET', '/artist');
+  return Array.isArray(data) ? data : [];
+}
+
+/**
  * Check if an artist is already monitored in Lidarr by MusicBrainz ID.
  * Returns { exists: bool, artist? }.
  */
@@ -138,7 +147,7 @@ async function addArtist(settings, artistName, foreignArtistId) {
       rootFolderPath,
       monitored:  true,
       addOptions: { searchForMissingAlbums: true }
-    });
+    }, TIMEOUT_WRITE);
     return { ok: true };
   } catch (e) {
     return { ok: false, error: e.message };
@@ -153,6 +162,7 @@ module.exports = {
   getQualityProfiles,
   getMetadataProfiles,
   getAllProfiles,
+  getArtists,
   artistExists,
   addArtist
 };

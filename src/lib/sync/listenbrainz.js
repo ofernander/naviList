@@ -152,8 +152,20 @@ async function fetchAndCacheLbPlaylists(db, s) {
                      ?.additional_metadata?.algorithm_metadata?.source_patch || null,
   })).filter(p => p.lb_mbid);
 
+  // For generated playlists, keep only the newest (first) entry per source_patch.
+  // User playlists (no source_patch) all pass through.
+  const dedupeByPatch = (playlists) => {
+    const seen = new Set();
+    return playlists.filter(p => {
+      if (!p.source_patch) return true;
+      if (seen.has(p.source_patch)) return false;
+      seen.add(p.source_patch);
+      return true;
+    });
+  };
+
   const remote     = [
-    ...normalise(cfData.playlists,  'generated'),
+    ...dedupeByPatch(normalise(cfData.playlists, 'generated')),
     ...normalise(ownData.playlists, 'user'),
   ];
   const fetched_at = Math.floor(Date.now() / 1000);
