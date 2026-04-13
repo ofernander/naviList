@@ -601,13 +601,41 @@ function runLibrarySync(reason) {
     });
 }
 
+// ── External service syncs — add new services here ───────────────────────────
+
+function runExternalServiceSyncs() {
+  const s = getSettings();
+
+  if (s.lastfm_api_key && s.lastfm_username) {
+    runHistoryImport('lastfm', lastfm.fetchListens, { apiKey: s.lastfm_api_key, username: s.lastfm_username });
+    runDetached('loved/lastfm',       () => lfmSync.syncLovedLastfm(db, s));
+    runDetached('top-artists/lastfm', () => lfmSync.syncTopArtistsLastfm(db, s));
+    runDetached('top-tracks/lastfm',  () => lfmSync.syncTopTracksLastfm(db, s));
+    runDetached('artist-tags/lastfm', () => lfmSync.syncArtistTagsLastfm(db, s));
+    runDetached('playlists/lastfm',   () => lfmSync.syncLfmPlaylists(db, s));
+  }
+
+  if (s.listenbrainz_token && s.listenbrainz_username) {
+    runHistoryImport('listenbrainz', listenbrainz.fetchListens, { token: s.listenbrainz_token, username: s.listenbrainz_username });
+    runDetached('loved/listenbrainz',       () => lbSync.syncLovedListenbrainz(db, s));
+    runDetached('top-artists/listenbrainz', () => lbSync.syncTopArtistsListenbrainz(db, s));
+    runDetached('top-tracks/listenbrainz',  () => lbSync.syncTopTracksListenbrainz(db, s));
+    runDetached('playlists/listenbrainz',   () => lbSync.syncLbPlaylists(db, s));
+  }
+
+  runDetached('process-missing-artists', () => processMissingArtists());
+}
+
 // ── Auto-refresh ──────────────────────────────────────────────────────────────
 
 function startAutoRefresh() {
   // ── 1. Startup: full library sync immediately ────────────────────────────────
   runLibrarySync('startup');
 
-  // ── 2. Every 5 min: lightweight track count poll ───────────────────────────
+  // ── 2. Startup: external service syncs immediately ───────────────────────────
+  runExternalServiceSyncs();
+
+  // ── 3. Every 5 min: lightweight track count poll ───────────────────────────
   setInterval(async () => {
     if (syncState.running) return;
     try {
@@ -624,36 +652,17 @@ function startAutoRefresh() {
     }
   }, 5 * 60 * 1000);
 
-  // ── 3. Every 6 hours: full library sync regardless ──────────────────────────
+  // ── 4. Every 6 hours: full library sync regardless ──────────────────────────
   setInterval(() => {
     runLibrarySync('6-hour-interval');
   }, 6 * 60 * 60 * 1000);
 
-  // ── 4. Every 30 min: external service syncs ───────────────────────────────
+  // ── 5. Every 30 min: external service syncs ───────────────────────────────
   setInterval(() => {
-    const s = getSettings();
-
-    if (s.lastfm_api_key && s.lastfm_username) {
-      runHistoryImport('lastfm', lastfm.fetchListens, { apiKey: s.lastfm_api_key, username: s.lastfm_username });
-      runDetached('loved/lastfm',           () => lfmSync.syncLovedLastfm(db, s));
-      runDetached('top-artists/lastfm',     () => lfmSync.syncTopArtistsLastfm(db, s));
-      runDetached('top-tracks/lastfm',      () => lfmSync.syncTopTracksLastfm(db, s));
-      runDetached('artist-tags/lastfm',     () => lfmSync.syncArtistTagsLastfm(db, s));
-      runDetached('playlists/lastfm',       () => lfmSync.syncLfmPlaylists(db, s));
-    }
-
-    if (s.listenbrainz_token && s.listenbrainz_username) {
-      runHistoryImport('listenbrainz', listenbrainz.fetchListens, { token: s.listenbrainz_token, username: s.listenbrainz_username });
-      runDetached('loved/listenbrainz',       () => lbSync.syncLovedListenbrainz(db, s));
-      runDetached('top-artists/listenbrainz', () => lbSync.syncTopArtistsListenbrainz(db, s));
-      runDetached('top-tracks/listenbrainz',  () => lbSync.syncTopTracksListenbrainz(db, s));
-      runDetached('playlists/listenbrainz',   () => lbSync.syncLbPlaylists(db, s));
-    }
-
-    runDetached('process-missing-artists', () => processMissingArtists());
+    runExternalServiceSyncs();
   }, 30 * 60 * 1000);
 
-  // ── 5. On startup: load cron schedules for all naviList / Radio playlists ─────
+  // ── 6. On startup: load cron schedules for all naviList / Radio playlists ─────
   loadScheduledPlaylists();
 
   logger.info('sync', 'auto-refresh scheduled: library poll every 5m, full sync every 6h, services every 30m, playlist refresh via cron');
