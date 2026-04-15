@@ -1703,16 +1703,35 @@
       });
     }
 
+    function unpackNspConditions(all) {
+      return (all || []).map(c => {
+        const operator = Object.keys(c)[0];
+        if (!operator) return defaultNspCondition();
+        const inner = c[operator];
+        const field = Object.keys(inner)[0];
+        return { field, operator, value: inner[field] };
+      });
+    }
+
     function openNspBuilder(existingName, existingConfig, editingSlug = null) {
       nspEditingId  = editingSlug || null;
-      nspConditions = existingConfig?.all ? existingConfig.all.map(c => ({ ...c })) : [];
+      nspConditions = existingConfig?.all ? unpackNspConditions(existingConfig.all) : [];
       if (!nspConditions.length) nspConditions = [defaultNspCondition()];
       document.getElementById('nspNameInput').value            = existingName || '';
       document.getElementById('nspLimit').value                = existingConfig?.limit ?? 25;
       document.getElementById('nspSortOrder').value            = existingConfig?.order || 'random';
       document.getElementById('nspStatus').textContent         = '';
       document.getElementById('nspPreviewPanel').style.display = 'none';
-      loadNspFields().then(() => renderNspConditions());
+      loadNspFields().then(() => {
+        const sortVal = existingConfig?.sort || 'random';
+        document.getElementById('nspSortField').value = sortVal;
+        renderNspConditions();
+        if (editingSlug) {
+          document.getElementById('nspJsonPreview').textContent = JSON.stringify(buildNspPayload(), null, 2);
+          document.getElementById('nspPreviewPanel').style.display = '';
+          document.getElementById('nspSaveStatus').textContent = '';
+        }
+      });
       loadArtists(); loadGenres(); loadAlbums();
       showNspView();
       setTimeout(() => document.getElementById('nspNameInput').focus(), 50);
