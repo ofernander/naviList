@@ -1,10 +1,12 @@
 const express = require('express');
 const router = express.Router();
 const path = require('path');
+const fs   = require('fs');
 const db = require('../db/index');
 const navidrome = require('../providers/navidrome');
 const engine    = require('./pl_engine');
 const logger = require('../utils/logger');
+const { writeMissingArtists } = require('./sync/helpers');
 
 // ── Helper: snapshot a playlist into local registry ───────────────────────────
 
@@ -659,6 +661,59 @@ router.get('/:id/export', async (req, res) => {
   }
 
   res.status(400).json({ ok: false, error: `Unknown format: ${format}` });
+});
+
+// POST /playlists/import-playlist — match normalised rows against local library
+router.post('/import-playlist', (req, res) => {
+  const { rows } = req.body;
+  if (!Array.isArray(rows) || !rows.length) return res.json({ ok: false, error: 'rows required' });
+
+  const findTrack = db.prepare(`
+    SELECT id, title, artist, duration FROM tracks
+    WHERE LOWER(title) = LOWER(?) AND LOWER(artist) = LOWER(?)
+    LIMIT 1
+  `);
+
+  const matched   = [];
+  const unmatched = [];
+
+  for (const row of rows) {
+    const title  = (row.trackName  || '').trim();
+    const artist = (row.artistName || '').split(',')[0].trim();
+    if (!title || !artist) { unmatched.push({ title, artist }); continue; }
+    const track = findTrack.get(title, artist);
+    if (track) matched.push(track);
+    else unmatched.push({ title, artist });
+  }
+
+  logger.info('playlists', `import: ${matched.length} matched, ${unmatched.length} unmatched`);
+  res.json({ ok: true, matched, unmatched });
+});
+
+// POST /playlists/save-import — create ND playlist, write missing artists
+router.post('/save-import', async (req, res) => {
+  const { name, trackIds, unmatched, format } = req.body;
+  if (!name?.trim())     return res.json({ ok: false, error: 'name required' });
+  if (!trackIds?.length) return res.json({ ok: false, error: 'trackIds required' });
+
+  const created = await navidrome.createPlaylist(db, name.trim(), trackIds);
+  if (!created.ok) return res.json(created);
+
+  const playlistId = created.playlist?.id;
+  if (!playlistId) return res.json({ ok: false, error: 'No playlist ID returned from Navidrome' });
+
+  const comment = 'navilist:import';
+  await navidrome.updatePlaylist(db, playlistId, { comment });
+  snapshotPlaylist(db, playlistId, name.trim(), comment, trackIds, null);
+
+  // Write unmatched artists to missing_artists — same pipeline as LB/LFM
+  if (unmatched?.length) {
+    const artists = [...new Set(unmatched.map(t => t.artist).filter(Boolean))];
+    if (artists.length) writeMissingArtists(db, artists, format || 'import');
+  }
+
+  logger.info('playlists', `import playlist saved: "${name.trim()}" (${trackIds.length} tracks) [${format || 'unknown'}]`);
+  res.json({ ok: true, playlistId, count: trackIds.length });
 });
 
 function escXml(str) {

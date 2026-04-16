@@ -3,11 +3,17 @@ const router = express.Router();
 const path = require('path');
 const db = require('../db/index');
 const navidrome = require('../providers/navidrome');
+const lidarr = require('../providers/lidarr');
 const { getSyncState } = require('./sync');
 
 // GET /status/api — return full status data as JSON
 router.get('/api', async (req, res) => {
   const ping        = await navidrome.ping(db);
+  const settings2   = {};
+  db.prepare('SELECT key, value FROM settings').all().forEach(r => { settings2[r.key] = r.value; });
+  const lidarrPing  = (settings2.lidarr_url && settings2.lidarr_api_key)
+    ? await lidarr.ping(settings2)
+    : { ok: false };
   const trackCount  = db.prepare('SELECT COUNT(*) as c FROM tracks').get().c;
   const albumCount  = db.prepare('SELECT COUNT(DISTINCT album_id) as c FROM tracks').get().c;
   const artistCount = db.prepare('SELECT COUNT(DISTINCT artist_id) as c FROM tracks').get().c;
@@ -28,7 +34,7 @@ router.get('/api', async (req, res) => {
   const services = {
     lastfm:       { configured: !!(settings.lastfm_api_key && settings.lastfm_username), username: settings.lastfm_username || null },
     listenbrainz: { configured: !!(settings.listenbrainz_token && settings.listenbrainz_username), username: settings.listenbrainz_username || null },
-    lidarr:       { configured: !!(settings.lidarr_url && settings.lidarr_api_key), url: settings.lidarr_url || null }
+    lidarr:       { connected: lidarrPing.ok, url: settings.lidarr_url || null }
   };
 
   res.json({
@@ -50,9 +56,22 @@ router.get('/api/counts', (req, res) => {
   const missingPending = db.prepare("SELECT COUNT(*) as c FROM missing_artists WHERE status = 'pending'").get().c;
   const missingSent    = db.prepare("SELECT COUNT(*) as c FROM missing_artists WHERE status = 'sent'").get().c;
   const missingFound   = db.prepare("SELECT COUNT(*) as c FROM missing_artists WHERE status = 'found'").get().c;
+  const missingIgnored = db.prepare("SELECT COUNT(*) as c FROM missing_artists WHERE status = 'ignored'").get().c;
+  const lidarrAutoAdd  = db.prepare("SELECT value FROM settings WHERE key = 'lidarr_auto_add'").get()?.value === 'true';
   const lbPlaylists  = db.prepare('SELECT COUNT(*) as c FROM lb_playlist_cache').get().c;
   const lfmPlaylists = db.prepare('SELECT COUNT(*) as c FROM lfm_playlists').get().c;
-  res.json({ ok: true, loved, disliked, topArtists, topTracks, artistTagsLastfm, similarArtists, missingPending, missingSent, missingFound, lbPlaylists, lfmPlaylists });
+  res.json({ ok: true, loved, disliked, topArtists, topTracks, artistTagsLastfm, similarArtists, missingPending, missingSent, missingFound, missingIgnored, lidarrAutoAdd, lbPlaylists, lfmPlaylists });
+});
+
+router.get('/api/lidarr-recent', (req, res) => {
+  const rows = db.prepare(`
+    SELECT artist_name, source, mbid, sent_at
+    FROM missing_artists
+    WHERE status = 'sent' AND sent_at IS NOT NULL
+    ORDER BY sent_at DESC
+    LIMIT 10
+  `).all();
+  res.json({ ok: true, rows });
 });
 
 router.get('/', (req, res) => {

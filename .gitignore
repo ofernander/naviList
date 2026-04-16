@@ -1,5 +1,6 @@
 node_modules/
 .env
+.env.1
 *.db
 MISC/
 docker-compose.override.yml

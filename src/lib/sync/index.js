@@ -68,14 +68,14 @@ function getSettings() {
 
 // ── Missing artists (needs getSettings + lidarr, stays in index) ──────────────
 
-async function processMissingArtists() {
+async function processMissingArtists(force = false) {
   const settings = getSettings();
-  if (settings.lidarr_auto_add !== 'true') {
+  if (!force && settings.lidarr_auto_add !== 'true') {
     logger.debug('sync', 'processMissingArtists: lidarr_auto_add not enabled — skipping');
     return;
   }
 
-  const pending = db.prepare(`SELECT * FROM missing_artists WHERE status = 'pending' LIMIT 50`).all();
+  const pending = db.prepare(`SELECT * FROM missing_artists WHERE status = 'pending'`).all();
   if (!pending.length) return;
 
   logger.info('sync', `processMissingArtists: processing ${pending.length} pending artists`);
@@ -501,7 +501,7 @@ router.post('/lfm-playlists', async (req, res) => {
 
 router.post('/process-missing-artists', async (req, res) => {
   res.json({ ok: true, message: 'Processing started' });
-  await processMissingArtists();
+  await processMissingArtists(true);
 });
 
 // ── Routes — Status ───────────────────────────────────────────────────────────

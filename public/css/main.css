@@ -350,6 +350,8 @@ select:focus {
 .pl-badge-listenbrainz,
 .pl-badge-smart { background: #eeecf7; color: #6657a0; }
 
+.pl-badge-exportify { background: #eeecf7; color: #6657a0; }
+
 /* ── Empty state ─────────────────────────────────────────────────────────── */
 .pl-empty {
   text-align: center;
@@ -1437,3 +1439,19 @@ select:focus {
 .manual-banner-body {
   margin-top: 0.75rem;
 }
+
+/* ── App footer ──────────────────────────────────────────── */
+.app-footer {
+  text-align: center;
+  padding: 1.5rem 1rem;
+  font-size: 0.78rem;
+  color: #bbb;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  border-top: 0.5px solid #eeeee8;
+  margin-top: 2rem;
+}
+.app-footer a { color: #bbb; text-decoration: none; }
+.app-footer a:hover { color: #8a79b7; }

@@ -63,6 +63,7 @@
         <option value="listenbrainz">ListenBrainz</option>
         <option value="manual">Manual</option>
         <option value="deactivated">Deactivated</option>
+        <option value="exportify">Exportify</option>
       </select>
       <div class="pl-view-toggle">
         <button class="pl-view-btn active" id="viewBtnList" title="List view">☰</button>
@@ -294,8 +295,13 @@
           </select>
         </div>
         <div class="rb-global-field">
+          <select id="nspLimitType" style="width:110px;">
+            <option value="limit">Limit</option>
+            <option value="limitPercent">Percentage</option>
+            <option value="unlimited">Unlimited</option>
+          </select>
           <input type="number" id="nspLimit" min="1" max="1000" value="25" style="width:70px;" />
-          <span style="font-size:0.82rem; color:#aaa;">tracks</span>
+          <span id="nspLimitUnit" style="font-size:0.82rem; color:#aaa;">tracks</span>
         </div>
       </div>
     </div>
@@ -308,8 +314,11 @@
 
     <div id="nspPreviewPanel" style="display:none; margin-top:1.5rem;">
       <hr style="border:none; border-top: 0.5px solid #eeeee8; margin-bottom:1rem;" />
-      <div class="rb-section-label" style="margin-bottom:0.75rem;">Generated .nsp JSON</div>
-      <pre id="nspJsonPreview" style="background:#f5f5f3; border:0.5px solid #ddddd8; border-radius:6px; padding:1rem; font-size:0.78rem; overflow-x:auto; white-space:pre-wrap;"></pre>
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:0.5rem;">
+        <div class="rb-section-label" style="margin-bottom:0;">Generated .nsp JSON</div>
+        <span id="nspJsonStatus" style="font-size:0.78rem;"></span>
+      </div>
+      <textarea id="nspJsonPreview" style="width:100%; min-height:220px; font-family:monospace; font-size:0.78rem; background:#f5f5f3; border:0.5px solid #ddddd8; border-radius:6px; padding:1rem; resize:vertical; box-sizing:border-box; color:#1a1a1a; line-height:1.5;"></textarea>
       <div class="rb-actions" style="margin-top:1rem;">
         <button class="btn btn-secondary" id="nspPreviewCancelBtn">Discard</button>
         <button class="btn" id="nspSaveBtn">Save Playlist</button>
@@ -344,6 +353,45 @@
     <div class="lb-cards" id="plLfmList"></div>
   </main>
 
+  <!-- ── Exportify import view ──────────────────────────────────────────── -->
+  <main id="viewExportify" style="display:none">
+    <button class="pl-detail-back" id="exportifyBackBtn">← Back</button>
+    <div class="pl-detail-header">
+      <div>
+        <input type="text" id="exportifyNameInput" class="pl-builder-name-input" placeholder="Playlist name..." />
+        <div class="pl-detail-meta">Import a playlist file into Navidrome</div>
+      </div>
+    </div>
+    <hr style="border:none; border-top: 0.5px solid #eeeee8; margin-bottom: 1.5rem;" />
+    <div class="rb-section">
+      <div class="rb-section-label">File</div>
+      <div class="rb-globals">
+        <select id="importFormat" style="width:180px;">
+          <option value="m3u">M3U</option>
+          <option value="jspf">JSPF</option>
+          <option value="exportify_csv">Exportify CSV</option>
+          <option value="navilist_csv">naviList CSV</option>
+          <option value="navilist_json">naviList JSON</option>
+        </select>
+        <input type="file" id="exportifyFile" accept=".csv,.json,.m3u,.m3u8,.jspf" style="font-size:0.88rem;" />
+        <button class="btn btn-secondary" id="exportifyImportBtn">Import →</button>
+        <span class="rb-status" id="exportifyStatus"></span>
+      </div>
+    </div>
+    <div id="exportifyPreviewPanel" style="display:none; margin-top:1.5rem;">
+      <hr style="border:none; border-top: 0.5px solid #eeeee8; margin-bottom:1rem;" />
+      <div class="rb-section-label" style="margin-bottom:0.75rem;">
+        Preview <span id="exportifyPreviewCount" style="font-weight:400; color:#aaa;"></span>
+      </div>
+      <div class="rb-preview-tracks" id="exportifyPreviewTracks"></div>
+      <div class="rb-actions" style="margin-top:1rem;">
+        <button class="btn btn-secondary" id="exportifyDiscardBtn">Discard</button>
+        <button class="btn" id="exportifySaveBtn">Save Playlist</button>
+        <span class="rb-status" id="exportifySaveStatus"></span>
+      </div>
+    </div>
+  </main>
+
   <!-- ── New playlist modal ─────────────────────────────────────────────── -->
   <div class="modal-overlay" id="newPlaylistModal" style="display:none">
     <div class="modal">
@@ -373,6 +421,10 @@
         <div class="pl-type-option" data-type="manual" id="typeManual">
           <div class="pl-type-title">Manual</div>
           <div class="pl-type-desc">Manually create playlist from Navidrome library</div>
+        </div>
+        <div class="pl-type-option" data-type="exportify" id="typeExportify">
+          <div class="pl-type-title">Import</div>
+          <div class="pl-type-desc">Import from Exportify CSV, M3U, JSPF, or naviList export</div>
         </div>
       </div>
       <div class="modal-actions">
@@ -437,6 +489,10 @@
     let radioPreviewTracks  = [];
     let radioPreviewConfig  = null;
 
+    // Exportify state
+    let exportifyMatchedTracks = [];
+    let exportifyUnmatched     = [];
+
     // ── Helpers ────────────────────────────────────────────────────────────
     function esc(str) {
       if (!str) return '';
@@ -461,15 +517,19 @@
     function isLbPlaylist(p)     { return p.comment?.startsWith('navilist:lb')       || false; }
     function isLfmPlaylist(p)    { return p.comment?.startsWith('navilist:lastfm')   || false; }
     function isRadioPlaylist(p)  { return p.comment?.startsWith('navilist:radio')    || false; }
-    function isNspPlaylist(p)    { return p.id?.startsWith('nsp:') || p.comment?.startsWith('navilist:nsp') || false; }
-    function isInactive(p)       { return p.active === 0; }
+    function isNspPlaylist(p)       { return p.id?.startsWith('nsp:') || p.comment?.startsWith('navilist:nsp') || false; }
+    function isExportifyPlaylist(p) {
+      return p.comment?.startsWith('navilist:import') || p.comment?.startsWith('navilist:exportify') || false;
+    }
+    function isInactive(p)          { return p.active === 0; }
 
     function getPlaylistType(p) {
-      if (isSmartPlaylist(p))  return 'navilist';
-      if (isLfmPlaylist(p))    return 'lastfm';
-      if (isLbPlaylist(p))     return 'listenbrainz';
-      if (isRadioPlaylist(p))  return 'radio';
-      if (isNspPlaylist(p))    return 'nsp';
+      if (isSmartPlaylist(p))     return 'navilist';
+      if (isLfmPlaylist(p))       return 'lastfm';
+      if (isLbPlaylist(p))        return 'listenbrainz';
+      if (isRadioPlaylist(p))     return 'radio';
+      if (isNspPlaylist(p))       return 'nsp';
+      if (isExportifyPlaylist(p)) return 'exportify';
       return 'manual';
     }
 
@@ -481,6 +541,7 @@
       switch (type) {
         case 'navilist':     return 'naviList';
         case 'nsp':          return 'Navidrome';
+        case 'exportify':    return 'Import';
         case 'listenbrainz': return 'ListenBrainz';
         case 'radio':        return 'Radio';
         case 'lastfm':       return 'Last.fm';
@@ -546,7 +607,7 @@
 
     // ── Views ──────────────────────────────────────────────────────────────
     function hideAllViews() {
-      ['viewList','viewDetail','viewRules','viewLb','viewRadio','viewLfm','viewNsp'].forEach(id => {
+      ['viewList','viewDetail','viewRules','viewLb','viewRadio','viewLfm','viewNsp','viewExportify'].forEach(id => {
         document.getElementById(id).style.display = 'none';
       });
     }
@@ -556,6 +617,7 @@
     function showRulesView()  { hideAllViews(); document.getElementById('viewRules').style.display  = ''; }
     function showRadioView()  { hideAllViews(); document.getElementById('viewRadio').style.display  = ''; }
     function showNspView()   { hideAllViews(); document.getElementById('viewNsp').style.display   = ''; }
+    function showExportifyView() { hideAllViews(); document.getElementById('viewExportify').style.display = ''; }
     function showManualView() { window.location.href = '/library?mode=manual'; }
 
     async function showLfmView() {
@@ -1521,6 +1583,18 @@
       if (selectedType === 'listenbrainz') { showLbView(); return; }
       if (selectedType === 'lastfm')       { showLfmView(); return; }
       if (selectedType === 'manual')       { showManualView(); return; }
+      if (selectedType === 'exportify') {
+        exportifyMatchedTracks = []; exportifyUnmatched = [];
+        document.getElementById('exportifyNameInput').value = '';
+        document.getElementById('exportifyFile').value = '';
+        document.getElementById('exportifyStatus').textContent = '';
+        document.getElementById('exportifyPreviewPanel').style.display = 'none';
+        document.getElementById('importFormat').value = 'm3u';
+        document.getElementById('exportifyFile').accept = '.m3u,.m3u8';
+        showExportifyView();
+        setTimeout(() => document.getElementById('exportifyNameInput').focus(), 50);
+        return;
+      }
     });
 
     // ── View toggle ────────────────────────────────────────────────────────
@@ -1680,6 +1754,7 @@
     let nspOperatorLabels  = {};
     let nspConditions      = [];
     let nspEditingId       = null;
+    let nspJsonDirty       = false;
 
     async function loadNspFields() {
       if (nspFields.length) return;
@@ -1703,22 +1778,59 @@
       });
     }
 
+    function unpackNspConditions(all) {
+      return (all || []).map(c => {
+        const operator = Object.keys(c)[0];
+        if (!operator) return defaultNspCondition();
+        const inner = c[operator];
+        // inPlaylist/notInPlaylist: { "inPlaylist": { "id": "abc" } }
+        if (operator === 'inPlaylist' || operator === 'notInPlaylist') {
+          return { field: 'playlist', operator, value: inner.id || '' };
+        }
+        const field = Object.keys(inner)[0];
+        return { field, operator, value: inner[field] };
+      });
+    }
+
     function openNspBuilder(existingName, existingConfig, editingSlug = null) {
       nspEditingId  = editingSlug || null;
-      nspConditions = existingConfig?.all ? existingConfig.all.map(c => ({ ...c })) : [];
+      nspConditions = existingConfig?.all ? unpackNspConditions(existingConfig.all) : [];
       if (!nspConditions.length) nspConditions = [defaultNspCondition()];
       document.getElementById('nspNameInput').value            = existingName || '';
-      document.getElementById('nspLimit').value                = existingConfig?.limit ?? 25;
       document.getElementById('nspSortOrder').value            = existingConfig?.order || 'random';
+      // Restore limit type and value
+      const limitType = document.getElementById('nspLimitType');
+      const limitInp  = document.getElementById('nspLimit');
+      const limitUnit = document.getElementById('nspLimitUnit');
+      if (existingConfig?.limitPercent != null) {
+        limitType.value = 'limitPercent'; limitInp.value = existingConfig.limitPercent;
+        limitInp.style.display = ''; limitUnit.textContent = '%'; limitUnit.style.display = '';
+      } else if (existingConfig?.limit != null) {
+        limitType.value = 'limit'; limitInp.value = existingConfig.limit;
+        limitInp.style.display = ''; limitUnit.textContent = 'tracks'; limitUnit.style.display = '';
+      } else {
+        limitType.value = 'unlimited'; limitInp.style.display = 'none'; limitUnit.textContent = 'tracks (all)'; limitUnit.style.display = '';
+      }
       document.getElementById('nspStatus').textContent         = '';
       document.getElementById('nspPreviewPanel').style.display = 'none';
-      loadNspFields().then(() => renderNspConditions());
-      loadArtists(); loadGenres(); loadAlbums();
+      nspJsonDirty = false;
+      document.getElementById('nspJsonStatus').textContent = '';
+      loadNspFields().then(() => {
+        const sortVal = existingConfig?.sort || 'random';
+        document.getElementById('nspSortField').value = sortVal;
+        renderNspConditions();
+        if (editingSlug) {
+          document.getElementById('nspJsonPreview').value = JSON.stringify(buildNspPayload(), null, 2);
+          document.getElementById('nspPreviewPanel').style.display = '';
+          document.getElementById('nspSaveStatus').textContent = '';
+        }
+      });
+      Promise.all([loadArtists(), loadGenres(), loadAlbums()]).then(() => renderNspConditions());
       showNspView();
       setTimeout(() => document.getElementById('nspNameInput').focus(), 50);
     }
 
-    function defaultNspCondition() { return { operator: 'gt', field: 'playcount', value: '-1' }; }
+    function defaultNspCondition() { return { operator: 'is', field: 'genre', value: '' }; }
 
     function renderNspConditions() {
       const list = document.getElementById('nspConditionsList');
@@ -1767,6 +1879,20 @@
           const lbl = document.createElement('span'); lbl.textContent = 'days'; lbl.style.cssText = 'font-size:0.82rem; color:#aaa; margin-left:0.3rem;';
           inp.addEventListener('input', () => { nspConditions[index].value = parseInt(inp.value) || 30; });
           valueWrap.appendChild(inp); valueWrap.appendChild(lbl);
+        } else if (ft === 'playlist') {
+          const sel = document.createElement('select'); sel.style.cssText = 'flex:1; min-width:0;';
+          const opts = allPlaylists.filter(p => !isInactive(p) && !isNspPlaylist(p));
+          if (!opts.length) {
+            const empty = document.createElement('option'); empty.textContent = 'No playlists available'; empty.disabled = true; sel.appendChild(empty);
+          } else {
+            opts.forEach(p => {
+              const o = document.createElement('option'); o.value = p.id; o.textContent = p.name;
+              if (p.id === cond.value) o.selected = true; sel.appendChild(o);
+            });
+            if (!cond.value && opts[0]) nspConditions[index].value = opts[0].id;
+          }
+          sel.addEventListener('change', () => { nspConditions[index].value = sel.value; });
+          valueWrap.appendChild(sel);
         } else {
           const inp = document.createElement('input'); inp.type = ft === 'number' ? 'number' : 'text'; inp.value = cond.value !== undefined ? cond.value : ''; inp.setAttribute('aria-label', 'Value');
           // Attach datalist for known string fields
@@ -1797,15 +1923,43 @@
 
     function buildNspPayload() {
       const name  = document.getElementById('nspNameInput').value.trim();
-      const limit = parseInt(document.getElementById('nspLimit').value) || 25;
       const order = document.getElementById('nspSortOrder').value;
       const sort  = document.getElementById('nspSortField').value;
-      const payload = { name, all: nspConditions.filter(c => c.field && c.operator).map(c => ({ [c.operator]: { [c.field]: c.value } })), limit };
+      const limitType = document.getElementById('nspLimitType').value;
+      const limitVal  = parseInt(document.getElementById('nspLimit').value) || 25;
+      const payload = { name, all: nspConditions.filter(c => c.field && c.operator).map(c => {
+        if (c.operator === 'inPlaylist' || c.operator === 'notInPlaylist') {
+          return { [c.operator]: { id: c.value } };
+        }
+        return { [c.operator]: { [c.field]: c.value } };
+      }) };
+      if (limitType === 'limit')        payload.limit        = limitVal;
+      if (limitType === 'limitPercent') payload.limitPercent = limitVal;
+      // unlimited: neither field added
       if (sort === 'random') { payload.sort = 'random'; } else { payload.sort = sort; payload.order = order; }
       return payload;
     }
 
+    document.getElementById('nspLimitType').addEventListener('change', () => {
+      const type = document.getElementById('nspLimitType').value;
+      const inp  = document.getElementById('nspLimit');
+      const unit = document.getElementById('nspLimitUnit');
+      if (type === 'unlimited') { inp.style.display = 'none'; unit.textContent = 'tracks (all)'; unit.style.display = ''; }
+      else { inp.style.display = ''; unit.textContent = type === 'limitPercent' ? '%' : 'tracks'; unit.style.display = ''; }
+    });
+
     document.getElementById('nspAddCondition').addEventListener('click', () => { nspConditions.push(defaultNspCondition()); renderNspConditions(); });
+
+    document.getElementById('nspJsonPreview').addEventListener('input', () => {
+      nspJsonDirty = true;
+      const status = document.getElementById('nspJsonStatus');
+      try {
+        JSON.parse(document.getElementById('nspJsonPreview').value);
+        status.textContent = '✓ Valid JSON'; status.className = 'status-ok';
+      } catch (e) {
+        status.textContent = '✗ Invalid JSON'; status.className = 'status-err';
+      }
+    });
 
     document.getElementById('nspPreviewBtn').addEventListener('click', () => {
       const name = document.getElementById('nspNameInput').value.trim();
@@ -1813,7 +1967,9 @@
       if (!name) { status.textContent = 'Add a playlist name'; status.className = 'rb-status status-err'; return; }
       if (!nspConditions.length) { status.textContent = 'Add at least one condition'; status.className = 'rb-status status-err'; return; }
       status.textContent = '';
-      document.getElementById('nspJsonPreview').textContent = JSON.stringify(buildNspPayload(), null, 2);
+      nspJsonDirty = false;
+      document.getElementById('nspJsonPreview').value = JSON.stringify(buildNspPayload(), null, 2);
+      document.getElementById('nspJsonStatus').textContent = '';
       document.getElementById('nspPreviewPanel').style.display = '';
       document.getElementById('nspSaveStatus').textContent = '';
     });
@@ -1826,7 +1982,14 @@
       const saveBtn = document.getElementById('nspSaveBtn');
       saveBtn.disabled = true; saveBtn.textContent = 'Saving...';
       try {
-        const res  = await fetch('/nsp/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, config: buildNspPayload(), existingSlug: nspEditingId || undefined }) });
+        let config;
+        if (nspJsonDirty) {
+          try { config = JSON.parse(document.getElementById('nspJsonPreview').value); }
+          catch (e) { status.textContent = '\u2717 Invalid JSON \u2014 fix before saving'; status.className = 'rb-status status-err'; saveBtn.disabled = false; saveBtn.textContent = 'Save Playlist'; return; }
+        } else {
+          config = buildNspPayload();
+        }
+        const res  = await fetch('/nsp/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, config, existingSlug: nspEditingId || undefined }) });
         const data = await res.json();
         if (data.ok) {
           await loadPlaylists();
@@ -1844,6 +2007,200 @@
 
     document.getElementById('nspCancelBtn').addEventListener('click', () => showListView());
     document.getElementById('nspBackBtn').addEventListener('click',   () => showListView());
+
+    // ── Exportify import ────────────────────────────────────────────
+    function parseCsvRow(line) {
+      const cols = []; let cur = ''; let inQuote = false;
+      for (let i = 0; i < line.length; i++) {
+        const ch = line[i];
+        if (ch === '"') { inQuote = !inQuote; }
+        else if (ch === ',' && !inQuote) { cols.push(cur); cur = ''; }
+        else { cur += ch; }
+      }
+      cols.push(cur);
+      return cols;
+    }
+
+    function parseExportifyCsv(text) {
+      const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+      if (!lines.length) return null;
+      const headers   = parseCsvRow(lines[0]);
+      const titleIdx  = headers.findIndex(h => h === 'Track Name');
+      const artistIdx = headers.findIndex(h => h === 'Artist Name(s)');
+      if (titleIdx < 0 || artistIdx < 0) return null;
+      return lines.slice(1).map(line => {
+        const cols = parseCsvRow(line);
+        return { trackName: cols[titleIdx] || '', artistName: cols[artistIdx] || '' };
+      }).filter(r => r.trackName);
+    }
+
+    function parseNaviListCsv(text) {
+      const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+      if (!lines.length) return null;
+      const headers   = parseCsvRow(lines[0]);
+      const titleIdx  = headers.findIndex(h => h.toLowerCase() === 'title');
+      const artistIdx = headers.findIndex(h => h.toLowerCase() === 'artist');
+      if (titleIdx < 0 || artistIdx < 0) return null;
+      return lines.slice(1).map(line => {
+        const cols = parseCsvRow(line);
+        return { trackName: cols[titleIdx] || '', artistName: cols[artistIdx] || '' };
+      }).filter(r => r.trackName);
+    }
+
+    function parseNaviListJson(text) {
+      try {
+        const data = JSON.parse(text);
+        if (!Array.isArray(data.tracks)) return null;
+        return data.tracks
+          .map(t => ({ trackName: t.title || '', artistName: t.artist || '' }))
+          .filter(r => r.trackName);
+      } catch (e) { return null; }
+    }
+
+    function parseM3u(text) {
+      const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+      const rows  = [];
+      for (const line of lines) {
+        if (line.startsWith('#EXTINF:')) {
+          const meta = line.replace(/^#EXTINF:[^,]*,/, '');
+          const sep  = meta.indexOf(' - ');
+          if (sep < 0) continue;
+          rows.push({ artistName: meta.slice(0, sep).trim(), trackName: meta.slice(sep + 3).trim() });
+        }
+      }
+      if (!rows.length) {
+        for (const line of lines) {
+          if (line.startsWith('#')) continue;
+          const sep = line.indexOf(' - ');
+          if (sep < 0) continue;
+          rows.push({ artistName: line.slice(0, sep).trim(), trackName: line.slice(sep + 3).trim() });
+        }
+      }
+      return rows.length ? rows : null;
+    }
+
+    function parseJspf(text) {
+      try {
+        const data   = JSON.parse(text);
+        const tracks = data?.playlist?.track;
+        if (!Array.isArray(tracks)) return null;
+        return tracks
+          .map(t => ({ trackName: t.title || '', artistName: t.creator || '' }))
+          .filter(r => r.trackName);
+      } catch (e) { return null; }
+    }
+
+    function parseImportFile(text, format) {
+      switch (format) {
+        case 'exportify_csv':  return parseExportifyCsv(text);
+        case 'navilist_csv':   return parseNaviListCsv(text);
+        case 'navilist_json':  return parseNaviListJson(text);
+        case 'm3u':            return parseM3u(text);
+        case 'jspf':           return parseJspf(text);
+        default:               return null;
+      }
+    }
+
+    document.getElementById('exportifyBackBtn').addEventListener('click', () => showListView());
+
+    document.getElementById('importFormat').addEventListener('change', () => {
+      const fmt  = document.getElementById('importFormat').value;
+      const file = document.getElementById('exportifyFile');
+      if (fmt === 'm3u')            file.accept = '.m3u,.m3u8';
+      else if (fmt === 'jspf')      file.accept = '.jspf,.json';
+      else if (fmt === 'navilist_json') file.accept = '.json';
+      else                          file.accept = '.csv';
+      file.value = '';
+    });
+
+    document.getElementById('exportifyFile').addEventListener('change', () => {
+      const file = document.getElementById('exportifyFile').files[0];
+      if (!file) return;
+      const nameInput = document.getElementById('exportifyNameInput');
+      if (!nameInput.value.trim()) {
+        nameInput.value = file.name
+          .replace(/\.csv$/i, '')
+          .replace(/[_-]+/g, ' ')
+          .replace(/\b\w/g, c => c.toUpperCase())
+          .trim();
+      }
+    });
+
+    document.getElementById('exportifyDiscardBtn').addEventListener('click', () => {
+      exportifyMatchedTracks = []; exportifyUnmatched = [];
+      document.getElementById('exportifyPreviewPanel').style.display = 'none';
+      document.getElementById('exportifyStatus').textContent = '';
+    });
+
+    document.getElementById('exportifyImportBtn').addEventListener('click', async () => {
+      const name   = document.getElementById('exportifyNameInput').value.trim();
+      const file   = document.getElementById('exportifyFile').files[0];
+      const format = document.getElementById('importFormat').value;
+      const status = document.getElementById('exportifyStatus');
+      const btn    = document.getElementById('exportifyImportBtn');
+      if (!name) { status.textContent = 'Add a playlist name'; status.className = 'rb-status status-err'; return; }
+      if (!file) { status.textContent = 'Select a file';       status.className = 'rb-status status-err'; return; }
+      btn.disabled = true; status.textContent = 'Reading…'; status.className = 'rb-status status-pending';
+      try {
+        const text = await file.text();
+        const rows = parseImportFile(text, format);
+        if (!rows) { status.textContent = '✗ Could not parse file — check format selection'; status.className = 'rb-status status-err'; return; }
+        if (!rows.length) { status.textContent = '✗ No tracks found in file'; status.className = 'rb-status status-err'; return; }
+        status.textContent = `Matching ${rows.length} tracks…`; status.className = 'rb-status status-pending';
+        const res  = await fetch('/playlists/import-playlist', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ rows })
+        });
+        const data = await res.json();
+        if (!data.ok) { status.textContent = `✗ ${data.error}`; status.className = 'rb-status status-err'; return; }
+        exportifyMatchedTracks = data.matched;
+        exportifyUnmatched     = data.unmatched;
+        status.textContent = `✓ ${data.matched.length} matched · ${data.unmatched.length} not in library`;
+        status.className   = 'rb-status status-ok';
+        document.getElementById('exportifyPreviewCount').textContent = `— ${data.matched.length} tracks`;
+        const allTracks = [
+          ...data.matched.map(t => ({ ...t, missing: false })),
+          ...data.unmatched.map(t => ({ ...t, missing: true }))
+        ];
+        let html = `<div class="track-list"><div class="track-list-header">
+          <span class="tc-num">#</span><span class="tc-title">Title / Artist</span>
+          <span class="tc-dur">Duration</span><span class="tc-action"></span></div>`;
+        allTracks.forEach((t, i) => {
+          const dim  = t.missing ? ' style="opacity:0.45"' : '';
+          const pill = t.missing ? '<span class="lb-track-missing-pill">Not in library</span>' : '';
+          html += `<div class="track-row"${dim}>
+            <span class="tc-num">${i + 1}</span>
+            <span class="tc-title"><span class="tl-title">${esc(t.title || t.trackName || '—')}</span><span class="tl-artist">${esc(t.artist || t.artistName || '—')}</span></span>
+            <span class="tc-dur">${t.missing ? '' : fmtDur(t.duration)}</span>
+            <span class="tc-action">${pill}</span>
+          </div>`;
+        });
+        html += '</div>';
+        document.getElementById('exportifyPreviewTracks').innerHTML = html;
+        document.getElementById('exportifyPreviewPanel').style.display = '';
+        document.getElementById('exportifySaveStatus').textContent = '';
+      } catch (e) { status.textContent = '✗ Request failed'; status.className = 'rb-status status-err'; }
+      finally { btn.disabled = false; }
+    });
+
+    document.getElementById('exportifySaveBtn').addEventListener('click', async () => {
+      const name    = document.getElementById('exportifyNameInput').value.trim();
+      const status  = document.getElementById('exportifySaveStatus');
+      const saveBtn = document.getElementById('exportifySaveBtn');
+      if (!exportifyMatchedTracks.length) { status.textContent = 'No matched tracks to save'; status.className = 'rb-status status-err'; return; }
+      saveBtn.disabled = true; saveBtn.textContent = 'Saving...';
+      try {
+        const res  = await fetch('/playlists/save-import', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, trackIds: exportifyMatchedTracks.map(t => t.id), unmatched: exportifyUnmatched, format: document.getElementById('importFormat').value })
+        });
+        const data = await res.json();
+        if (data.ok) {
+          await loadPlaylists();
+          setTimeout(() => { const c = allPlaylists.find(p => p.id === data.playlistId); if (c) openDetail(c); else showListView(); }, 400);
+        } else { status.textContent = `✗ ${data.error}`; status.className = 'rb-status status-err'; saveBtn.disabled = false; saveBtn.textContent = 'Save Playlist'; }
+      } catch (e) { status.textContent = '✗ Request failed'; status.className = 'rb-status status-err'; saveBtn.disabled = false; saveBtn.textContent = 'Save Playlist'; }
+    });
 
     // ── Manual builder ─────────────────────────────────────────────────────
     // ── LB view
@@ -2194,6 +2551,17 @@
       if (openLfm) { showLfmView(); return; }
       if (openId) { const match = allPlaylists.find(p => p.id === openId); if (match) openDetail(match); }
     });
+  </script>
+  <footer class="app-footer">
+    <span>naviList v<span id="appVersion">…</span></span>
+    <span>-</span>
+    <a href="https://github.com/ofernander/naviList" target="_blank" rel="noopener">GitHub</a>
+  </footer>
+  <script>
+    fetch('/api/version').then(r => r.json()).then(d => {
+      const el = document.getElementById('appVersion');
+      if (el) el.textContent = d.version || '?';
+    }).catch(() => {});
   </script>
 </body>
 </html>
