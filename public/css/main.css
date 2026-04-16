@@ -350,6 +350,8 @@ select:focus {
 .pl-badge-listenbrainz,
 .pl-badge-smart { background: #eeecf7; color: #6657a0; }
 
+.pl-badge-exportify { background: #eeecf7; color: #6657a0; }
+
 /* ── Empty state ─────────────────────────────────────────────────────────── */
 .pl-empty {
   text-align: center;

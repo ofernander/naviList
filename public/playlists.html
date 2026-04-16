@@ -63,6 +63,7 @@
         <option value="listenbrainz">ListenBrainz</option>
         <option value="manual">Manual</option>
         <option value="deactivated">Deactivated</option>
+        <option value="exportify">Exportify</option>
       </select>
       <div class="pl-view-toggle">
         <button class="pl-view-btn active" id="viewBtnList" title="List view">☰</button>
@@ -352,6 +353,39 @@
     <div class="lb-cards" id="plLfmList"></div>
   </main>
 
+  <!-- ── Exportify import view ──────────────────────────────────────────── -->
+  <main id="viewExportify" style="display:none">
+    <button class="pl-detail-back" id="exportifyBackBtn">← Back</button>
+    <div class="pl-detail-header">
+      <div>
+        <input type="text" id="exportifyNameInput" class="pl-builder-name-input" placeholder="Playlist name..." />
+        <div class="pl-detail-meta">Import a playlist exported from <a href="https://exportify.net" target="_blank" rel="noopener" style="color:#8a79b7;">exportify.net</a></div>
+      </div>
+    </div>
+    <hr style="border:none; border-top: 0.5px solid #eeeee8; margin-bottom: 1.5rem;" />
+    <div class="rb-section">
+      <div class="rb-section-label">CSV File</div>
+      <div class="rb-globals">
+        <input type="file" id="exportifyFile" accept=".csv" style="font-size:0.88rem;" />
+        <button class="btn btn-secondary" id="exportifyImportBtn">Import →</button>
+        <span class="rb-status" id="exportifyStatus"></span>
+      </div>
+    </div>
+    <div id="exportifyPreviewPanel" style="display:none; margin-top:1.5rem;">
+      <hr style="border:none; border-top: 0.5px solid #eeeee8; margin-bottom:1rem;" />
+      <div class="rb-section-label" style="margin-bottom:0.75rem;">
+        Preview <span id="exportifyPreviewCount" style="font-weight:400; color:#aaa;"></span>
+      </div>
+      <div class="rb-preview-tracks" id="exportifyPreviewTracks"></div>
+      <div class="rb-actions" style="margin-top:1rem;">
+        <button class="btn btn-secondary" id="exportifyDiscardBtn">Discard</button>
+        <button class="btn btn-secondary" id="exportifyLidarrBtn" style="display:none">Send missing to Lidarr</button>
+        <button class="btn" id="exportifySaveBtn">Save Playlist</button>
+        <span class="rb-status" id="exportifySaveStatus"></span>
+      </div>
+    </div>
+  </main>
+
   <!-- ── New playlist modal ─────────────────────────────────────────────── -->
   <div class="modal-overlay" id="newPlaylistModal" style="display:none">
     <div class="modal">
@@ -381,6 +415,10 @@
         <div class="pl-type-option" data-type="manual" id="typeManual">
           <div class="pl-type-title">Manual</div>
           <div class="pl-type-desc">Manually create playlist from Navidrome library</div>
+        </div>
+        <div class="pl-type-option" data-type="exportify" id="typeExportify">
+          <div class="pl-type-title">Exportify</div>
+          <div class="pl-type-desc">Import a playlist exported from exportify.net</div>
         </div>
       </div>
       <div class="modal-actions">
@@ -445,6 +483,11 @@
     let radioPreviewTracks  = [];
     let radioPreviewConfig  = null;
 
+    // Exportify state
+    let exportifyMatchedTracks = [];
+    let exportifyUnmatched     = [];
+    let exportifyCsvText       = '';
+
     // ── Helpers ────────────────────────────────────────────────────────────
     function esc(str) {
       if (!str) return '';
@@ -469,15 +512,17 @@
     function isLbPlaylist(p)     { return p.comment?.startsWith('navilist:lb')       || false; }
     function isLfmPlaylist(p)    { return p.comment?.startsWith('navilist:lastfm')   || false; }
     function isRadioPlaylist(p)  { return p.comment?.startsWith('navilist:radio')    || false; }
-    function isNspPlaylist(p)    { return p.id?.startsWith('nsp:') || p.comment?.startsWith('navilist:nsp') || false; }
-    function isInactive(p)       { return p.active === 0; }
+    function isNspPlaylist(p)       { return p.id?.startsWith('nsp:') || p.comment?.startsWith('navilist:nsp') || false; }
+    function isExportifyPlaylist(p) { return p.comment?.startsWith('navilist:exportify') || false; }
+    function isInactive(p)          { return p.active === 0; }
 
     function getPlaylistType(p) {
-      if (isSmartPlaylist(p))  return 'navilist';
-      if (isLfmPlaylist(p))    return 'lastfm';
-      if (isLbPlaylist(p))     return 'listenbrainz';
-      if (isRadioPlaylist(p))  return 'radio';
-      if (isNspPlaylist(p))    return 'nsp';
+      if (isSmartPlaylist(p))     return 'navilist';
+      if (isLfmPlaylist(p))       return 'lastfm';
+      if (isLbPlaylist(p))        return 'listenbrainz';
+      if (isRadioPlaylist(p))     return 'radio';
+      if (isNspPlaylist(p))       return 'nsp';
+      if (isExportifyPlaylist(p)) return 'exportify';
       return 'manual';
     }
 
@@ -489,6 +534,7 @@
       switch (type) {
         case 'navilist':     return 'naviList';
         case 'nsp':          return 'Navidrome';
+        case 'exportify':    return 'Exportify';
         case 'listenbrainz': return 'ListenBrainz';
         case 'radio':        return 'Radio';
         case 'lastfm':       return 'Last.fm';
@@ -554,7 +600,7 @@
 
     // ── Views ──────────────────────────────────────────────────────────────
     function hideAllViews() {
-      ['viewList','viewDetail','viewRules','viewLb','viewRadio','viewLfm','viewNsp'].forEach(id => {
+      ['viewList','viewDetail','viewRules','viewLb','viewRadio','viewLfm','viewNsp','viewExportify'].forEach(id => {
         document.getElementById(id).style.display = 'none';
       });
     }
@@ -564,6 +610,7 @@
     function showRulesView()  { hideAllViews(); document.getElementById('viewRules').style.display  = ''; }
     function showRadioView()  { hideAllViews(); document.getElementById('viewRadio').style.display  = ''; }
     function showNspView()   { hideAllViews(); document.getElementById('viewNsp').style.display   = ''; }
+    function showExportifyView() { hideAllViews(); document.getElementById('viewExportify').style.display = ''; }
     function showManualView() { window.location.href = '/library?mode=manual'; }
 
     async function showLfmView() {
@@ -1529,6 +1576,16 @@
       if (selectedType === 'listenbrainz') { showLbView(); return; }
       if (selectedType === 'lastfm')       { showLfmView(); return; }
       if (selectedType === 'manual')       { showManualView(); return; }
+      if (selectedType === 'exportify') {
+        exportifyMatchedTracks = []; exportifyUnmatched = []; exportifyCsvText = '';
+        document.getElementById('exportifyNameInput').value = '';
+        document.getElementById('exportifyFile').value = '';
+        document.getElementById('exportifyStatus').textContent = '';
+        document.getElementById('exportifyPreviewPanel').style.display = 'none';
+        showExportifyView();
+        setTimeout(() => document.getElementById('exportifyNameInput').focus(), 50);
+        return;
+      }
     });
 
     // ── View toggle ────────────────────────────────────────────────────────
@@ -1941,6 +1998,144 @@
 
     document.getElementById('nspCancelBtn').addEventListener('click', () => showListView());
     document.getElementById('nspBackBtn').addEventListener('click',   () => showListView());
+
+    // ── Exportify import ────────────────────────────────────────────
+    function parseCsvRow(line) {
+      const cols = []; let cur = ''; let inQuote = false;
+      for (let i = 0; i < line.length; i++) {
+        const ch = line[i];
+        if (ch === '"') { inQuote = !inQuote; }
+        else if (ch === ',' && !inQuote) { cols.push(cur); cur = ''; }
+        else { cur += ch; }
+      }
+      cols.push(cur);
+      return cols;
+    }
+
+    function parseExportifyCsv(text) {
+      const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+      if (!lines.length) return null;
+      const headers   = parseCsvRow(lines[0]);
+      const titleIdx  = headers.findIndex(h => h === 'Track Name');
+      const artistIdx = headers.findIndex(h => h === 'Artist Name(s)');
+      const albumIdx  = headers.findIndex(h => h === 'Album Name');
+      if (titleIdx < 0 || artistIdx < 0) return null;
+      return lines.slice(1).map(line => {
+        const cols = parseCsvRow(line);
+        return { trackName: cols[titleIdx] || '', artistName: cols[artistIdx] || '', albumName: cols[albumIdx] || '' };
+      }).filter(r => r.trackName);
+    }
+
+    document.getElementById('exportifyBackBtn').addEventListener('click', () => showListView());
+
+    document.getElementById('exportifyFile').addEventListener('change', () => {
+      const file = document.getElementById('exportifyFile').files[0];
+      if (!file) return;
+      const nameInput = document.getElementById('exportifyNameInput');
+      if (!nameInput.value.trim()) {
+        nameInput.value = file.name
+          .replace(/\.csv$/i, '')
+          .replace(/[_-]+/g, ' ')
+          .replace(/\b\w/g, c => c.toUpperCase())
+          .trim();
+      }
+    });
+
+    document.getElementById('exportifyDiscardBtn').addEventListener('click', () => {
+      exportifyMatchedTracks = []; exportifyUnmatched = []; exportifyCsvText = '';
+      document.getElementById('exportifyPreviewPanel').style.display = 'none';
+      document.getElementById('exportifyStatus').textContent = '';
+      document.getElementById('exportifyLidarrBtn').style.display = 'none';
+    });
+
+    document.getElementById('exportifyImportBtn').addEventListener('click', async () => {
+      const name   = document.getElementById('exportifyNameInput').value.trim();
+      const file   = document.getElementById('exportifyFile').files[0];
+      const status = document.getElementById('exportifyStatus');
+      const btn    = document.getElementById('exportifyImportBtn');
+      if (!name) { status.textContent = 'Add a playlist name'; status.className = 'rb-status status-err'; return; }
+      if (!file) { status.textContent = 'Select a CSV file';   status.className = 'rb-status status-err'; return; }
+      btn.disabled = true; status.textContent = 'Reading…'; status.className = 'rb-status status-pending';
+      try {
+        const text = await file.text();
+        exportifyCsvText = text;
+        const rows = parseExportifyCsv(text);
+        if (!rows) { status.textContent = '✗ Not a valid Exportify CSV'; status.className = 'rb-status status-err'; return; }
+        if (!rows.length) { status.textContent = '✗ No tracks found in file'; status.className = 'rb-status status-err'; return; }
+        status.textContent = `Matching ${rows.length} tracks…`; status.className = 'rb-status status-pending';
+        const res  = await fetch('/playlists/import-exportify', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ rows })
+        });
+        const data = await res.json();
+        if (!data.ok) { status.textContent = `✗ ${data.error}`; status.className = 'rb-status status-err'; return; }
+        exportifyMatchedTracks = data.matched;
+        exportifyUnmatched     = data.unmatched;
+        status.textContent = `✓ ${data.matched.length} matched · ${data.unmatched.length} not in library`;
+        status.className   = 'rb-status status-ok';
+        document.getElementById('exportifyPreviewCount').textContent = `— ${data.matched.length} tracks`;
+        const lidarrBtn = document.getElementById('exportifyLidarrBtn');
+        lidarrBtn.style.display = data.unmatched.length ? '' : 'none';
+        lidarrBtn.textContent = 'Send missing to Lidarr';
+        lidarrBtn.disabled = false;
+        const allTracks = [
+          ...data.matched.map(t => ({ ...t, missing: false })),
+          ...data.unmatched.map(t => ({ ...t, missing: true }))
+        ];
+        let html = `<div class="track-list"><div class="track-list-header">
+          <span class="tc-num">#</span><span class="tc-title">Title / Artist</span>
+          <span class="tc-dur">Duration</span><span class="tc-action"></span></div>`;
+        allTracks.forEach((t, i) => {
+          const dim  = t.missing ? ' style="opacity:0.45"' : '';
+          const pill = t.missing ? '<span class="lb-track-missing-pill">Not in library</span>' : '';
+          html += `<div class="track-row"${dim}>
+            <span class="tc-num">${i + 1}</span>
+            <span class="tc-title"><span class="tl-title">${esc(t.title || t.trackName || '—')}</span><span class="tl-artist">${esc(t.artist || t.artistName || '—')}</span></span>
+            <span class="tc-dur">${t.missing ? '' : fmtDur(t.duration)}</span>
+            <span class="tc-action">${pill}</span>
+          </div>`;
+        });
+        html += '</div>';
+        document.getElementById('exportifyPreviewTracks').innerHTML = html;
+        document.getElementById('exportifyPreviewPanel').style.display = '';
+        document.getElementById('exportifySaveStatus').textContent = '';
+      } catch (e) { status.textContent = '✗ Request failed'; status.className = 'rb-status status-err'; }
+      finally { btn.disabled = false; }
+    });
+
+    document.getElementById('exportifySaveBtn').addEventListener('click', async () => {
+      const name    = document.getElementById('exportifyNameInput').value.trim();
+      const status  = document.getElementById('exportifySaveStatus');
+      const saveBtn = document.getElementById('exportifySaveBtn');
+      if (!exportifyMatchedTracks.length) { status.textContent = 'No matched tracks to save'; status.className = 'rb-status status-err'; return; }
+      saveBtn.disabled = true; saveBtn.textContent = 'Saving...';
+      try {
+        const res  = await fetch('/playlists/save-exportify', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, trackIds: exportifyMatchedTracks.map(t => t.id), unmatched: exportifyUnmatched, csvText: exportifyCsvText })
+        });
+        const data = await res.json();
+        if (data.ok) {
+          await loadPlaylists();
+          setTimeout(() => { const c = allPlaylists.find(p => p.id === data.playlistId); if (c) openDetail(c); else showListView(); }, 400);
+        } else { status.textContent = `✗ ${data.error}`; status.className = 'rb-status status-err'; saveBtn.disabled = false; saveBtn.textContent = 'Save Playlist'; }
+      } catch (e) { status.textContent = '✗ Request failed'; status.className = 'rb-status status-err'; saveBtn.disabled = false; saveBtn.textContent = 'Save Playlist'; }
+    });
+
+    document.getElementById('exportifyLidarrBtn').addEventListener('click', async () => {
+      const btn = document.getElementById('exportifyLidarrBtn');
+      if (!exportifyUnmatched.length) return;
+      btn.disabled = true; btn.textContent = 'Sending…';
+      try {
+        const res  = await fetch('/playlists/send-exportify-missing', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ unmatched: exportifyUnmatched })
+        });
+        const data = await res.json();
+        if (data.ok) { btn.textContent = `✓ ${data.count} queued`; }
+        else { btn.disabled = false; btn.textContent = 'Send missing to Lidarr'; }
+      } catch (e) { btn.disabled = false; btn.textContent = 'Send missing to Lidarr'; }
+    });
 
     // ── Manual builder ─────────────────────────────────────────────────────
     // ── LB view

@@ -1,10 +1,12 @@
 const express = require('express');
 const router = express.Router();
 const path = require('path');
+const fs   = require('fs');
 const db = require('../db/index');
 const navidrome = require('../providers/navidrome');
 const engine    = require('./pl_engine');
 const logger = require('../utils/logger');
+const { writeMissingArtists } = require('./sync/helpers');
 
 // ── Helper: snapshot a playlist into local registry ───────────────────────────
 
@@ -659,6 +661,80 @@ router.get('/:id/export', async (req, res) => {
   }
 
   res.status(400).json({ ok: false, error: `Unknown format: ${format}` });
+});
+
+// POST /playlists/import-exportify — match CSV rows against local library
+router.post('/import-exportify', (req, res) => {
+  const { rows } = req.body;
+  if (!Array.isArray(rows) || !rows.length) return res.json({ ok: false, error: 'rows required' });
+
+  const findTrack = db.prepare(`
+    SELECT id, title, artist, duration FROM tracks
+    WHERE LOWER(title) = LOWER(?) AND LOWER(artist) = LOWER(?)
+    LIMIT 1
+  `);
+
+  const matched   = [];
+  const unmatched = [];
+
+  for (const row of rows) {
+    const title  = (row.trackName  || '').trim();
+    const artist = (row.artistName || '').split(',')[0].trim();
+    if (!title || !artist) { unmatched.push({ title, artist }); continue; }
+    const track = findTrack.get(title, artist);
+    if (track) matched.push(track);
+    else unmatched.push({ title, artist });
+  }
+
+  logger.info('playlists', `exportify import: ${matched.length} matched, ${unmatched.length} unmatched`);
+  res.json({ ok: true, matched, unmatched });
+});
+
+// POST /playlists/save-exportify — create ND playlist, write missing artists, backup CSV
+router.post('/save-exportify', async (req, res) => {
+  const { name, trackIds, unmatched, csvText } = req.body;
+  if (!name?.trim())     return res.json({ ok: false, error: 'name required' });
+  if (!trackIds?.length) return res.json({ ok: false, error: 'trackIds required' });
+
+  const created = await navidrome.createPlaylist(db, name.trim(), trackIds);
+  if (!created.ok) return res.json(created);
+
+  const playlistId = created.playlist?.id;
+  if (!playlistId) return res.json({ ok: false, error: 'No playlist ID returned from Navidrome' });
+
+  const comment = 'navilist:exportify';
+  await navidrome.updatePlaylist(db, playlistId, { comment });
+  snapshotPlaylist(db, playlistId, name.trim(), comment, trackIds, null);
+
+  // Backup CSV to /app/data/exportify-playlists/
+  if (csvText) {
+    try {
+      const dir  = path.join('/app/data', 'exportify-playlists');
+      fs.mkdirSync(dir, { recursive: true });
+      const slug = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+      const date = new Date().toISOString().slice(0, 10);
+      const file = path.join(dir, `${slug}-${date}.csv`);
+      fs.writeFileSync(file, csvText, 'utf8');
+      logger.info('playlists', `exportify backup written: ${file}`);
+    } catch (e) {
+      logger.warn('playlists', `exportify backup failed: ${e.message}`);
+    }
+  }
+
+  logger.info('playlists', `exportify playlist saved: "${name.trim()}" (${trackIds.length} tracks)`);
+  res.json({ ok: true, playlistId, count: trackIds.length });
+});
+
+// POST /playlists/send-exportify-missing — queue unmatched artists for Lidarr
+router.post('/send-exportify-missing', (req, res) => {
+  const { unmatched } = req.body;
+  if (!Array.isArray(unmatched) || !unmatched.length)
+    return res.json({ ok: false, error: 'no unmatched tracks provided' });
+  const artists = [...new Set(unmatched.map(t => t.artist).filter(Boolean))];
+  if (!artists.length) return res.json({ ok: false, error: 'no artists found' });
+  const added = writeMissingArtists(db, artists, 'exportify');
+  logger.info('playlists', `exportify: ${added} missing artists queued for Lidarr`);
+  res.json({ ok: true, count: artists.length });
 });
 
 function escXml(str) {

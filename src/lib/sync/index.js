@@ -75,7 +75,7 @@ async function processMissingArtists() {
     return;
   }
 
-  const pending = db.prepare(`SELECT * FROM missing_artists WHERE status = 'pending' LIMIT 50`).all();
+  const pending = db.prepare(`SELECT * FROM missing_artists WHERE status = 'pending'`).all();
   if (!pending.length) return;
 
   logger.info('sync', `processMissingArtists: processing ${pending.length} pending artists`);
