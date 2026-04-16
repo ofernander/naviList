@@ -313,8 +313,11 @@
 
     <div id="nspPreviewPanel" style="display:none; margin-top:1.5rem;">
       <hr style="border:none; border-top: 0.5px solid #eeeee8; margin-bottom:1rem;" />
-      <div class="rb-section-label" style="margin-bottom:0.75rem;">Generated .nsp JSON</div>
-      <pre id="nspJsonPreview" style="background:#f5f5f3; border:0.5px solid #ddddd8; border-radius:6px; padding:1rem; font-size:0.78rem; overflow-x:auto; white-space:pre-wrap;"></pre>
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:0.5rem;">
+        <div class="rb-section-label" style="margin-bottom:0;">Generated .nsp JSON</div>
+        <span id="nspJsonStatus" style="font-size:0.78rem;"></span>
+      </div>
+      <textarea id="nspJsonPreview" style="width:100%; min-height:220px; font-family:monospace; font-size:0.78rem; background:#f5f5f3; border:0.5px solid #ddddd8; border-radius:6px; padding:1rem; resize:vertical; box-sizing:border-box; color:#1a1a1a; line-height:1.5;"></textarea>
       <div class="rb-actions" style="margin-top:1rem;">
         <button class="btn btn-secondary" id="nspPreviewCancelBtn">Discard</button>
         <button class="btn" id="nspSaveBtn">Save Playlist</button>
@@ -1685,6 +1688,7 @@
     let nspOperatorLabels  = {};
     let nspConditions      = [];
     let nspEditingId       = null;
+    let nspJsonDirty       = false;
 
     async function loadNspFields() {
       if (nspFields.length) return;
@@ -1743,12 +1747,14 @@
       }
       document.getElementById('nspStatus').textContent         = '';
       document.getElementById('nspPreviewPanel').style.display = 'none';
+      nspJsonDirty = false;
+      document.getElementById('nspJsonStatus').textContent = '';
       loadNspFields().then(() => {
         const sortVal = existingConfig?.sort || 'random';
         document.getElementById('nspSortField').value = sortVal;
         renderNspConditions();
         if (editingSlug) {
-          document.getElementById('nspJsonPreview').textContent = JSON.stringify(buildNspPayload(), null, 2);
+          document.getElementById('nspJsonPreview').value = JSON.stringify(buildNspPayload(), null, 2);
           document.getElementById('nspPreviewPanel').style.display = '';
           document.getElementById('nspSaveStatus').textContent = '';
         }
@@ -1878,13 +1884,26 @@
 
     document.getElementById('nspAddCondition').addEventListener('click', () => { nspConditions.push(defaultNspCondition()); renderNspConditions(); });
 
+    document.getElementById('nspJsonPreview').addEventListener('input', () => {
+      nspJsonDirty = true;
+      const status = document.getElementById('nspJsonStatus');
+      try {
+        JSON.parse(document.getElementById('nspJsonPreview').value);
+        status.textContent = '✓ Valid JSON'; status.className = 'status-ok';
+      } catch (e) {
+        status.textContent = '✗ Invalid JSON'; status.className = 'status-err';
+      }
+    });
+
     document.getElementById('nspPreviewBtn').addEventListener('click', () => {
       const name = document.getElementById('nspNameInput').value.trim();
       const status = document.getElementById('nspStatus');
       if (!name) { status.textContent = 'Add a playlist name'; status.className = 'rb-status status-err'; return; }
       if (!nspConditions.length) { status.textContent = 'Add at least one condition'; status.className = 'rb-status status-err'; return; }
       status.textContent = '';
-      document.getElementById('nspJsonPreview').textContent = JSON.stringify(buildNspPayload(), null, 2);
+      nspJsonDirty = false;
+      document.getElementById('nspJsonPreview').value = JSON.stringify(buildNspPayload(), null, 2);
+      document.getElementById('nspJsonStatus').textContent = '';
       document.getElementById('nspPreviewPanel').style.display = '';
       document.getElementById('nspSaveStatus').textContent = '';
     });
@@ -1897,7 +1916,14 @@
       const saveBtn = document.getElementById('nspSaveBtn');
       saveBtn.disabled = true; saveBtn.textContent = 'Saving...';
       try {
-        const res  = await fetch('/nsp/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, config: buildNspPayload(), existingSlug: nspEditingId || undefined }) });
+        let config;
+        if (nspJsonDirty) {
+          try { config = JSON.parse(document.getElementById('nspJsonPreview').value); }
+          catch (e) { status.textContent = '\u2717 Invalid JSON \u2014 fix before saving'; status.className = 'rb-status status-err'; saveBtn.disabled = false; saveBtn.textContent = 'Save Playlist'; return; }
+        } else {
+          config = buildNspPayload();
+        }
+        const res  = await fetch('/nsp/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, config, existingSlug: nspEditingId || undefined }) });
         const data = await res.json();
         if (data.ok) {
           await loadPlaylists();
