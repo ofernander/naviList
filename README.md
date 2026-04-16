@@ -6,14 +6,16 @@ Self-hosted playlist manager and generator for [Navidrome](https://www.navidrome
 ![naviList Screenshot](docs/images/Screenshot.png)
 
 ## Features
-- **naviList playlists** — rules-based generation using stats, tags, artists, decades, and more. Rules are weighted and interleaved, not concatenated. Supports auto-refresh on a cron schedule.
+- **naviList playlists** — rules-based generation using stats, tags, artists, decades, etc... Rules are weighted and interleaved, not concatenated. Supports auto-refresh on a cron schedule.
 - **Radio style playlists** — seed one or more artists and naviList finds similar music from your library using cached Last.fm similarity data. Adjustable depth (close / medium / wide).
 - **Navidrome Smart Playlists (NSP)** — a UI wrapper for Navidrome's native `.nsp` smart playlist format.
 - **Manual playlists** — browse your library and build playlists by hand.
+- **Import playlists** — Import external playlist, support for m3u, JSPF, [exportify.net](https://exportify.net) CSV, naviList CSV, naviList JSON.
 
 ## External service integration
 - **Last.fm** — syncs listen history, loved tracks, top artists, top tracks, artist tags, similar artists, and chart-based playlists (weekly, monthly, all-time). Subscribe to auto-updating playlists or save point-in-time snapshots.
 - **ListenBrainz** — syncs listen history, loved tracks, top artists, top tracks, and generated playlists (Weekly Jams, Weekly Exploration, Daily Jams). Same subscribe/snapshot model as Last.fm.
+- **Spotify/Exportify** — Spotify cannot be directly integrated at this time. Spotify playlist can be imported via the third party exporter [exportify.net](https://exportify.net). Further Spotify support will not be pursued due to their API restrictions & cost. 
 - **Lidarr** — when a subscribed playlist contains artists not in your library, naviList can automatically queue them in Lidarr for download.
 
 ## A.I. Disclosure 
