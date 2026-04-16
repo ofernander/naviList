@@ -294,8 +294,13 @@
           </select>
         </div>
         <div class="rb-global-field">
+          <select id="nspLimitType" style="width:110px;">
+            <option value="limit">Limit</option>
+            <option value="limitPercent">Percentage</option>
+            <option value="unlimited">Unlimited</option>
+          </select>
           <input type="number" id="nspLimit" min="1" max="1000" value="25" style="width:70px;" />
-          <span style="font-size:0.82rem; color:#aaa;">tracks</span>
+          <span id="nspLimitUnit" style="font-size:0.82rem; color:#aaa;">tracks</span>
         </div>
       </div>
     </div>
@@ -1708,6 +1713,10 @@
         const operator = Object.keys(c)[0];
         if (!operator) return defaultNspCondition();
         const inner = c[operator];
+        // inPlaylist/notInPlaylist: { "inPlaylist": { "id": "abc" } }
+        if (operator === 'inPlaylist' || operator === 'notInPlaylist') {
+          return { field: 'playlist', operator, value: inner.id || '' };
+        }
         const field = Object.keys(inner)[0];
         return { field, operator, value: inner[field] };
       });
@@ -1718,8 +1727,20 @@
       nspConditions = existingConfig?.all ? unpackNspConditions(existingConfig.all) : [];
       if (!nspConditions.length) nspConditions = [defaultNspCondition()];
       document.getElementById('nspNameInput').value            = existingName || '';
-      document.getElementById('nspLimit').value                = existingConfig?.limit ?? 25;
       document.getElementById('nspSortOrder').value            = existingConfig?.order || 'random';
+      // Restore limit type and value
+      const limitType = document.getElementById('nspLimitType');
+      const limitInp  = document.getElementById('nspLimit');
+      const limitUnit = document.getElementById('nspLimitUnit');
+      if (existingConfig?.limitPercent != null) {
+        limitType.value = 'limitPercent'; limitInp.value = existingConfig.limitPercent;
+        limitInp.style.display = ''; limitUnit.textContent = '%'; limitUnit.style.display = '';
+      } else if (existingConfig?.limit != null) {
+        limitType.value = 'limit'; limitInp.value = existingConfig.limit;
+        limitInp.style.display = ''; limitUnit.textContent = 'tracks'; limitUnit.style.display = '';
+      } else {
+        limitType.value = 'unlimited'; limitInp.style.display = 'none'; limitUnit.textContent = 'tracks (all)'; limitUnit.style.display = '';
+      }
       document.getElementById('nspStatus').textContent         = '';
       document.getElementById('nspPreviewPanel').style.display = 'none';
       loadNspFields().then(() => {
@@ -1732,12 +1753,12 @@
           document.getElementById('nspSaveStatus').textContent = '';
         }
       });
-      loadArtists(); loadGenres(); loadAlbums();
+      Promise.all([loadArtists(), loadGenres(), loadAlbums()]).then(() => renderNspConditions());
       showNspView();
       setTimeout(() => document.getElementById('nspNameInput').focus(), 50);
     }
 
-    function defaultNspCondition() { return { operator: 'gt', field: 'playcount', value: '-1' }; }
+    function defaultNspCondition() { return { operator: 'is', field: 'genre', value: '' }; }
 
     function renderNspConditions() {
       const list = document.getElementById('nspConditionsList');
@@ -1786,6 +1807,20 @@
           const lbl = document.createElement('span'); lbl.textContent = 'days'; lbl.style.cssText = 'font-size:0.82rem; color:#aaa; margin-left:0.3rem;';
           inp.addEventListener('input', () => { nspConditions[index].value = parseInt(inp.value) || 30; });
           valueWrap.appendChild(inp); valueWrap.appendChild(lbl);
+        } else if (ft === 'playlist') {
+          const sel = document.createElement('select'); sel.style.cssText = 'flex:1; min-width:0;';
+          const opts = allPlaylists.filter(p => !isInactive(p) && !isNspPlaylist(p));
+          if (!opts.length) {
+            const empty = document.createElement('option'); empty.textContent = 'No playlists available'; empty.disabled = true; sel.appendChild(empty);
+          } else {
+            opts.forEach(p => {
+              const o = document.createElement('option'); o.value = p.id; o.textContent = p.name;
+              if (p.id === cond.value) o.selected = true; sel.appendChild(o);
+            });
+            if (!cond.value && opts[0]) nspConditions[index].value = opts[0].id;
+          }
+          sel.addEventListener('change', () => { nspConditions[index].value = sel.value; });
+          valueWrap.appendChild(sel);
         } else {
           const inp = document.createElement('input'); inp.type = ft === 'number' ? 'number' : 'text'; inp.value = cond.value !== undefined ? cond.value : ''; inp.setAttribute('aria-label', 'Value');
           // Attach datalist for known string fields
@@ -1816,13 +1851,30 @@
 
     function buildNspPayload() {
       const name  = document.getElementById('nspNameInput').value.trim();
-      const limit = parseInt(document.getElementById('nspLimit').value) || 25;
       const order = document.getElementById('nspSortOrder').value;
       const sort  = document.getElementById('nspSortField').value;
-      const payload = { name, all: nspConditions.filter(c => c.field && c.operator).map(c => ({ [c.operator]: { [c.field]: c.value } })), limit };
+      const limitType = document.getElementById('nspLimitType').value;
+      const limitVal  = parseInt(document.getElementById('nspLimit').value) || 25;
+      const payload = { name, all: nspConditions.filter(c => c.field && c.operator).map(c => {
+        if (c.operator === 'inPlaylist' || c.operator === 'notInPlaylist') {
+          return { [c.operator]: { id: c.value } };
+        }
+        return { [c.operator]: { [c.field]: c.value } };
+      }) };
+      if (limitType === 'limit')        payload.limit        = limitVal;
+      if (limitType === 'limitPercent') payload.limitPercent = limitVal;
+      // unlimited: neither field added
       if (sort === 'random') { payload.sort = 'random'; } else { payload.sort = sort; payload.order = order; }
       return payload;
     }
+
+    document.getElementById('nspLimitType').addEventListener('change', () => {
+      const type = document.getElementById('nspLimitType').value;
+      const inp  = document.getElementById('nspLimit');
+      const unit = document.getElementById('nspLimitUnit');
+      if (type === 'unlimited') { inp.style.display = 'none'; unit.textContent = 'tracks (all)'; unit.style.display = ''; }
+      else { inp.style.display = ''; unit.textContent = type === 'limitPercent' ? '%' : 'tracks'; unit.style.display = ''; }
+    });
 
     document.getElementById('nspAddCondition').addEventListener('click', () => { nspConditions.push(defaultNspCondition()); renderNspConditions(); });
 
@@ -2213,6 +2265,17 @@
       if (openLfm) { showLfmView(); return; }
       if (openId) { const match = allPlaylists.find(p => p.id === openId); if (match) openDetail(match); }
     });
+  </script>
+  <footer class="app-footer">
+    <span>naviList v<span id="appVersion">…</span></span>
+    <span>-</span>
+    <a href="https://github.com/ofernander/naviList" target="_blank" rel="noopener">GitHub</a>
+  </footer>
+  <script>
+    fetch('/api/version').then(r => r.json()).then(d => {
+      const el = document.getElementById('appVersion');
+      if (el) el.textContent = d.version || '?';
+    }).catch(() => {});
   </script>
 </body>
 </html>

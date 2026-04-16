@@ -629,5 +629,16 @@
     loadPlaylists();
     fetchArtists();
   </script>
+  <footer class="app-footer">
+    <span>naviList v<span id="appVersion">…</span></span>
+    <span>-</span>
+    <a href="https://github.com/ofernander/naviList" target="_blank" rel="noopener">GitHub</a>
+  </footer>
+  <script>
+    fetch('/api/version').then(r => r.json()).then(d => {
+      const el = document.getElementById('appVersion');
+      if (el) el.textContent = d.version || '?';
+    }).catch(() => {});
+  </script>
 </body>
 </html>

@@ -37,36 +37,82 @@ function listNspFiles(nspPath) {
 }
 
 const NSP_FIELDS = [
-  { value: 'title',           label: 'Title',              type: 'string'  },
-  { value: 'album',           label: 'Album',              type: 'string'  },
-  { value: 'artist',          label: 'Artist',             type: 'string'  },
-  { value: 'albumartist',     label: 'Album Artist',       type: 'string'  },
-  { value: 'genre',           label: 'Genre',              type: 'string'  },
-  { value: 'year',            label: 'Year',               type: 'number'  },
-  { value: 'playcount',       label: 'Play Count',         type: 'number'  },
-  { value: 'lastplayed',      label: 'Last Played',        type: 'date'    },
-  { value: 'loved',           label: 'Loved',              type: 'boolean' },
-  { value: 'dateloved',       label: 'Date Loved',         type: 'date'    },
-  { value: 'rating',          label: 'Rating',             type: 'number'  },
-  { value: 'dateadded',       label: 'Date Added',         type: 'date'    },
-  { value: 'duration',        label: 'Duration (seconds)', type: 'number'  },
-  { value: 'bpm',             label: 'BPM',                type: 'number'  },
-  { value: 'bitrate',         label: 'Bitrate',            type: 'number'  },
-  { value: 'compilation',     label: 'Compilation',        type: 'boolean' },
-  { value: 'tracknumber',     label: 'Track Number',       type: 'number'  },
-  { value: 'albumrating',     label: 'Album Rating',       type: 'number'  },
-  { value: 'albumplaycount',  label: 'Album Play Count',   type: 'number'  },
-  { value: 'artistplaycount', label: 'Artist Play Count',  type: 'number'  },
-  { value: 'artistloved',     label: 'Artist Loved',       type: 'boolean' },
-  { value: 'filepath',        label: 'File Path',          type: 'string'  },
-  { value: 'filetype',        label: 'File Type',          type: 'string'  },
+  // ── Track ────────────────────────────────────────────────────────────────
+  { value: 'title',              label: 'Title',                type: 'string'  },
+  { value: 'artist',             label: 'Artist',               type: 'string'  },
+  { value: 'album',              label: 'Album',                type: 'string'  },
+  { value: 'albumartist',        label: 'Album Artist',         type: 'string'  },
+  { value: 'genre',              label: 'Genre',                type: 'string'  },
+  { value: 'year',               label: 'Year',                 type: 'number'  },
+  { value: 'date',               label: 'Date',                 type: 'date'    },
+  { value: 'originalyear',       label: 'Original Year',        type: 'number'  },
+  { value: 'originaldate',       label: 'Original Date',        type: 'date'    },
+  { value: 'releaseyear',        label: 'Release Year',         type: 'number'  },
+  { value: 'releasedate',        label: 'Release Date',         type: 'date'    },
+  { value: 'tracknumber',        label: 'Track Number',         type: 'number'  },
+  { value: 'discnumber',         label: 'Disc Number',          type: 'number'  },
+  { value: 'discsubtitle',       label: 'Disc Subtitle',        type: 'string'  },
+  { value: 'compilation',        label: 'Compilation',          type: 'boolean' },
+  { value: 'hascoverart',        label: 'Has Cover Art',        type: 'boolean' },
+  { value: 'comment',            label: 'Comment',              type: 'string'  },
+  { value: 'lyrics',             label: 'Lyrics',               type: 'string'  },
+  { value: 'grouping',           label: 'Grouping',             type: 'string'  },
+  { value: 'catalognumber',      label: 'Catalog Number',       type: 'string'  },
+  // ── Sort fields ──────────────────────────────────────────────────────────
+  { value: 'sorttitle',          label: 'Sort Title',           type: 'string'  },
+  { value: 'sortalbum',          label: 'Sort Album',           type: 'string'  },
+  { value: 'sortartist',         label: 'Sort Artist',          type: 'string'  },
+  { value: 'sortalbumartist',    label: 'Sort Album Artist',    type: 'string'  },
+  // ── Audio properties ─────────────────────────────────────────────────────
+  { value: 'duration',           label: 'Duration (seconds)',   type: 'number'  },
+  { value: 'bitrate',            label: 'Bitrate',              type: 'number'  },
+  { value: 'bitdepth',           label: 'Bit Depth',            type: 'number'  },
+  { value: 'channels',           label: 'Channels',             type: 'number'  },
+  { value: 'bpm',                label: 'BPM',                  type: 'number'  },
+  { value: 'size',               label: 'File Size',            type: 'number'  },
+  { value: 'filetype',           label: 'File Type',            type: 'string'  },
+  { value: 'filepath',           label: 'File Path',            type: 'string'  },
+  // ── User data ────────────────────────────────────────────────────────────
+  { value: 'loved',              label: 'Loved',                type: 'boolean' },
+  { value: 'dateloved',          label: 'Date Loved',           type: 'date'    },
+  { value: 'rating',             label: 'Rating',               type: 'number'  },
+  { value: 'averagerating',      label: 'Average Rating',       type: 'number'  },
+  { value: 'playcount',          label: 'Play Count',           type: 'number'  },
+  { value: 'lastplayed',         label: 'Last Played',          type: 'date'    },
+  { value: 'dateadded',          label: 'Date Added',           type: 'date'    },
+  { value: 'datemodified',       label: 'Date Modified',        type: 'date'    },
+  // ── Album ────────────────────────────────────────────────────────────────
+  { value: 'albumtype',          label: 'Album Type',           type: 'string'  },
+  { value: 'albumcomment',       label: 'Album Comment',        type: 'string'  },
+  { value: 'albumrating',        label: 'Album Rating',         type: 'number'  },
+  { value: 'albumloved',         label: 'Album Loved',          type: 'boolean' },
+  { value: 'albumplaycount',     label: 'Album Play Count',     type: 'number'  },
+  { value: 'albumlastplayed',    label: 'Album Last Played',    type: 'date'    },
+  { value: 'albumdateloved',     label: 'Album Date Loved',     type: 'date'    },
+  { value: 'albumdaterated',     label: 'Album Date Rated',     type: 'date'    },
+  // ── Artist ───────────────────────────────────────────────────────────────
+  { value: 'artistrating',       label: 'Artist Rating',        type: 'number'  },
+  { value: 'artistloved',        label: 'Artist Loved',         type: 'boolean' },
+  { value: 'artistplaycount',    label: 'Artist Play Count',    type: 'number'  },
+  // ── MusicBrainz ──────────────────────────────────────────────────────────
+  { value: 'mbz_album_id',          label: 'MBZ Album ID',          type: 'string'  },
+  { value: 'mbz_album_artist_id',   label: 'MBZ Album Artist ID',   type: 'string'  },
+  { value: 'mbz_artist_id',         label: 'MBZ Artist ID',         type: 'string'  },
+  { value: 'mbz_recording_id',      label: 'MBZ Recording ID',      type: 'string'  },
+  { value: 'mbz_release_track_id',  label: 'MBZ Release Track ID',  type: 'string'  },
+  { value: 'mbz_release_group_id',  label: 'MBZ Release Group ID',  type: 'string'  },
+  // ── Library ──────────────────────────────────────────────────────────────
+  { value: 'library_id',         label: 'Library ID',           type: 'number'  },
+  // ── Playlist ──────────────────────────────────────────────────────────────
+  { value: 'playlist',           label: 'Playlist',             type: 'playlist' },
 ];
 
 const OPERATORS_BY_TYPE = {
-  string:  ['is', 'isNot', 'contains', 'notContains', 'startsWith', 'endsWith'],
-  number:  ['is', 'isNot', 'gt', 'lt', 'inTheRange'],
-  date:    ['before', 'after', 'inTheLast', 'notInTheLast'],
-  boolean: ['is'],
+  string:   ['is', 'isNot', 'contains', 'notContains', 'startsWith', 'endsWith'],
+  number:   ['is', 'isNot', 'gt', 'lt', 'inTheRange'],
+  date:     ['before', 'after', 'inTheLast', 'notInTheLast'],
+  boolean:  ['is'],
+  playlist: ['inPlaylist', 'notInPlaylist'],
 };
 
 const OPERATOR_LABELS = {
@@ -75,6 +121,7 @@ const OPERATOR_LABELS = {
   startsWith: 'starts with', endsWith: 'ends with',
   inTheRange: 'in range', before: 'before', after: 'after',
   inTheLast: 'in the last', notInTheLast: 'not in the last',
+  inPlaylist: 'in playlist', notInPlaylist: 'not in playlist',
 };
 
 // GET /nsp/api/fields
