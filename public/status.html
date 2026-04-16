@@ -308,6 +308,22 @@
         document.getElementById('lidarrAutoAddStatus').textContent = countsRes.lidarrAutoAdd ? '↻ Auto-add on' : '⊖ Auto-add off';
         document.getElementById('lidarrAutoAddStatus').className   = `history-source-status ${countsRes.lidarrAutoAdd ? 'status-ok' : 'status-pending'}`;
 
+        const SOURCE_LABELS = {
+          'lb_playlist':         'ListenBrainz',
+          'lb_top_artists':      'ListenBrainz',
+          'lfm_playlist':        'Last.fm',
+          'lastfm_top_artists':  'Last.fm',
+          'lastfm_similar':      'Last.fm',
+          'exportify_csv':       'Exportify',
+          'navilist_csv':        'Import',
+          'navilist_json':       'Import',
+          'm3u':                 'Import',
+          'jspf':                'Import',
+          'import':              'Import',
+          'exportify':           'Exportify',
+        };
+        function fmtSource(s) { return SOURCE_LABELS[s] || s; }
+
         const recentRes = await fetch('/status/api/lidarr-recent').then(r => r.json());
         if (recentRes.ok && recentRes.rows.length) {
           const wrap  = document.getElementById('lidarrRecentWrap');
@@ -316,7 +332,7 @@
           table.innerHTML = recentRes.rows.map(r => `
             <tr style="border-bottom:0.5px solid #eeeee8;">
               <td style="padding:0.3rem 0.5rem 0.3rem 0;">${r.artist_name}</td>
-              <td style="padding:0.3rem 0.5rem; color:#aaa;">${r.source}</td>
+              <td style="padding:0.3rem 0.5rem; color:#aaa;">${fmtSource(r.source)}</td>
               <td style="padding:0.3rem 0 0.3rem 0.5rem; color:#aaa; text-align:right;">${timeAgo(r.sent_at)}</td>
             </tr>`).join('');
         }
