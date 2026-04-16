@@ -706,6 +706,12 @@ router.post('/save-exportify', async (req, res) => {
   await navidrome.updatePlaylist(db, playlistId, { comment });
   snapshotPlaylist(db, playlistId, name.trim(), comment, trackIds, null);
 
+  // Write unmatched artists to missing_artists — same pipeline as LB/LFM
+  if (unmatched?.length) {
+    const artists = [...new Set(unmatched.map(t => t.artist).filter(Boolean))];
+    if (artists.length) writeMissingArtists(db, artists, 'exportify');
+  }
+
   // Backup CSV to /app/data/exportify-playlists/
   if (csvText) {
     try {
@@ -723,18 +729,6 @@ router.post('/save-exportify', async (req, res) => {
 
   logger.info('playlists', `exportify playlist saved: "${name.trim()}" (${trackIds.length} tracks)`);
   res.json({ ok: true, playlistId, count: trackIds.length });
-});
-
-// POST /playlists/send-exportify-missing — queue unmatched artists for Lidarr
-router.post('/send-exportify-missing', (req, res) => {
-  const { unmatched } = req.body;
-  if (!Array.isArray(unmatched) || !unmatched.length)
-    return res.json({ ok: false, error: 'no unmatched tracks provided' });
-  const artists = [...new Set(unmatched.map(t => t.artist).filter(Boolean))];
-  if (!artists.length) return res.json({ ok: false, error: 'no artists found' });
-  const added = writeMissingArtists(db, artists, 'exportify');
-  logger.info('playlists', `exportify: ${added} missing artists queued for Lidarr`);
-  res.json({ ok: true, count: artists.length });
 });
 
 function escXml(str) {

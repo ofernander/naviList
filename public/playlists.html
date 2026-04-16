@@ -379,7 +379,6 @@
       <div class="rb-preview-tracks" id="exportifyPreviewTracks"></div>
       <div class="rb-actions" style="margin-top:1rem;">
         <button class="btn btn-secondary" id="exportifyDiscardBtn">Discard</button>
-        <button class="btn btn-secondary" id="exportifyLidarrBtn" style="display:none">Send missing to Lidarr</button>
         <button class="btn" id="exportifySaveBtn">Save Playlist</button>
         <span class="rb-status" id="exportifySaveStatus"></span>
       </div>
@@ -2045,7 +2044,6 @@
       exportifyMatchedTracks = []; exportifyUnmatched = []; exportifyCsvText = '';
       document.getElementById('exportifyPreviewPanel').style.display = 'none';
       document.getElementById('exportifyStatus').textContent = '';
-      document.getElementById('exportifyLidarrBtn').style.display = 'none';
     });
 
     document.getElementById('exportifyImportBtn').addEventListener('click', async () => {
@@ -2074,10 +2072,6 @@
         status.textContent = `✓ ${data.matched.length} matched · ${data.unmatched.length} not in library`;
         status.className   = 'rb-status status-ok';
         document.getElementById('exportifyPreviewCount').textContent = `— ${data.matched.length} tracks`;
-        const lidarrBtn = document.getElementById('exportifyLidarrBtn');
-        lidarrBtn.style.display = data.unmatched.length ? '' : 'none';
-        lidarrBtn.textContent = 'Send missing to Lidarr';
-        lidarrBtn.disabled = false;
         const allTracks = [
           ...data.matched.map(t => ({ ...t, missing: false })),
           ...data.unmatched.map(t => ({ ...t, missing: true }))
@@ -2120,21 +2114,6 @@
           setTimeout(() => { const c = allPlaylists.find(p => p.id === data.playlistId); if (c) openDetail(c); else showListView(); }, 400);
         } else { status.textContent = `✗ ${data.error}`; status.className = 'rb-status status-err'; saveBtn.disabled = false; saveBtn.textContent = 'Save Playlist'; }
       } catch (e) { status.textContent = '✗ Request failed'; status.className = 'rb-status status-err'; saveBtn.disabled = false; saveBtn.textContent = 'Save Playlist'; }
-    });
-
-    document.getElementById('exportifyLidarrBtn').addEventListener('click', async () => {
-      const btn = document.getElementById('exportifyLidarrBtn');
-      if (!exportifyUnmatched.length) return;
-      btn.disabled = true; btn.textContent = 'Sending…';
-      try {
-        const res  = await fetch('/playlists/send-exportify-missing', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ unmatched: exportifyUnmatched })
-        });
-        const data = await res.json();
-        if (data.ok) { btn.textContent = `✓ ${data.count} queued`; }
-        else { btn.disabled = false; btn.textContent = 'Send missing to Lidarr'; }
-      } catch (e) { btn.disabled = false; btn.textContent = 'Send missing to Lidarr'; }
     });
 
     // ── Manual builder ─────────────────────────────────────────────────────
