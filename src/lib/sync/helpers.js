@@ -72,8 +72,12 @@ async function resolveArtistWithAliases(artistName, artistMbid, cache) {
   return artistName;
 }
 
-function buildNaviTitle(lbTitle) {
-  return `ListenBrainz — ${lbTitle}`;
+function buildNaviTitle(lbTitle, sourcePatch) {
+  // Generated playlists (have source_patch) include a date/user suffix we strip
+  // so the ND playlist name stays stable across rotations.
+  // e.g. "Daily Jams for m0zer, 2026-04-18 Sat" → "Daily Jams for m0zer"
+  const cleaned = sourcePatch ? lbTitle.split(', ')[0] : lbTitle;
+  return `ListenBrainz — ${cleaned}`;
 }
 
 // LFM chart playlist titles in Navidrome

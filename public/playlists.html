@@ -2223,7 +2223,10 @@
     };
 
     function getLbDisplayTitle(p) {
-      return `ListenBrainz — ${p.title}`;
+      // Generated playlists: strip date/user suffix for stable display
+      // e.g. "Daily Jams for m0zer, 2026-04-18 Sat" → "Daily Jams for m0zer"
+      const cleaned = p.source_patch ? p.title.split(', ')[0] : p.title;
+      return `ListenBrainz — ${cleaned}`;
     }
 
     function buildLbCard(p) {

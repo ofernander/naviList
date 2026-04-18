@@ -287,22 +287,30 @@ async function syncLbPlaylists(db, settings) {
     try {
       let mbid = sub.lb_mbid;
 
-      // If subscribed MBID has expired, auto-rotate to newest for same source_patch
-      if (!currentMbids.has(mbid)) {
-        const newMbid = sub.source_patch ? patchToNewestMbid.get(sub.source_patch) : null;
-        if (!newMbid) {
+      // Auto-rotate: if a newer MBID exists for the same source_patch, switch to it.
+      // Covers both "subscribed MBID expired" and "newer playlist published alongside old".
+      if (sub.source_patch) {
+        const newestMbid = patchToNewestMbid.get(sub.source_patch);
+        if (newestMbid && newestMbid !== mbid) {
+          logger.info('sync', `lb-sync: rotating ${mbid} → ${newestMbid} (source_patch: ${sub.source_patch})`);
+          updateSub.run(newestMbid, sub.navidrome_id, sub.id);
+          mbid = newestMbid;
+        } else if (!currentMbids.has(mbid) && !newestMbid) {
           logger.info('sync', `lb-sync: MBID ${mbid} expired, no replacement found — unsubscribing`);
           if (sub.navidrome_id) await nav.deletePlaylist(db, sub.navidrome_id);
           deleteSub.run(sub.id);
           continue;
         }
-        logger.info('sync', `lb-sync: MBID ${mbid} expired, rotating to ${newMbid}`);
-        updateSub.run(newMbid, sub.navidrome_id, sub.id);
-        mbid = newMbid;
+      } else if (!currentMbids.has(mbid)) {
+        // User-owned playlist (no source_patch) that has vanished from LB — unsubscribe.
+        logger.info('sync', `lb-sync: user playlist MBID ${mbid} gone from LB — unsubscribing`);
+        if (sub.navidrome_id) await nav.deletePlaylist(db, sub.navidrome_id);
+        deleteSub.run(sub.id);
+        continue;
       }
 
       const lbTitle      = mbidToTitle.get(mbid) || '';
-      const displayTitle = buildNaviTitle(lbTitle);
+      const displayTitle = buildNaviTitle(lbTitle, sub.source_patch);
       const comment      = `navilist:lb ${JSON.stringify({ source: 'listenbrainz', source_patch: sub.source_patch || null, mbid })}`;
 
       // Fetch fresh tracks
