@@ -637,6 +637,7 @@ function runExternalServiceSyncs() {
     runDetached('loved/listenbrainz',       () => lbSync.syncLovedListenbrainz(db, s));
     runDetached('top-artists/listenbrainz', () => lbSync.syncTopArtistsListenbrainz(db, s));
     runDetached('top-tracks/listenbrainz',  () => lbSync.syncTopTracksListenbrainz(db, s));
+    runDetached('lb-playlists-cache',       () => lbSync.fetchAndCacheLbPlaylists(db, s));
     runDetached('playlists/listenbrainz',   () => lbSync.syncLbPlaylists(db, s));
   }
 

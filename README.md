@@ -19,7 +19,7 @@ Self-hosted playlist manager and generator for [Navidrome](https://www.navidrome
 - **Lidarr** — when a subscribed playlist contains artists not in your library, naviList can automatically queue them in Lidarr for download.
 
 ## A.I. Disclosure 
-Coding agents were used for the development of this project with oversight and understanding of all core functions. The developer is committed to actively maintaining and improving the project. 
+Coding agents were used for the development of this project with oversight and understanding of all core functions.
 
 ## Quick start
 
@@ -34,7 +34,7 @@ services:
     ports:
       - "3000:3000"
     volumes:
-      - ./data:/app/data          # SQLite DB and artist images
+      - ./data:/app/data
       - ./nsp:/nsp                # NSP playlist output — must match Navidrome's PlaylistsPath
     environment:
       - PORT=3000

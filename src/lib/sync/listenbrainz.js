@@ -185,6 +185,32 @@ async function fetchAndCacheLbPlaylists(db, s) {
   );
   logger.info('sync', `lb-playlists: cached ${remote.length} playlists from LB`);
 
+  // Prune stale cache rows: for each source_patch we just synced, delete any old MBIDs
+  // that are no longer the current one. Without this, old daily-jams / weekly-exploration
+  // MBIDs accumulate in the table and all show up in the UI.
+  const currentMbids   = new Set(remote.map(p => p.lb_mbid));
+  const currentPatches = new Set(remote.filter(p => p.source_patch).map(p => p.source_patch));
+  if (currentPatches.size > 0) {
+    const patchPlaceholders = [...currentPatches].map(() => '?').join(',');
+    const mbidPlaceholders  = [...currentMbids].map(() => '?').join(',');
+    const staleRows = db.prepare(`
+      SELECT lb_mbid FROM lb_playlist_cache
+      WHERE source_patch IN (${patchPlaceholders})
+      AND lb_mbid NOT IN (${mbidPlaceholders})
+    `).all([...currentPatches, ...currentMbids]);
+    if (staleRows.length) {
+      const deleteCacheRow  = db.prepare('DELETE FROM lb_playlist_cache WHERE lb_mbid = ?');
+      const deleteTrackRows = db.prepare('DELETE FROM lb_playlist_tracks WHERE lb_mbid = ?');
+      db.transaction(() => {
+        for (const row of staleRows) {
+          deleteCacheRow.run(row.lb_mbid);
+          deleteTrackRows.run(row.lb_mbid);
+        }
+      })();
+      logger.info('sync', `lb-playlists: pruned ${staleRows.length} stale cache row(s)`);
+    }
+  }
+
   // Fetch and cache tracks for all playlists (for UI display)
   const cache        = buildMatchCacheLocal(db);
   const deleteTracks = db.prepare('DELETE FROM lb_playlist_tracks WHERE lb_mbid = ?');
@@ -287,22 +313,30 @@ async function syncLbPlaylists(db, settings) {
     try {
       let mbid = sub.lb_mbid;
 
-      // If subscribed MBID has expired, auto-rotate to newest for same source_patch
-      if (!currentMbids.has(mbid)) {
-        const newMbid = sub.source_patch ? patchToNewestMbid.get(sub.source_patch) : null;
-        if (!newMbid) {
+      // Auto-rotate: if a newer MBID exists for the same source_patch, switch to it.
+      // Covers both "subscribed MBID expired" and "newer playlist published alongside old".
+      if (sub.source_patch) {
+        const newestMbid = patchToNewestMbid.get(sub.source_patch);
+        if (newestMbid && newestMbid !== mbid) {
+          logger.info('sync', `lb-sync: rotating ${mbid} → ${newestMbid} (source_patch: ${sub.source_patch})`);
+          updateSub.run(newestMbid, sub.navidrome_id, sub.id);
+          mbid = newestMbid;
+        } else if (!currentMbids.has(mbid) && !newestMbid) {
           logger.info('sync', `lb-sync: MBID ${mbid} expired, no replacement found — unsubscribing`);
           if (sub.navidrome_id) await nav.deletePlaylist(db, sub.navidrome_id);
           deleteSub.run(sub.id);
           continue;
         }
-        logger.info('sync', `lb-sync: MBID ${mbid} expired, rotating to ${newMbid}`);
-        updateSub.run(newMbid, sub.navidrome_id, sub.id);
-        mbid = newMbid;
+      } else if (!currentMbids.has(mbid)) {
+        // User-owned playlist (no source_patch) that has vanished from LB — unsubscribe.
+        logger.info('sync', `lb-sync: user playlist MBID ${mbid} gone from LB — unsubscribing`);
+        if (sub.navidrome_id) await nav.deletePlaylist(db, sub.navidrome_id);
+        deleteSub.run(sub.id);
+        continue;
       }
 
       const lbTitle      = mbidToTitle.get(mbid) || '';
-      const displayTitle = buildNaviTitle(lbTitle);
+      const displayTitle = buildNaviTitle(lbTitle, sub.source_patch);
       const comment      = `navilist:lb ${JSON.stringify({ source: 'listenbrainz', source_patch: sub.source_patch || null, mbid })}`;
 
       // Fetch fresh tracks
