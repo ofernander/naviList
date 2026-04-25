@@ -185,6 +185,32 @@ async function fetchAndCacheLbPlaylists(db, s) {
   );
   logger.info('sync', `lb-playlists: cached ${remote.length} playlists from LB`);
 
+  // Prune stale cache rows: for each source_patch we just synced, delete any old MBIDs
+  // that are no longer the current one. Without this, old daily-jams / weekly-exploration
+  // MBIDs accumulate in the table and all show up in the UI.
+  const currentMbids   = new Set(remote.map(p => p.lb_mbid));
+  const currentPatches = new Set(remote.filter(p => p.source_patch).map(p => p.source_patch));
+  if (currentPatches.size > 0) {
+    const patchPlaceholders = [...currentPatches].map(() => '?').join(',');
+    const mbidPlaceholders  = [...currentMbids].map(() => '?').join(',');
+    const staleRows = db.prepare(`
+      SELECT lb_mbid FROM lb_playlist_cache
+      WHERE source_patch IN (${patchPlaceholders})
+      AND lb_mbid NOT IN (${mbidPlaceholders})
+    `).all([...currentPatches, ...currentMbids]);
+    if (staleRows.length) {
+      const deleteCacheRow  = db.prepare('DELETE FROM lb_playlist_cache WHERE lb_mbid = ?');
+      const deleteTrackRows = db.prepare('DELETE FROM lb_playlist_tracks WHERE lb_mbid = ?');
+      db.transaction(() => {
+        for (const row of staleRows) {
+          deleteCacheRow.run(row.lb_mbid);
+          deleteTrackRows.run(row.lb_mbid);
+        }
+      })();
+      logger.info('sync', `lb-playlists: pruned ${staleRows.length} stale cache row(s)`);
+    }
+  }
+
   // Fetch and cache tracks for all playlists (for UI display)
   const cache        = buildMatchCacheLocal(db);
   const deleteTracks = db.prepare('DELETE FROM lb_playlist_tracks WHERE lb_mbid = ?');
