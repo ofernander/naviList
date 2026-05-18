@@ -201,8 +201,20 @@ async function fetchAndCacheLbPlaylists(db, s) {
     if (staleRows.length) {
       const deleteCacheRow  = db.prepare('DELETE FROM lb_playlist_cache WHERE lb_mbid = ?');
       const deleteTrackRows = db.prepare('DELETE FROM lb_playlist_tracks WHERE lb_mbid = ?');
+      const updateSubMbid   = db.prepare('UPDATE lb_subscriptions SET lb_mbid = ? WHERE lb_mbid = ?');
+      // Build a map from stale MBID → current MBID for its source_patch
+      const staleToCurrent = new Map();
+      for (const row of staleRows) {
+        const patch = db.prepare('SELECT source_patch FROM lb_playlist_cache WHERE lb_mbid = ?').get(row.lb_mbid)?.source_patch;
+        if (patch) {
+          const currentMbid = remote.find(p => p.source_patch === patch)?.lb_mbid;
+          if (currentMbid) staleToCurrent.set(row.lb_mbid, currentMbid);
+        }
+      }
       db.transaction(() => {
         for (const row of staleRows) {
+          const replacement = staleToCurrent.get(row.lb_mbid);
+          if (replacement) updateSubMbid.run(replacement, row.lb_mbid);
           deleteCacheRow.run(row.lb_mbid);
           deleteTrackRows.run(row.lb_mbid);
         }
