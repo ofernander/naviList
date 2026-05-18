@@ -1155,16 +1155,14 @@
     };
 
     const STATS_VALUES = [
-      { value: 'top_played',          label: 'Top played (Navidrome)',  hasWindow: false, hasSource: false, hasPeriod: false },
-      { value: 'top_played_history',  label: 'Top played (history)',    hasWindow: true,  hasSource: false, hasPeriod: false },
-      { value: 'recently_played',     label: 'Recently played',         hasWindow: true,  hasSource: false, hasPeriod: false },
-      { value: 'not_recently_played', label: 'Not recently played',     hasWindow: true,  hasSource: false, hasPeriod: false },
-      { value: 'loved',               label: 'Loved tracks',            hasWindow: false, hasSource: false, hasPeriod: false },
-      { value: 'disliked',            label: 'Disliked (excluded)',     hasWindow: false, hasSource: false, hasPeriod: false },
-      { value: 'top_artists',         label: 'My top artists',          hasWindow: false, hasSource: true,  hasPeriod: true  },
-      { value: 'unplayed',            label: 'Unplayed',                hasWindow: false, hasSource: false, hasPeriod: false },
-      { value: 'starred',             label: 'Starred',                 hasWindow: false, hasSource: false, hasPeriod: false },
-      { value: 'highly_rated',        label: 'Highly rated',            hasWindow: false, hasSource: false, hasPeriod: false },
+      { value: 'top_played',          label: 'Top played',          hasWindow: false, hasSource: true,  hasPeriod: true  },
+      { value: 'recently_played',     label: 'Recently played',     hasWindow: true,  hasSource: false, hasPeriod: false },
+      { value: 'not_recently_played', label: 'Not recently played', hasWindow: true,  hasSource: false, hasPeriod: false },
+      { value: 'loved',               label: 'Loved tracks',        hasWindow: false, hasSource: false, hasPeriod: false },
+      { value: 'disliked',            label: 'Disliked (excluded)', hasWindow: false, hasSource: false, hasPeriod: false },
+      { value: 'unplayed',            label: 'Unplayed',            hasWindow: false, hasSource: false, hasPeriod: false },
+      { value: 'starred',             label: 'Starred',             hasWindow: false, hasSource: false, hasPeriod: false },
+      { value: 'highly_rated',        label: 'Highly rated',        hasWindow: false, hasSource: false, hasPeriod: false },
     ];
 
     const WINDOW_OPTIONS = [
@@ -1185,8 +1183,19 @@
     ];
 
     const SOURCE_OPTIONS = [
+      { value: 'navidrome',    label: 'Navidrome'    },
       { value: 'lastfm',       label: 'Last.fm'      },
       { value: 'listenbrainz', label: 'ListenBrainz' },
+      { value: 'maloja',       label: 'Maloja'        },
+    ];
+
+    const MALOJA_PERIOD_OPTIONS = [
+      { value: 'week',      label: 'Last 7 days'    },
+      { value: 'month',     label: 'Last month'     },
+      { value: 'quarter',   label: 'Last 3 months'  },
+      { value: 'half_year', label: 'Last 6 months'  },
+      { value: 'year',      label: 'Last 12 months' },
+      { value: 'all_time',  label: 'All time'       },
     ];
 
     let genreList  = [];
@@ -1321,8 +1330,7 @@
         STATS_VALUES.forEach(sv => {
           const opt = document.createElement('option');
           opt.value = sv.value; opt.textContent = sv.label;
-          const currentVal = rule.options?.source === 'history' && rule.value === 'top_played' ? 'top_played_history' : rule.value;
-          if (sv.value === currentVal) opt.selected = true;
+          if (sv.value === rule.value) opt.selected = true;
           sel.appendChild(opt);
         });
 
@@ -1356,19 +1364,33 @@
           periodSel.style.display = sv?.hasPeriod ? '' : 'none';
           sourceSel.style.display = sv?.hasSource ? '' : 'none';
         }
+        function syncPeriodOptions() {
+          const isNavidrome = sourceSel.value === 'navidrome';
+          const isMaloja    = sourceSel.value === 'maloja';
+          const sv = STATS_VALUES.find(s => s.value === sel.value);
+          periodSel.style.display = (!isNavidrome && sv?.hasPeriod) ? '' : 'none';
+          if (isNavidrome) return;
+          const opts = isMaloja ? MALOJA_PERIOD_OPTIONS : PERIOD_OPTIONS;
+          const current = periodSel.value;
+          periodSel.innerHTML = '';
+          opts.forEach(po => {
+            const opt = document.createElement('option'); opt.value = po.value; opt.textContent = po.label;
+            if (po.value === current) opt.selected = true;
+            periodSel.appendChild(opt);
+          });
+          if (!periodSel.value) periodSel.value = opts[opts.length - 1].value;
+        }
+
         syncWindowVisibility();
+        syncPeriodOptions();
 
         sel.addEventListener('change', () => {
-          if (sel.value === 'top_played_history') {
-            rule.value = 'top_played'; rule.options = { ...rule.options, source: 'history' };
-          } else {
-            rule.value = sel.value; const opts = { ...rule.options }; delete opts.source; rule.options = opts;
-          }
+          rule.value = sel.value;
           syncWindowVisibility(); scheduleRuleCountPreview();
         });
         windowSel.addEventListener('change', () => { rule.options = { ...rule.options, window: windowSel.value }; scheduleRuleCountPreview(); });
         periodSel.addEventListener('change', () => { rule.options = { ...rule.options, period: periodSel.value }; scheduleRuleCountPreview(); });
-        sourceSel.addEventListener('change', () => { rule.options = { ...rule.options, source: sourceSel.value }; scheduleRuleCountPreview(); });
+        sourceSel.addEventListener('change', () => { rule.options = { ...rule.options, source: sourceSel.value }; syncPeriodOptions(); scheduleRuleCountPreview(); });
 
         wrap.appendChild(sel); wrap.appendChild(windowSel); wrap.appendChild(periodSel); wrap.appendChild(sourceSel);
         container.appendChild(wrap);

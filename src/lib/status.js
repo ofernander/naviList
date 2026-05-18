@@ -34,6 +34,7 @@ router.get('/api', async (req, res) => {
   const services = {
     lastfm:       { configured: !!(settings.lastfm_api_key && settings.lastfm_username), username: settings.lastfm_username || null },
     listenbrainz: { configured: !!(settings.listenbrainz_token && settings.listenbrainz_username), username: settings.listenbrainz_username || null },
+    maloja:       { configured: !!(settings.maloja_url && settings.maloja_api_key), url: settings.maloja_url || null },
     lidarr:       { connected: lidarrPing.ok, url: settings.lidarr_url || null }
   };
 
@@ -60,7 +61,8 @@ router.get('/api/counts', (req, res) => {
   const lidarrAutoAdd  = db.prepare("SELECT value FROM settings WHERE key = 'lidarr_auto_add'").get()?.value === 'true';
   const lbPlaylists  = db.prepare('SELECT COUNT(*) as c FROM lb_playlist_cache').get().c;
   const lfmPlaylists = db.prepare('SELECT COUNT(*) as c FROM lfm_playlists').get().c;
-  res.json({ ok: true, loved, disliked, topArtists, topTracks, artistTagsLastfm, similarArtists, missingPending, missingSent, missingFound, missingIgnored, lidarrAutoAdd, lbPlaylists, lfmPlaylists });
+  const malojaHistory = db.prepare("SELECT * FROM sync_state WHERE source = 'maloja'").get() || null;
+  res.json({ ok: true, loved, disliked, topArtists, topTracks, artistTagsLastfm, similarArtists, missingPending, missingSent, missingFound, missingIgnored, lidarrAutoAdd, lbPlaylists, lfmPlaylists, malojaHistory });
 });
 
 router.get('/api/lidarr-recent', (req, res) => {

@@ -15,6 +15,7 @@ Self-hosted playlist manager and generator for [Navidrome](https://www.navidrome
 ## External service integration
 - **Last.fm** — syncs listen history, loved tracks, top artists, top tracks, artist tags, similar artists, and chart-based playlists (weekly, monthly, all-time). Subscribe to auto-updating playlists or save point-in-time snapshots.
 - **ListenBrainz** — syncs listen history, loved tracks, top artists, top tracks, and generated playlists (Weekly Jams, Weekly Exploration, Daily Jams). Same subscribe/snapshot model as Last.fm.
+- **Maloja** — self-hosted scrobbler integration. Syncs listen history, top artists, and top tracks from your own [Maloja](https://github.com/krateng/maloja) instance. Configured via URL and API key.
 - **Spotify/Exportify** — Spotify cannot be directly integrated at this time. Spotify playlist can be imported via the third party exporter [exportify.net](https://exportify.net). Further Spotify support will not be pursued due to their API restrictions & cost. 
 - **Lidarr** — when a subscribed playlist contains artists not in your library, naviList can automatically queue them in Lidarr for download.
 
@@ -62,6 +63,8 @@ services:
 | `LASTFM_USERNAME` | — | Last.fm username |
 | `LISTENBRAINZ_TOKEN` | — | ListenBrainz user token |
 | `LISTENBRAINZ_USERNAME` | — | ListenBrainz username |
+| `MALOJA_URL` | — | Maloja base URL e.g. `http://maloja:42010` |
+| `MALOJA_API_KEY` | — | Maloja API key |
 | `LIDARR_URL` | — | Lidarr base URL e.g. `http://lidarr:8686` |
 | `LIDARR_API_KEY` | — | Lidarr API key |
 | `LIDARR_ROOT_FOLDER` | — | Lidarr root folder path e.g. `/music` |

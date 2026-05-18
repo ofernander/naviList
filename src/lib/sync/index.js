@@ -124,7 +124,7 @@ async function processMissingArtists(force = false) {
 
 // ── History import runner ─────────────────────────────────────────────────────
 
-const historyRunning = { lastfm: false, listenbrainz: false };
+const historyRunning = { lastfm: false, listenbrainz: false, maloja: false };
 
 async function runHistoryImport(source, fetchFn, credentials, force = false) {
   if (historyRunning[source]) {
@@ -175,9 +175,10 @@ async function runHistoryImport(source, fetchFn, credentials, force = false) {
 
 // ── Provider sync modules (imported after helpers — no circular dep) ──────────
 
-const lfmSync = require('./lastfm');
-const lbSync  = require('./listenbrainz');
-const mbSync  = require('./musicbrainz');
+const lfmSync    = require('./lastfm');
+const lbSync     = require('./listenbrainz');
+const mbSync     = require('./musicbrainz');
+const malojaSync = require('./maloja');
 
 // ── Routes — Navidrome ────────────────────────────────────────────────────────
 
@@ -425,6 +426,32 @@ router.post('/lfm-playlists/:lfm_id/unsubscribe', async (req, res) => {
   }
 });
 
+router.post('/history/maloja', (req, res) => {
+  const s = getSettings();
+  if (!s.maloja_url || !s.maloja_api_key)
+    return res.json({ ok: false, error: 'Maloja URL and API key required' });
+  const force = req.query.force === 'true';
+  const malojaProv = require('../../providers/maloja');
+  runHistoryImport('maloja', malojaProv.fetchListens, { baseUrl: s.maloja_url, apiKey: s.maloja_api_key }, force);
+  res.json({ ok: true, message: 'Maloja history import started' });
+});
+
+router.post('/top-artists/maloja', (req, res) => {
+  const s = getSettings();
+  if (!s.maloja_url || !s.maloja_api_key)
+    return res.json({ ok: false, error: 'Maloja URL and API key required' });
+  runDetached('top-artists/maloja', () => malojaSync.syncTopArtistsMaloja(db, s));
+  res.json({ ok: true, message: 'Maloja top artists sync started' });
+});
+
+router.post('/top-tracks/maloja', (req, res) => {
+  const s = getSettings();
+  if (!s.maloja_url || !s.maloja_api_key)
+    return res.json({ ok: false, error: 'Maloja URL and API key required' });
+  runDetached('top-tracks/maloja', () => malojaSync.syncTopTracksMaloja(db, s));
+  res.json({ ok: true, message: 'Maloja top tracks sync started' });
+});
+
 router.post('/playlists/listenbrainz', (req, res) => {
   const s = getSettings();
   if (!s.listenbrainz_token || !s.listenbrainz_username)
@@ -639,6 +666,13 @@ function runExternalServiceSyncs() {
     runDetached('top-tracks/listenbrainz',  () => lbSync.syncTopTracksListenbrainz(db, s));
     runDetached('lb-playlists-cache',       () => lbSync.fetchAndCacheLbPlaylists(db, s));
     runDetached('playlists/listenbrainz',   () => lbSync.syncLbPlaylists(db, s));
+  }
+
+  if (s.maloja_url && s.maloja_api_key) {
+    const malojaProv = require('../../providers/maloja');
+    runHistoryImport('maloja', malojaProv.fetchListens, { baseUrl: s.maloja_url, apiKey: s.maloja_api_key });
+    runDetached('top-artists/maloja', () => malojaSync.syncTopArtistsMaloja(db, s));
+    runDetached('top-tracks/maloja',  () => malojaSync.syncTopTracksMaloja(db, s));
   }
 
   runDetached('process-missing-artists', () => processMissingArtists());

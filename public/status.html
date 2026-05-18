@@ -84,6 +84,22 @@
           </div>
         </div>
 
+        <!-- Maloja -->
+        <div class="status-history-source">
+          <div class="history-source-header">
+            <span class="history-source-name">Maloja</span>
+            <span class="history-source-status" id="malojaConnStatus"></span>
+            <button class="btn btn-secondary btn-sm" id="syncMalojaAllBtn">Sync All</button>
+            <span class="history-source-status" id="malojaAllStatus"></span>
+          </div>
+          <div class="svc-sub" id="malojaUrl"></div>
+          <div class="svc-jobs">
+            <div class="svc-job"><span class="svc-job-label">History</span><span id="malojaMeta">—</span></div>
+            <div class="svc-job"><span class="svc-job-label">Top artists</span><span id="malojaTopArtistsMeta">—</span></div>
+            <div class="svc-job"><span class="svc-job-label">Top tracks</span><span id="malojaTopTracksMeta">—</span></div>
+          </div>
+        </div>
+
         <!-- Lidarr -->
         <div class="status-history-source">
           <div class="history-source-header">
@@ -177,6 +193,13 @@
         const lb = data.services?.listenbrainz;
         document.getElementById('lbConnStatus').textContent = lb?.configured ? `@${lb.username}` : 'Not configured';
         document.getElementById('lbConnStatus').className   = `history-source-status ${lb?.configured ? 'status-ok' : 'status-err'}`;
+
+        // Maloja
+        const mj = data.services?.maloja;
+        document.getElementById('malojaConnStatus').textContent = mj?.configured ? `✓ ${mj.url}` : 'Not configured';
+        document.getElementById('malojaConnStatus').className   = `history-source-status ${mj?.configured ? 'status-ok' : 'status-err'}`;
+        document.getElementById('malojaUrl').textContent        = mj?.url || '';
+        document.getElementById('syncMalojaAllBtn').disabled    = !canSync;
 
         // Lidarr
         const li = data.services?.lidarr;
@@ -301,6 +324,14 @@
             `${lbPl} playlist${lbPl !== 1 ? 's' : ''} · <a href="/playlists?lb=1" class="status-ok" style="font-size:0.8rem;">Manage →</a>`;
         }
 
+        // Maloja
+        const mjHistory = countsRes.malojaHistory;
+        document.getElementById('malojaMeta').textContent = mjHistory
+          ? `${formatHistoryResult(mjHistory.result)} · Last run: ${mjHistory.last_run_at ? timeAgo(mjHistory.last_run_at) : 'never'}`
+          : 'Never imported';
+        document.getElementById('malojaTopArtistsMeta').textContent = `${countsRes.topArtists || 0} artist-period rows`;
+        document.getElementById('malojaTopTracksMeta').textContent  = `${countsRes.topTracks  || 0} track-period rows`;
+
         document.getElementById('lidarrPending').textContent  = countsRes.missingPending || 0;
         document.getElementById('lidarrSent').textContent     = countsRes.missingSent    || 0;
         document.getElementById('lidarrIgnored').textContent  = countsRes.missingIgnored || 0;
@@ -412,6 +443,25 @@
         lbSyncRunning   = false;
         btn.disabled    = false;
         btn.textContent = 'Sync All';
+      }
+    });
+
+    document.getElementById('syncMalojaAllBtn').addEventListener('click', async () => {
+      const btn      = document.getElementById('syncMalojaAllBtn');
+      const statusEl = document.getElementById('malojaAllStatus');
+      btn.disabled = true; btn.textContent = 'Syncing...';
+      statusEl.textContent = ''; statusEl.className = 'history-source-status status-pending';
+      try {
+        for (const route of ['history/maloja?force=true', 'top-artists/maloja', 'top-tracks/maloja']) {
+          await fetch(`/sync/${route}`, { method: 'POST' });
+          await new Promise(r => setTimeout(r, 300));
+        }
+        statusEl.textContent = '✓ Done'; statusEl.className = 'history-source-status status-ok';
+        setTimeout(() => loadAllStatus(), 2000);
+      } catch (e) {
+        statusEl.textContent = '✗ Request failed'; statusEl.className = 'history-source-status status-err';
+      } finally {
+        btn.disabled = false; btn.textContent = 'Sync All';
       }
     });
 
