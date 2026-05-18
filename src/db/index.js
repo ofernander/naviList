@@ -29,6 +29,8 @@ const ENV_SETTINGS = {
   lastfm_username:       process.env.LASTFM_USERNAME,
   listenbrainz_token:    process.env.LISTENBRAINZ_TOKEN,
   listenbrainz_username: process.env.LISTENBRAINZ_USERNAME,
+  maloja_url:            process.env.MALOJA_URL,
+  maloja_api_key:        process.env.MALOJA_API_KEY,
   lidarr_url:                process.env.LIDARR_URL,
   lidarr_api_key:            process.env.LIDARR_API_KEY,
   lidarr_root_folder:        process.env.LIDARR_ROOT_FOLDER,

@@ -65,6 +65,7 @@ router.post('/', (req, res) => {
     'music_folder_ids',
     'lastfm_api_key', 'lastfm_username',
     'listenbrainz_token', 'listenbrainz_username',
+    'maloja_url', 'maloja_api_key',
     'lidarr_url', 'lidarr_api_key', 'lidarr_root_folder',
     'lidarr_quality_profile_id', 'lidarr_metadata_profile_id',
     'lidarr_auto_add',

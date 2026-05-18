@@ -122,6 +122,24 @@
           </div>
         </div>
 
+        <!-- ── Maloja ─────────────────────────────────────────────────── -->
+        <div class="status-history-source">
+          <div class="history-source-header">
+            <span class="history-source-name">Maloja</span>
+            <span class="history-source-status" id="malojaStatus"></span>
+          </div>
+          <div class="svc-jobs">
+            <div class="svc-job svc-field">
+              <span class="svc-job-label">URL</span>
+              <input type="text" name="maloja_url" id="maloja_url" placeholder="http://localhost:42010" />
+            </div>
+            <div class="svc-job svc-field">
+              <span class="svc-job-label">API Key</span>
+              <input type="text" name="maloja_api_key" id="maloja_api_key" />
+            </div>
+          </div>
+        </div>
+
         <!-- ── Lidarr ────────────────────────────────────────────────── -->
         <div class="status-history-source">
           <div class="history-source-header">
@@ -175,6 +193,7 @@
           'navidrome_url', 'navidrome_user', 'navidrome_password',
           'lastfm_api_key', 'lastfm_username',
           'listenbrainz_token', 'listenbrainz_username',
+          'maloja_url', 'maloja_api_key',
           'lidarr_url', 'lidarr_api_key'
         ];
         fields.forEach(f => {
@@ -219,6 +238,11 @@
         if (lbEl) {
           lbEl.textContent = s.listenbrainz_token ? `✓ ${s.listenbrainz_username || 'Configured'}` : '— Not set';
           lbEl.className = 'history-source-status ' + (s.listenbrainz_token ? 'status-ok' : '');
+        }
+        const malojaEl = document.getElementById('malojaStatus');
+        if (malojaEl) {
+          malojaEl.textContent = s.maloja_url ? `✓ ${s.maloja_url}` : '— Not set';
+          malojaEl.className = 'history-source-status ' + (s.maloja_url ? 'status-ok' : '');
         }
         const liEl = document.getElementById('lidarrStatus');
         if (liEl) {
