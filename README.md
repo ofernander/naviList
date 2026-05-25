@@ -9,7 +9,7 @@ Self-hosted playlist manager and generator for [Navidrome](https://www.navidrome
 
 - **Playlist manager** - Manage Navidrom playlist including Navidrom Smart Playlist.
 - **Playlist creator** - Create Navidrome playlist from tracks already present in your library based on rule based generation or from external services listed below.
-- **Playlist Importer** - Import external playlist from outside sources into Navidrome, matching against tracks you already have in your library. 
+- **Playlist importer** - Import external playlist from outside sources into Navidrome, matching against tracks you already have in your library. 
 
 ## What it is not
 
