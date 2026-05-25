@@ -5,6 +5,17 @@ Self-hosted playlist manager and generator for [Navidrome](https://www.navidrome
 
 ![naviList Screenshot](docs/images/Screenshot.png)
 
+## What it is
+
+- **Playlist manager** - Manage Navidrom playlist including Navidrom Smart Playlist.
+- **Playlist creator** - Create Navidrome playlist from tracks already present in your library based on rule based generation or from external services listed below.
+- **Playlist importer** - Import external playlist from outside sources into Navidrome, matching against tracks you already have in your library. 
+
+## What it is not
+
+- **Media discovery service** - naviList aims to be a playlist manager/creator only, there are many services/projects already for discovering new media.
+- **Media downloader** - maviList has no ability to download new music directly. It can send missing artist to Lidarr from an imported playlist but will not build playlist from tracks not present in your library. 
+
 ## Features
 - **naviList playlists** — rules-based generation using stats, tags, artists, decades, etc... Rules are weighted and interleaved, not concatenated. Supports auto-refresh on a cron schedule.
 - **Radio style playlists** — seed one or more artists and naviList finds similar music from your library using cached Last.fm similarity data. Adjustable depth (close / medium / wide).
@@ -20,7 +31,10 @@ Self-hosted playlist manager and generator for [Navidrome](https://www.navidrome
 - **Lidarr** — when a subscribed playlist contains artists not in your library, naviList can automatically queue them in Lidarr for download.
 
 ## A.I. Disclosure 
-Coding agents were used for the development of this project with oversight and understanding of all core functions.
+Coding agents were used for the development of this project with human oversight and understanding of all core functions.
+
+## Input welcome
+If there's an external playlist source/format and you want to add it to naviList please open an issue to request or even better a PR to add it! 
 
 ## Quick start
 
