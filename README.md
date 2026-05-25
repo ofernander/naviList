@@ -14,7 +14,7 @@ Self-hosted playlist manager and generator for [Navidrome](https://www.navidrome
 ## What it is not
 
 - **Media discovery service** - naviList aims to be a playlist manager/creator only, there are many services/projects already for discovering new media.
-- **Media downloader** - maviList has no ability to download new music directly. It can send missing artist to Lidarr from an imported playlist but will not build playlist from tracks not present in your library. 
+- **Media downloader** - naviList has no ability to download new music directly. It can send missing artist to Lidarr from an imported playlist but will not build playlist from tracks not present in your library. 
 
 ## Features
 - **naviList playlists** — rules-based generation using stats, tags, artists, decades, etc... Rules are weighted and interleaved, not concatenated. Supports auto-refresh on a cron schedule.
