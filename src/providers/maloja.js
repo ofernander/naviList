@@ -32,10 +32,10 @@ async function request(baseUrl, apiKey, endpoint, params = {}) {
   }
 }
 
-// Returns unix timestamp for the start of a named period, or null for all_time
+// Returns YYYY/MM/DD (UTC) for the start of a named period, or null for all_time
 function periodToRange(period) {
-  const now = Math.floor(Date.now() / 1000);
-  const DAY = 86400;
+  const DAY = 86400 * 1000;
+  const now = Date.now();
   const ranges = {
     week:      now - 7   * DAY,
     month:     now - 30  * DAY,
@@ -44,7 +44,22 @@ function periodToRange(period) {
     year:      now - 365 * DAY,
     all_time:  null,
   };
-  return ranges[period] ?? null;
+  const ms = ranges[period] ?? null;
+  if (ms == null) return null;
+  const d = new Date(ms);
+  const yyyy = d.getUTCFullYear();
+  const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(d.getUTCDate()).padStart(2, '0');
+  return `${yyyy}/${mm}/${dd}`;
+}
+
+// Convert a unix timestamp (seconds) to YYYY/MM/DD (UTC) for mlj_1 time params
+function tsToMljDate(ts) {
+  const d = new Date(ts * 1000);
+  const yyyy = d.getUTCFullYear();
+  const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(d.getUTCDate()).padStart(2, '0');
+  return `${yyyy}/${mm}/${dd}`;
 }
 
 /**
@@ -99,24 +114,33 @@ async function ping(baseUrl, apiKey) {
  */
 async function fetchListens(credentials, options = {}) {
   const { baseUrl, apiKey } = credentials;
-  const since  = options.since || null;
+  const since  = options.since || null;   // unix seconds (exact threshold), or null
   const result = [];
-  let   max_ts = null;
+  const seen   = new Set();                // dedup by s.time across day-boundary overlap
+  let   beforeDay = null;                  // YYYY/MM/DD cursor
+  let   lastOldestDay = null;              // guard against non-advancing cursor
   let   done   = false;
 
+  // Coarse server-side floor at day granularity; exact second-level filter is applied below.
+  const sinceDay = since ? tsToMljDate(since) : null;
+
   while (!done) {
-    const params = { max: 1000 };
-    if (max_ts) params.before = max_ts;
-    if (since)  params.since  = since;
+    const params = { max: 10000 };         // one UTC day must fit in a single page (see note)
+    if (beforeDay) params.before = beforeDay;
+    if (sinceDay)  params.since  = sinceDay;
 
     const data = await getScrobbles(baseUrl, apiKey, params);
     const list = data?.list;
     if (!list?.length) break;
 
+    let addedThisPage = 0;
     for (const s of list) {
       const played_at = s.time;
       if (!played_at) continue;
       if (since && played_at <= since) { done = true; break; }
+      if (seen.has(played_at)) continue;
+      seen.add(played_at);
+      addedThisPage++;
 
       const artists = s.track?.artists || [];
       result.push({
@@ -129,12 +153,16 @@ async function fetchListens(credentials, options = {}) {
       });
     }
 
-    if (!done) {
-      const oldest = list[list.length - 1]?.time;
-      if (!oldest || oldest === max_ts) break;
-      max_ts = oldest - 1;
-      await sleep(500);
-    }
+    if (done) break;
+
+    const oldest = list[list.length - 1]?.time;
+    if (!oldest) break;
+    const oldestDay = tsToMljDate(oldest);
+    // Cursor didn't advance to an earlier day and nothing new was added → stop (avoids infinite loop)
+    if (oldestDay === lastOldestDay && addedThisPage === 0) break;
+    lastOldestDay = oldestDay;
+    beforeDay = oldestDay;                 // day-level upper bound; overlap absorbed by `seen`
+    await sleep(500);
   }
 
   return result;

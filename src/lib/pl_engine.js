@@ -81,7 +81,11 @@ async function generatePlaylist(db, rules) {
   }
 
   const limit        = rules.limit          ?? DEFAULT_LIMIT;
-  const shuffle      = true;
+  // Preserve rank ordering for a pure single-rule ranked playlist (e.g. top played).
+  // Shuffle remains on when multiple required groups or preferred rules are present,
+  // where a single global rank order is no longer meaningful.
+  const isSingleRankedRule = rules.rules.length === 1 && rules.rules[0].required !== false;
+  const shuffle      = rules.shuffle === false ? false : !isSingleRankedRule;
   const maxPerArtist = rules.max_per_artist ?? 5;
 
   // Split into required (filter) and preferred (boost) rules
@@ -212,13 +216,23 @@ function resolveStats(db, rule, mode) {
           ORDER BY plays DESC
         `).all(cutoff);
         return modeSlice(rows.map(r => r.id), mode);
-      } else {
+      } else if (source === 'navidrome') {
         // Default: Navidrome all-time play_count
         const rows = db.prepare(`
           SELECT id FROM tracks
           WHERE play_count > 0
           ORDER BY play_count DESC
         `).all();
+        return modeSlice(rows.map(r => r.id), mode);
+      } else {
+        // External source (lastfm | listenbrainz | maloja): read synced rankings
+        // from user_top_tracks for the selected period, ordered by rank.
+        const period = opts.period || 'overall';
+        const rows = db.prepare(`
+          SELECT track_id AS id FROM user_top_tracks
+          WHERE source = ? AND period = ?
+          ORDER BY rank ASC
+        `).all(source, period);
         return modeSlice(rows.map(r => r.id), mode);
       }
     }
