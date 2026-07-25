@@ -13,6 +13,7 @@ const logger       = require('../../utils/logger');
 const {
   sleep,
   buildMatchCacheLocal,
+  buildMatchCacheLocalWarmed,
   matchLocal,
   writeMissingArtists,
   resolveArtistWithAliases,
@@ -316,7 +317,6 @@ async function syncLbPlaylists(db, settings) {
     if (mbid) mbidToTitle.set(mbid, pl.playlist?.title || '');
   }
 
-  const cache     = buildMatchCacheLocal(db);
   const updateSub = db.prepare('UPDATE lb_subscriptions SET lb_mbid = ?, navidrome_id = ? WHERE id = ?');
   const deleteSub = db.prepare('DELETE FROM lb_subscriptions WHERE id = ?');
   let synced = 0;
@@ -356,6 +356,11 @@ async function syncLbPlaylists(db, settings) {
       if (!res.ok) { logger.warn('sync', `lb-sync: fetch failed for ${mbid}: ${res.status}`); continue; }
       const jspfTracks = (await res.json())?.playlist?.track || [];
       if (!jspfTracks.length) { logger.info('sync', `lb-sync: ${mbid} has no tracks`); continue; }
+
+      const cache = await buildMatchCacheLocalWarmed(db, jspfTracks.map(t => {
+        const a = t.extension?.['https://musicbrainz.org/doc/jspf#track']?.additional_metadata?.artists || [];
+        return { artist: a[0]?.artist_credit_name || t.creator || '', title: t.title || '' };
+      }));
 
       // Resolve tracks
       const trackIds       = [];

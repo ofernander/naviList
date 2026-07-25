@@ -16,6 +16,7 @@ const logger       = require('../../utils/logger');
 const {
   sleep,
   buildMatchCacheLocal,
+  buildMatchCacheLocalWarmed,
   matchLocal,
   resolveArtistWithAliases,
   buildNaviTitle,
@@ -352,7 +353,7 @@ router.post('/lb-playlists/:mbid/snapshot', async (req, res) => {
   const rows = db.prepare('SELECT * FROM lb_playlist_tracks WHERE lb_mbid = ? AND matched = 1 ORDER BY position').all(mbid);
   if (!rows.length) return res.json({ ok: false, error: 'No matched tracks cached for this playlist' });
 
-  const cache    = buildMatchCacheLocal(db);
+  const cache    = await buildMatchCacheLocalWarmed(db, rows);
   const trackIds = rows.map(r => matchLocal(r.artist, r.title, cache)).filter(Boolean);
   if (!trackIds.length) return res.json({ ok: false, error: 'Could not resolve any track IDs' });
 
@@ -494,10 +495,10 @@ router.post('/lfm-playlists/:lfm_id/snapshot', async (req, res) => {
   const { name }   = req.body;
   if (!name?.trim()) return res.json({ ok: false, error: 'name required' });
 
-  const cache      = buildMatchCacheLocal(db);
   const cachedRows = db.prepare('SELECT * FROM lfm_playlist_tracks WHERE lfm_id = ? AND matched = 1 ORDER BY position').all(lfm_id);
   if (!cachedRows.length) return res.json({ ok: false, error: 'No matched tracks cached for this playlist' });
 
+  const cache      = await buildMatchCacheLocalWarmed(db, cachedRows);
   const trackIds = cachedRows.map(r => matchLocal(r.artist, r.title, cache)).filter(Boolean);
   if (!trackIds.length) return res.json({ ok: false, error: 'Could not resolve any track IDs' });
 
@@ -572,7 +573,7 @@ async function refreshPlaylist(pl) {
 
     } else if (comment.startsWith('navilist:radio ')) {
       const config   = JSON.parse(comment.replace('navilist:radio ', ''));
-      const trackIds = engine.resolveRadio(db, { artistIds: config.artistIds, depth: config.depth, includeSeed: config.include_seed });
+      const trackIds = await engine.resolveRadio(db, { artistIds: config.artistIds, depth: config.depth, includeSeed: config.include_seed });
       if (!trackIds.length) { logger.warn('sync', `cron-refresh: no tracks for radio "${pl.name}" — skipping`); return; }
       engine.fisherYates(trackIds);
       const limited = trackIds.slice(0, config.track_count || 50);

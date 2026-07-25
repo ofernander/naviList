@@ -397,6 +397,7 @@ async function syncFolderPage(db, folderId, offset, upsertMany, seenIds, syncedA
       starred:    s.starred     ? 1 : 0,
       userRating: s.userRating  ?? null,
       bitRate:    s.bitRate     ?? null,
+      mbid:       s.musicBrainzId ?? null,   // OpenSubsonic recording MBID (may be absent)
       syncedAt
     })));
   }
@@ -427,9 +428,9 @@ async function syncLibrary(db) {
 
   const upsert = db.prepare(`
     INSERT INTO tracks (id, title, artist, artist_id, album, album_id,
-      duration, year, genre, play_count, starred, user_rating, bit_rate, synced_at)
+      duration, year, genre, play_count, starred, user_rating, bit_rate, mbid, synced_at)
     VALUES (@id, @title, @artist, @artistId, @album, @albumId,
-      @duration, @year, @genre, @playCount, @starred, @userRating, @bitRate, @syncedAt)
+      @duration, @year, @genre, @playCount, @starred, @userRating, @bitRate, @mbid, @syncedAt)
     ON CONFLICT(id) DO UPDATE SET
       title       = excluded.title,
       artist      = excluded.artist,
@@ -443,6 +444,7 @@ async function syncLibrary(db) {
       starred     = excluded.starred,
       user_rating = excluded.user_rating,
       bit_rate    = excluded.bit_rate,
+      mbid        = COALESCE(excluded.mbid, tracks.mbid),
       synced_at   = excluded.synced_at
   `);
 
