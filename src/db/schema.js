@@ -26,6 +26,8 @@ module.exports = function (db) {
       starred     INTEGER DEFAULT 0,
       user_rating INTEGER,
       bit_rate    INTEGER,
+      mbid        TEXT,
+      is_live     INTEGER,
       synced_at   INTEGER NOT NULL
     );
 
@@ -228,4 +230,16 @@ module.exports = function (db) {
     CREATE INDEX IF NOT EXISTS idx_navilist_playlist_tracks_playlist
       ON navilist_playlist_tracks(playlist_id);
   `);
+
+  // Additive migrations for pre-existing DBs (CREATE TABLE IF NOT EXISTS won't add
+  // columns to an already-created tracks table). Guarded so it's idempotent.
+  const trackCols = db.prepare('PRAGMA table_info(tracks)').all().map(c => c.name);
+  if (!trackCols.includes('mbid'))    db.exec('ALTER TABLE tracks ADD COLUMN mbid TEXT');
+  if (!trackCols.includes('is_live')) db.exec('ALTER TABLE tracks ADD COLUMN is_live INTEGER');
+
+  // Index created after the ALTER above so the column exists on pre-existing DBs.
+  db.exec('CREATE INDEX IF NOT EXISTS idx_tracks_is_live ON tracks(is_live)');
+
+  // Drop the obsolete MB length cache — superseded by per-track mbid/is_live.
+  db.exec('DROP TABLE IF EXISTS mb_recordings');
 };

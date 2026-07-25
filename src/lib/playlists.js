@@ -6,7 +6,7 @@ const db = require('../db/index');
 const navidrome = require('../providers/navidrome');
 const engine    = require('./pl_engine');
 const logger = require('../utils/logger');
-const { writeMissingArtists } = require('./sync/helpers');
+const { writeMissingArtists, buildMatchCacheLocal, buildMatchCacheLocalWarmed, matchLocal, refineStudioPicks, runDetached } = require('./sync/helpers');
 
 // ── Helper: snapshot a playlist into local registry ───────────────────────────
 
@@ -35,6 +35,19 @@ function snapshotPlaylist(db, id, name, comment, trackIds, duration) {
     delTracks.run(id);
     trackIds.forEach((tid, i) => insTracks.run(id, tid, i));
   })();
+}
+
+// Post-save MB studio refinement — runs detached so preview/save stay fast, then
+// swaps any wrong duplicate picks in the saved playlist and warms the cache.
+function scheduleStudioRefine(playlistId, trackIds, comment) {
+  runDetached(`studio-refine-${playlistId}`, async () => {
+    const refined = await refineStudioPicks(db, trackIds);
+    if (refined.length && refined.some((id, i) => id !== trackIds[i])) {
+      await navidrome.replacePlaylistTracks(db, playlistId, refined);
+      snapshotPlaylist(db, playlistId, null, comment, refined, null);
+      logger.info('playlists', `studio-refine: ${playlistId} updated after MB tie-break`);
+    }
+  });
 }
 
 // ── Routes ────────────────────────────────────────────────────────────────────
@@ -289,7 +302,7 @@ router.post('/preview-radio', async (req, res) => {
     return res.json({ ok: false, error: 'None of the seed artists were found in your library' });
 
   // Resolve tracks from similar artist cache
-  const trackIds = engine.resolveRadio(db, { artistIds: seedArtistIds, depth: scoreThreshold, includeSeed });
+  const trackIds = await engine.resolveRadio(db, { artistIds: seedArtistIds, depth: scoreThreshold, includeSeed });
   if (!trackIds.length)
     return res.json({ ok: false, error: 'No tracks found at this depth — try a wider setting' });
 
@@ -320,6 +333,7 @@ router.post('/save-radio', async (req, res) => {
   const comment = `navilist:radio ${JSON.stringify(config)}`;
   await navidrome.updatePlaylist(db, playlistId, { comment });
   snapshotPlaylist(db, playlistId, name.trim(), comment, trackIds, null);
+  scheduleStudioRefine(playlistId, trackIds, comment);
 
   if (refresh_cron?.trim()) {
     const nodeCron = require('node-cron');
@@ -370,6 +384,7 @@ router.post('/save-navilist', async (req, res) => {
   const comment = `navilist:navilist ${JSON.stringify(rules)}`;
   await navidrome.updatePlaylist(db, playlistId, { comment });
   snapshotPlaylist(db, playlistId, name.trim(), comment, trackIds, null);
+  scheduleStudioRefine(playlistId, trackIds, comment);
 
   if (refresh_cron?.trim()) {
     const nodeCron = require('node-cron');
@@ -664,15 +679,15 @@ router.get('/:id/export', async (req, res) => {
 });
 
 // POST /playlists/import-playlist — match normalised rows against local library
-router.post('/import-playlist', (req, res) => {
+router.post('/import-playlist', async (req, res) => {
   const { rows } = req.body;
   if (!Array.isArray(rows) || !rows.length) return res.json({ ok: false, error: 'rows required' });
 
-  const findTrack = db.prepare(`
-    SELECT id, title, artist, duration FROM tracks
-    WHERE LOWER(title) = LOWER(?) AND LOWER(artist) = LOWER(?)
-    LIMIT 1
-  `);
+  // Studio-vs-live disambiguation. MB is fetched on-demand only for the same-title
+  // collisions among THESE imported rows — bounded to this list, never the library.
+  const items = rows.map(r => ({ artist: (r.artistName || '').split(',')[0].trim(), title: (r.trackName || '').trim() }));
+  const cache    = await buildMatchCacheLocalWarmed(db, items);
+  const getTrack = db.prepare('SELECT id, title, artist, duration FROM tracks WHERE id = ?');
 
   const matched   = [];
   const unmatched = [];
@@ -681,8 +696,8 @@ router.post('/import-playlist', (req, res) => {
     const title  = (row.trackName  || '').trim();
     const artist = (row.artistName || '').split(',')[0].trim();
     if (!title || !artist) { unmatched.push({ title, artist }); continue; }
-    const track = findTrack.get(title, artist);
-    if (track) matched.push(track);
+    const id = matchLocal(artist, title, cache);
+    if (id) matched.push(getTrack.get(id));
     else unmatched.push({ title, artist });
   }
 

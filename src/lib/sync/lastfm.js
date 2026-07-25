@@ -9,7 +9,7 @@
 
 const lastfm = require('../../providers/lastfm');
 const logger = require('../../utils/logger');
-const { sleep, buildMatchCacheLocal, matchLocal, writeMissingArtists, buildLfmTitle } = require('./helpers');
+const { sleep, buildMatchCacheLocal, buildMatchCacheLocalWarmed, matchLocal, writeMissingArtists, buildLfmTitle } = require('./helpers');
 
 const LFM_PERIODS = ['7day', '1month', '3month', '6month', '12month', 'overall'];
 
@@ -246,7 +246,6 @@ async function syncLfmPlaylists(db, settings) {
     { lfm_id: 'top_overall', fetch: () => lastfm.getTopTracks(apiKey, username, 'overall', 100) },
   ];
 
-  const cache        = buildMatchCacheLocal(db);
   const nav          = require('../../providers/navidrome');
   const upsertPl     = db.prepare(`
     INSERT INTO lfm_playlists (lfm_id, title)
@@ -271,6 +270,8 @@ async function syncLfmPlaylists(db, settings) {
       const data = await pl.fetch();
       const raw  = data?.weeklytrackchart?.track || data?.toptracks?.track || [];
       const arr  = Array.isArray(raw) ? raw : (raw ? [raw] : []);
+      const items = arr.map(t => ({ artist: t.artist?.['#text'] || t.artist?.name || (typeof t.artist === 'string' ? t.artist : '') || '', title: t.name || '' }));
+      const cache = await buildMatchCacheLocalWarmed(db, items);
       const rows = arr.map((t, i) => {
         const artist = t.artist?.['#text'] || t.artist?.name || (typeof t.artist === 'string' ? t.artist : '') || '';
         const name   = t.name || '';

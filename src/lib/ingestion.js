@@ -10,6 +10,7 @@
  */
 
 const logger = require('../utils/logger');
+const { resolveCandidateMap } = require('./sync/helpers');
 
 // ── Normalization helpers ─────────────────────────────────────────────────────
 
@@ -32,21 +33,27 @@ function normalize(str) {
  *   normalised: 'norm_artist|||norm_title'   → track_id
  */
 function buildMatchCache(db) {
-  const rows = db.prepare('SELECT id, artist, title FROM tracks').all();
-  const exact      = new Map();
-  const normalised = new Map();
+  const rows = db.prepare('SELECT id, artist, title, album, duration, mbid, is_live FROM tracks').all();
+  const exactMap = new Map();       // key → candidate[]
+  const normMap  = new Map();
 
   for (const row of rows) {
+    const cand   = { id: row.id, artist: row.artist, title: row.title, album: row.album, duration: row.duration, mbid: row.mbid, is_live: row.is_live };
     const artist = (row.artist || '').toLowerCase().trim();
     const title  = (row.title  || '').toLowerCase().trim();
-    exact.set(`${artist}|||${title}`, row.id);
+    const ek = `${artist}|||${title}`;
+    if (!exactMap.has(ek)) exactMap.set(ek, []);
+    exactMap.get(ek).push(cand);
 
-    const na = normalize(row.artist);
-    const nt = normalize(row.title);
-    normalised.set(`${na}|||${nt}`, row.id);
+    const nk = `${normalize(row.artist)}|||${normalize(row.title)}`;
+    if (!normMap.has(nk)) normMap.set(nk, []);
+    normMap.get(nk).push(cand);
   }
 
-  return { exact, normalised };
+  return {
+    exact:      resolveCandidateMap(db, exactMap),
+    normalised: resolveCandidateMap(db, normMap),
+  };
 }
 
 function matchListen(listen, cache) {

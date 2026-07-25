@@ -14,6 +14,7 @@
  */
 
 const logger = require('../utils/logger');
+const { filterLiveIds, filterStudioPool } = require('./sync/helpers');
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -166,9 +167,15 @@ async function generatePlaylist(db, rules) {
   const filtered = dislikedSet.size > 0 ? capped.filter(id => !dislikedSet.has(id)) : capped;
   if (dislikedSet.size > 0) logger.info('pl_engine', `excluded ${capped.length - filtered.length} disliked tracks`);
 
-  logger.info('pl_engine', `generated ${filtered.length} tracks — ${requiredRules.length} required rule(s), ${preferredRules.length} preferred rule(s)`);
+  // App-wide live exclusion — studio preference for generated playlists.
+  const studioOnly = await filterStudioPool(db, filtered);
+  const liveRemoved = filtered.length - studioOnly.length;
+  if (liveRemoved > 0) logger.info('pl_engine', `excluded ${liveRemoved} live tracks`);
+  else                 logger.debug('pl_engine', 'live check: no live tracks to exclude');
+
+  logger.info('pl_engine', `generated ${studioOnly.length} tracks — ${requiredRules.length} required rule(s), ${preferredRules.length} preferred rule(s)`);
   logger.debug('pl_engine', `limit: ${limit}, shuffle: ${shuffle}, maxPerArtist: ${maxPerArtist}, disliked excluded: ${capped.length - filtered.length}`);
-  return filtered.slice(0, limit);
+  return studioOnly.slice(0, limit);
 }
 
 /**
@@ -568,7 +575,7 @@ function windowToCutoff(window) {
  * Used for radio playlist regeneration (data was already seeded at creation time).
  * config: { artistIds: string[], depth: number, includeSeed: bool }
  */
-function resolveRadio(db, config) {
+async function resolveRadio(db, config) {
   const { artistIds, depth = 0.25, includeSeed = true } = config;
   if (!artistIds?.length) return [];
 
@@ -596,7 +603,12 @@ function resolveRadio(db, config) {
     ORDER BY play_count DESC
   `).all(...allArtistIds);
 
-  return rows.map(r => r.id);
+  const radioIds    = rows.map(r => r.id);
+  const studioIds   = await filterStudioPool(db, radioIds);
+  const liveRemoved = radioIds.length - studioIds.length;
+  if (liveRemoved > 0) logger.info('pl_engine', `radio: excluded ${liveRemoved} live tracks`);
+  else                 logger.debug('pl_engine', 'radio: live check: no live tracks to exclude');
+  return studioIds;
 }
 
 // ── Exports ───────────────────────────────────────────────────────────────────
