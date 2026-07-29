@@ -392,6 +392,7 @@
       <div class="rb-preview-tracks" id="exportifyPreviewTracks"></div>
       <div class="rb-actions" style="margin-top:1rem;">
         <button class="btn btn-secondary" id="exportifyDiscardBtn">Discard</button>
+        <button class="btn btn-secondary" id="exportifyIncludeCheckedBtn">Include checked</button>
         <button class="btn" id="exportifySaveBtn">Save Playlist</button>
         <span class="rb-status" id="exportifySaveStatus"></span>
       </div>
@@ -498,6 +499,7 @@
     // Exportify state
     let exportifyMatchedTracks = [];
     let exportifyUnmatched     = [];
+    let exportifyDecisions     = [];
 
     // ── Helpers ────────────────────────────────────────────────────────────
     function esc(str) {
@@ -2049,29 +2051,40 @@
       return cols;
     }
 
+    function normalizeImportRow(row) {
+      const trackName = (row?.trackName || row?.title || '').trim();
+      const artistName = (row?.artistName || row?.artist || '').trim();
+      return {
+        trackName,
+        artistName,
+        title: trackName,
+        artist: artistName,
+      };
+    }
+
     function parseExportifyCsv(text) {
-      const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+      const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
       if (!lines.length) return null;
-      const headers   = parseCsvRow(lines[0]);
-      const titleIdx  = headers.findIndex(h => h === 'Track Name');
-      const artistIdx = headers.findIndex(h => h === 'Artist Name(s)');
+      const headers = parseCsvRow(lines[0]).map(h => (h || '').trim().toLowerCase());
+      const titleIdx = headers.findIndex(h => ['track name', 'title'].includes(h));
+      const artistIdx = headers.findIndex(h => ['artist name(s)', 'artist name', 'artist names', 'artists', 'artist'].includes(h));
       if (titleIdx < 0 || artistIdx < 0) return null;
       return lines.slice(1).map(line => {
         const cols = parseCsvRow(line);
-        return { trackName: cols[titleIdx] || '', artistName: cols[artistIdx] || '' };
+        return normalizeImportRow({ trackName: cols[titleIdx] || '', artistName: cols[artistIdx] || '' });
       }).filter(r => r.trackName);
     }
 
     function parseNaviListCsv(text) {
-      const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+      const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
       if (!lines.length) return null;
-      const headers   = parseCsvRow(lines[0]);
-      const titleIdx  = headers.findIndex(h => h.toLowerCase() === 'title');
-      const artistIdx = headers.findIndex(h => h.toLowerCase() === 'artist');
+      const headers = parseCsvRow(lines[0]).map(h => (h || '').trim().toLowerCase());
+      const titleIdx = headers.findIndex(h => h === 'title');
+      const artistIdx = headers.findIndex(h => h === 'artist');
       if (titleIdx < 0 || artistIdx < 0) return null;
       return lines.slice(1).map(line => {
         const cols = parseCsvRow(line);
-        return { trackName: cols[titleIdx] || '', artistName: cols[artistIdx] || '' };
+        return normalizeImportRow({ trackName: cols[titleIdx] || '', artistName: cols[artistIdx] || '' });
       }).filter(r => r.trackName);
     }
 
@@ -2080,30 +2093,55 @@
         const data = JSON.parse(text);
         if (!Array.isArray(data.tracks)) return null;
         return data.tracks
-          .map(t => ({ trackName: t.title || '', artistName: t.artist || '' }))
+          .map(t => normalizeImportRow({ trackName: t.title || '', artistName: t.artist || '' }))
           .filter(r => r.trackName);
       } catch (e) { return null; }
     }
 
+    function splitArtistTitle(value) {
+      const text = (value || '').trim();
+      if (!text) return { artistName: '', trackName: '' };
+      const separators = [' - ', ' – ', ' — '];
+      for (const sep of separators) {
+        const idx = text.indexOf(sep);
+        if (idx <= 0 || idx + sep.length >= text.length) continue;
+        const left = text.slice(0, idx).trim();
+        const right = text.slice(idx + sep.length).trim();
+        if (!left || !right || /^\d+$/.test(left)) continue;
+        return { artistName: left, trackName: right };
+      }
+      return { artistName: '', trackName: text };
+    }
+
+    function deriveTitleFromPath(value) {
+      const path = (value || '').replace(/\\/g, '/').split('/').filter(Boolean).pop() || '';
+      if (!path) return '';
+      const withoutExt = path.replace(/\.(mp3|m4a|flac|ogg|wav|m4p|aac|opus|wma|alac|aiff|ape)$/i, '');
+      return withoutExt.replace(/[_-]+/g, ' ').replace(/^\d+\s*[-._\s]*/, '').trim();
+    }
+
     function parseM3u(text) {
-      const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
-      const rows  = [];
+      const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+      const rows = [];
+      let pendingMeta = null;
+
       for (const line of lines) {
+        if (line.startsWith('#EXTM3U')) continue;
         if (line.startsWith('#EXTINF:')) {
-          const meta = line.replace(/^#EXTINF:[^,]*,/, '');
-          const sep  = meta.indexOf(' - ');
-          if (sep < 0) continue;
-          rows.push({ artistName: meta.slice(0, sep).trim(), trackName: meta.slice(sep + 3).trim() });
+          const meta = line.replace(/^#EXTINF:[^,]*,/, '').trim();
+          pendingMeta = meta ? splitArtistTitle(meta) : { artistName: '', trackName: '' };
+          continue;
         }
+        if (line.startsWith('#')) continue;
+
+        const fallbackTitle = deriveTitleFromPath(line);
+        const parsed = pendingMeta
+          ? { artistName: pendingMeta.artistName || '', trackName: pendingMeta.trackName || fallbackTitle }
+          : { artistName: '', trackName: fallbackTitle };
+        rows.push(normalizeImportRow(parsed));
+        pendingMeta = null;
       }
-      if (!rows.length) {
-        for (const line of lines) {
-          if (line.startsWith('#')) continue;
-          const sep = line.indexOf(' - ');
-          if (sep < 0) continue;
-          rows.push({ artistName: line.slice(0, sep).trim(), trackName: line.slice(sep + 3).trim() });
-        }
-      }
+
       return rows.length ? rows : null;
     }
 
@@ -2113,7 +2151,7 @@
         const tracks = data?.playlist?.track;
         if (!Array.isArray(tracks)) return null;
         return tracks
-          .map(t => ({ trackName: t.title || '', artistName: t.creator || '' }))
+          .map(t => normalizeImportRow({ trackName: t.title || '', artistName: t.creator || '' }))
           .filter(r => r.trackName);
       } catch (e) { return null; }
     }
@@ -2155,10 +2193,86 @@
     });
 
     document.getElementById('exportifyDiscardBtn').addEventListener('click', () => {
-      exportifyMatchedTracks = []; exportifyUnmatched = [];
+      exportifyMatchedTracks = []; exportifyUnmatched = []; exportifyDecisions = [];
       document.getElementById('exportifyPreviewPanel').style.display = 'none';
       document.getElementById('exportifyStatus').textContent = '';
     });
+
+    document.getElementById('exportifyIncludeCheckedBtn').addEventListener('click', () => {
+      const selected = exportifyDecisions.filter(d => d.selected);
+      if (!selected.length) return;
+      exportifyDecisions = exportifyDecisions.map((item) => {
+        if (!item.selected) return item;
+        if (item.decision === 'matched' || item.decision === 'included') return { ...item, decision: 'included' };
+        if (item.suggestion || item.track) return { ...item, decision: 'included', selected: true };
+        return { ...item, selected: false };
+      });
+      renderExportifyPreview();
+    });
+
+    function renderExportifyPreview() {
+      const container = document.getElementById('exportifyPreviewTracks');
+      const rows = exportifyDecisions.map((item, i) => ({ ...item, index: i + 1 }));
+      if (!rows.length) {
+        container.innerHTML = '';
+        return;
+      }
+
+      let html = `<div class="track-list"><div class="track-list-header">
+        <span class="tc-num">☑</span><span class="tc-title">Original / Library match</span>
+        <span class="tc-dur">Status</span><span class="tc-action"></span></div>`;
+      rows.forEach((item) => {
+        const title = item.title || item.track?.title || '—';
+        const artist = item.artist || item.track?.artist || '—';
+        const suggestion = item.suggestion || null;
+        const matchedTrack = item.track || suggestion || null;
+        const isSuggestion = item.decision === 'suggestion';
+        const isMatched = item.decision === 'matched' || item.decision === 'included';
+        const isSelected = !!item.selected || isMatched;
+        const statusText = isMatched ? 'Included' : (isSuggestion ? 'Suggested' : 'Unmatched');
+        const statusClass = isMatched ? 'status-ok' : (isSuggestion ? 'status-pending' : 'status-err');
+        const matchText = matchedTrack
+          ? `${esc(matchedTrack.title || '—')} · ${esc(matchedTrack.artist || '—')}`
+          : 'No library match found';
+        const scoreText = suggestion?.score != null ? ` · ${suggestion.score}%` : '';
+        const actionHtml = isSuggestion
+          ? `<div class="tb-actions">
+              <button class="btn btn-secondary btn-sm" data-action="include" data-index="${item.index - 1}">Include</button>
+              <button class="btn btn-secondary btn-sm" data-action="skip" data-index="${item.index - 1}">Leave unmatched</button>
+            </div>`
+          : `<span class="lb-track-missing-pill">${statusText}</span>`;
+
+        html += `<div class="track-row">
+          <span class="tc-num"><input type="checkbox" class="exportify-row-check" data-index="${item.index - 1}" ${isSelected ? 'checked' : ''} /></span>
+          <span class="tc-title">
+            <span class="tl-title">${esc(title)}</span>
+            <span class="tl-artist">${esc(artist)}</span>
+            <div class="tl-artist" style="font-size:0.74rem;color:#777;">Library: ${matchText}${scoreText}</div>
+          </span>
+          <span class="tc-dur"><span class="${statusClass}">${statusText}</span></span>
+          <span class="tc-action">${actionHtml}</span>
+        </div>`;
+      });
+      html += '</div>';
+      container.innerHTML = html;
+
+      container.querySelectorAll('[data-action]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const idx = parseInt(btn.getAttribute('data-index'), 10);
+          const decision = btn.getAttribute('data-action') === 'include' ? 'included' : 'unmatched';
+          exportifyDecisions[idx] = { ...exportifyDecisions[idx], decision, selected: true };
+          renderExportifyPreview();
+        });
+      });
+
+      container.querySelectorAll('.exportify-row-check').forEach((chk) => {
+        chk.addEventListener('change', () => {
+          const idx = parseInt(chk.getAttribute('data-index'), 10);
+          exportifyDecisions[idx] = { ...exportifyDecisions[idx], selected: chk.checked };
+          renderExportifyPreview();
+        });
+      });
+    }
 
     document.getElementById('exportifyImportBtn').addEventListener('click', async () => {
       const name   = document.getElementById('exportifyNameInput').value.trim();
@@ -2183,28 +2297,20 @@
         if (!data.ok) { status.textContent = `✗ ${data.error}`; status.className = 'rb-status status-err'; return; }
         exportifyMatchedTracks = data.matched;
         exportifyUnmatched     = data.unmatched;
+        exportifyDecisions     = (data.results || []).map(item => ({
+          title: item.title || item.track?.title || '',
+          artist: item.artist || item.track?.artist || '',
+          track: item.track || null,
+          suggestion: item.suggestion || null,
+          decision: item.decision || 'matched',
+          trackId: item.track?.id || null,
+          id: item.track?.id || null,
+          selected: item.decision === 'matched' || item.decision === 'included',
+        }));
         status.textContent = `✓ ${data.matched.length} matched · ${data.unmatched.length} not in library`;
         status.className   = 'rb-status status-ok';
         document.getElementById('exportifyPreviewCount').textContent = `— ${data.matched.length} tracks`;
-        const allTracks = [
-          ...data.matched.map(t => ({ ...t, missing: false })),
-          ...data.unmatched.map(t => ({ ...t, missing: true }))
-        ];
-        let html = `<div class="track-list"><div class="track-list-header">
-          <span class="tc-num">#</span><span class="tc-title">Title / Artist</span>
-          <span class="tc-dur">Duration</span><span class="tc-action"></span></div>`;
-        allTracks.forEach((t, i) => {
-          const dim  = t.missing ? ' style="opacity:0.45"' : '';
-          const pill = t.missing ? '<span class="lb-track-missing-pill">Not in library</span>' : '';
-          html += `<div class="track-row"${dim}>
-            <span class="tc-num">${i + 1}</span>
-            <span class="tc-title"><span class="tl-title">${esc(t.title || t.trackName || '—')}</span><span class="tl-artist">${esc(t.artist || t.artistName || '—')}</span></span>
-            <span class="tc-dur">${t.missing ? '' : fmtDur(t.duration)}</span>
-            <span class="tc-action">${pill}</span>
-          </div>`;
-        });
-        html += '</div>';
-        document.getElementById('exportifyPreviewTracks').innerHTML = html;
+        renderExportifyPreview();
         document.getElementById('exportifyPreviewPanel').style.display = '';
         document.getElementById('exportifySaveStatus').textContent = '';
       } catch (e) { status.textContent = '✗ Request failed'; status.className = 'rb-status status-err'; }
@@ -2215,12 +2321,19 @@
       const name    = document.getElementById('exportifyNameInput').value.trim();
       const status  = document.getElementById('exportifySaveStatus');
       const saveBtn = document.getElementById('exportifySaveBtn');
-      if (!exportifyMatchedTracks.length) { status.textContent = 'No matched tracks to save'; status.className = 'rb-status status-err'; return; }
+      const decisions = exportifyDecisions.filter(d => d.decision === 'matched' || d.decision === 'included' || d.decision === 'suggestion');
+      if (!decisions.length) { status.textContent = 'No matched tracks to save'; status.className = 'rb-status status-err'; return; }
       saveBtn.disabled = true; saveBtn.textContent = 'Saving...';
       try {
         const res  = await fetch('/playlists/save-import', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name, trackIds: exportifyMatchedTracks.map(t => t.id), unmatched: exportifyUnmatched, format: document.getElementById('importFormat').value })
+          body: JSON.stringify({
+            name,
+            trackIds: exportifyMatchedTracks.map(t => t.id),
+            unmatched: exportifyUnmatched,
+            format: document.getElementById('importFormat').value,
+            decisions: exportifyDecisions,
+          })
         });
         const data = await res.json();
         if (data.ok) {

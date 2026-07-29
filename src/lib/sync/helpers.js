@@ -49,9 +49,96 @@ async function buildMatchCacheLocalWarmed(db, items) {
   return resolveCandidateMap(db, map, { excludeLive: true });
 }
 
-function matchLocal(artist, title, cache) {
+function normalizeForSearch(value) {
+  return (value || '')
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+function levenshteinDistance(a, b) {
+  if (a === b) return 0;
+  if (!a.length) return b.length;
+  if (!b.length) return a.length;
+
+  const dp = Array.from({ length: a.length + 1 }, () => Array(b.length + 1).fill(0));
+  for (let i = 0; i <= a.length; i++) dp[i][0] = i;
+  for (let j = 0; j <= b.length; j++) dp[0][j] = j;
+
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      dp[i][j] = Math.min(
+        dp[i - 1][j] + 1,
+        dp[i][j - 1] + 1,
+        dp[i - 1][j - 1] + cost
+      );
+    }
+  }
+  return dp[a.length][b.length];
+}
+
+function similarityScore(a, b) {
+  const na = normalizeForSearch(a);
+  const nb = normalizeForSearch(b);
+  if (!na || !nb) return 0;
+  if (na === nb) return 100;
+
+  const aTokens = na.split(/\s+/).filter(Boolean);
+  const bTokens = nb.split(/\s+/).filter(Boolean);
+  const union = new Set([...aTokens, ...bTokens]).size;
+  const tokenMatches = aTokens.filter(token => bTokens.includes(token)).length;
+  const tokenScore = union ? (tokenMatches / union) * 100 : 0;
+
+  const maxLen = Math.max(na.length, nb.length);
+  const editDistance = levenshteinDistance(na, nb);
+  const editScore = maxLen ? ((maxLen - editDistance) / maxLen) * 100 : 0;
+
+  let score = Math.max(tokenScore, editScore * 0.8);
+
+  const startsWith = na.startsWith(nb) || nb.startsWith(na);
+  if (startsWith) score = Math.max(score, 82);
+
+  const containsToken = aTokens.some(token => bTokens.includes(token)) || bTokens.some(token => aTokens.includes(token));
+  if (containsToken && (aTokens.length <= 3 || bTokens.length <= 3)) score = Math.max(score, 74);
+
+  return score;
+}
+
+function fuzzyMatchLocal(artist, title, cache) {
+  const queryArtist = normalizeForSearch(artist);
+  const queryTitle  = normalizeForSearch(title);
+  if (!queryArtist && !queryTitle) return null;
+
+  let bestId = null;
+  let bestScore = 0;
+
+  for (const [key, id] of cache.entries()) {
+    const [candArtist, candTitle] = key.split('|||');
+    const artistScore = similarityScore(queryArtist, candArtist);
+    const titleScore  = similarityScore(queryTitle, candTitle);
+    const score = (titleScore * 0.75) + (artistScore * 0.25);
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestId = id;
+    }
+  }
+
+  return bestScore >= 70 ? { id: bestId, exact: false, score: Math.round(bestScore) } : null;
+}
+
+function matchLocalWithScore(artist, title, cache) {
   const k = `${(artist||'').toLowerCase().trim()}|||${(title||'').toLowerCase().trim()}`;
-  return cache.get(k) || null;
+  const exact = cache.get(k) || null;
+  if (exact) return { id: exact, exact: true, score: 100 };
+  return fuzzyMatchLocal(artist, title, cache);
+}
+
+function matchLocal(artist, title, cache) {
+  return matchLocalWithScore(artist, title, cache)?.id || null;
 }
 
 // Session-level alias cache: artist_mbid → resolved local artist name
@@ -319,6 +406,7 @@ module.exports = {
   buildMatchCacheLocal,
   buildMatchCacheLocalWarmed,
   matchLocal,
+  matchLocalWithScore,
   resolveArtistWithAliases,
   buildNaviTitle,
   buildLfmTitle,
