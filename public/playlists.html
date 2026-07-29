@@ -6,11 +6,12 @@
   <title>naviList</title>
   <link rel="icon" href="/assets/favicon.webp" type="image/webp" />
   <link rel="stylesheet" href="/css/main.css" />
+  <script>document.documentElement.setAttribute("data-theme", localStorage.getItem("navilist_theme") || "auto");</script>
   <style>
     .rb-req-toggle {
       padding: 0.2rem 0.55rem;
       border-radius: 4px;
-      border: 1px solid #ddddd8;
+      border: 1px solid var(--border);
       font-size: 0.76rem;
       font-weight: 500;
       cursor: pointer;
@@ -19,14 +20,14 @@
       transition: background 0.1s, color 0.1s;
     }
     .rb-req-toggle.is-required {
-      background: #f0f0ee;
-      color: #444;
-      border-color: #c8c8c2;
+      background: var(--surface-3);
+      color: var(--text-2);
+      border-color: var(--border-strong);
     }
     .rb-req-toggle.is-preferred {
-      background: #eef3ff;
-      color: #2255cc;
-      border-color: #b3c8ff;
+      background: var(--info-tint);
+      color: var(--info-text);
+      border-color: var(--info-border);
     }
   </style>
 </head>
@@ -42,6 +43,11 @@
       <li><a href="/settings">Settings</a></li>
       <li><a href="/logs">Logs</a></li>
     </ul>
+    <select id="themeSelect" class="theme-select" aria-label="Theme">
+      <option value="auto">Auto</option>
+      <option value="light">Light</option>
+      <option value="dark">Dark</option>
+    </select>
   </nav>
 
   <!-- ── List view ──────────────────────────────────────────────────────── -->
@@ -2588,5 +2594,6 @@
       if (el) el.textContent = d.version || '?';
     }).catch(() => {});
   </script>
+  <script src="/js/theme.js"></script>
 </body>
 </html>
