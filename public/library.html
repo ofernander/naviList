@@ -6,6 +6,7 @@
   <title>naviList</title>
   <link rel="icon" href="/assets/favicon.webp" type="image/webp" />
   <link rel="stylesheet" href="/css/main.css" />
+  <script>document.documentElement.setAttribute("data-theme", localStorage.getItem("navilist_theme") || "auto");</script>
 </head>
 <body>
   <nav>
@@ -19,6 +20,11 @@
       <li><a href="/settings">Settings</a></li>
       <li><a href="/logs">Logs</a></li>
     </ul>
+    <select id="themeSelect" class="theme-select" aria-label="Theme">
+      <option value="auto">Auto</option>
+      <option value="light">Light</option>
+      <option value="dark">Dark</option>
+    </select>
   </nav>
   <main class="full-width">
     <div class="library-page">
@@ -640,5 +646,6 @@
       if (el) el.textContent = d.version || '?';
     }).catch(() => {});
   </script>
+  <script src="/js/theme.js"></script>
 </body>
 </html>
