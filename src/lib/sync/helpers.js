@@ -54,6 +54,106 @@ function matchLocal(artist, title, cache) {
   return cache.get(k) || null;
 }
 
+// ── Fuzzy import matching ──────────────────────────────────────────────────────
+// Last-resort matcher for file imports whose metadata won't match exactly. The
+// caller layers it: exact → normalized → fuzzy. Fuzzy is targeted via a token
+// index, so it scores a few dozen candidates, never the whole library. It never
+// changes matchLocal (that stays exact-only for all sync paths).
+
+const FUZZY_MIN_SCORE = 80;   // default floor for a candidate to be offered (user-configurable)
+const FUZZY_TOP_N     = 5;    // candidates shown in the review dropdown
+
+function normalizeForSearch(value) {
+  return (value || '')
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/\p{Diacritic}/gu, "")   // strip accents (NFKD combining marks)
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+// Two-row Levenshtein — O(min(a,b)) space, no matrix allocation.
+function levenshtein(a, b) {
+  if (a === b) return 0;
+  if (!a.length) return b.length;
+  if (!b.length) return a.length;
+  if (a.length > b.length) { const t = a; a = b; b = t; }
+  let prev = Array.from({ length: a.length + 1 }, (_, i) => i);
+  for (let j = 1; j <= b.length; j++) {
+    const cur = [j];
+    for (let i = 1; i <= a.length; i++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      cur[i] = Math.min(prev[i] + 1, cur[i - 1] + 1, prev[i - 1] + cost);
+    }
+    prev = cur;
+  }
+  return prev[a.length];
+}
+
+// Similarity 0-100 between two already-normalized strings (token overlap + edit).
+function similarity(na, nb) {
+  if (!na || !nb) return 0;
+  if (na === nb) return 100;
+  const at = na.split(' ').filter(Boolean);
+  const bt = nb.split(' ').filter(Boolean);
+  const union  = new Set([...at, ...bt]).size;
+  const shared = at.filter(x => bt.includes(x)).length;
+  const tokenScore = union ? (shared / union) * 100 : 0;
+  const maxLen = Math.max(na.length, nb.length);
+  const editScore = maxLen ? ((maxLen - levenshtein(na, nb)) / maxLen) * 100 : 0;
+  let score = Math.max(tokenScore, editScore * 0.8);
+  if (na.startsWith(nb) || nb.startsWith(na)) score = Math.max(score, 82);
+  return score;
+}
+
+// Build a token index + normalized-key map from a resolved cache (key → id).
+// Cheap, once per import. Live-excluded keys (value null) are skipped.
+function buildFuzzyIndex(cache) {
+  const norm   = new Map();   // normalizedKey → original key
+  const tokens = new Map();   // token → Set(original key)
+  for (const [key, id] of cache.entries()) {
+    if (!id) continue;
+    const [a, t] = key.split('|||');
+    const na = normalizeForSearch(a), nt = normalizeForSearch(t);
+    if (!norm.has(`${na}|||${nt}`)) norm.set(`${na}|||${nt}`, key);
+    for (const tok of new Set(`${na} ${nt}`.split(' ').filter(Boolean))) {
+      if (!tokens.has(tok)) tokens.set(tok, new Set());
+      tokens.get(tok).add(key);
+    }
+  }
+  return { norm, tokens };
+}
+
+// Layered match for one import row against the cache + index. Returns
+// { status:'matched'|'normalized', id }, { status:'fuzzy', candidates:[{id,score}] }
+// (distinct songs, studio copy chosen later), or { status:'unmatched' }.
+function resolveImportMatch(artist, title, cache, index, minScore = FUZZY_MIN_SCORE) {
+  const exactKey = `${(artist||'').toLowerCase().trim()}|||${(title||'').toLowerCase().trim()}`;
+  if (cache.get(exactKey)) return { status: 'matched', id: cache.get(exactKey) };
+
+  const na = normalizeForSearch(artist), nt = normalizeForSearch(title);
+  const nKey = index.norm.get(`${na}|||${nt}`);
+  if (nKey && cache.get(nKey)) return { status: 'normalized', id: cache.get(nKey) };
+
+  if (!na && !nt) return { status: 'unmatched' };
+  const seen = new Set();
+  for (const tok of new Set(`${na} ${nt}`.split(' ').filter(Boolean))) {
+    const keys = index.tokens.get(tok);
+    if (keys) for (const k of keys) seen.add(k);
+  }
+  const scored = [];
+  for (const key of seen) {
+    const id = cache.get(key);
+    if (!id) continue;
+    const [ca, ct] = key.split('|||');
+    const score = similarity(nt, normalizeForSearch(ct)) * 0.75 + similarity(na, normalizeForSearch(ca)) * 0.25;
+    if (score >= minScore) scored.push({ id, score: Math.round(score) });
+  }
+  if (!scored.length) return { status: 'unmatched' };
+  scored.sort((x, y) => y.score - x.score);
+  return { status: 'fuzzy', candidates: scored.slice(0, FUZZY_TOP_N) };
+}
+
 // Session-level alias cache: artist_mbid → resolved local artist name
 const artistAliasCache = new Map();
 
@@ -319,6 +419,9 @@ module.exports = {
   buildMatchCacheLocal,
   buildMatchCacheLocalWarmed,
   matchLocal,
+  normalizeForSearch,
+  buildFuzzyIndex,
+  resolveImportMatch,
   resolveArtistWithAliases,
   buildNaviTitle,
   buildLfmTitle,

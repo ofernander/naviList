@@ -90,6 +90,19 @@
             </div>
             <p style="font-size:0.78rem; color:#aaa; margin:0.5rem 0 0 0;">Path inside the naviList container where .nsp files are written. Must be mounted and visible to Navidrome via <code>PlaylistsPath</code>.</p>
           </div>
+
+          <div class="folder-section">
+            <div class="folder-header">
+              <span class="folder-label">Imports</span>
+            </div>
+            <div class="svc-jobs">
+              <div class="svc-job svc-field">
+                <span class="svc-job-label">Fuzzy match threshold</span>
+                <input type="number" name="fuzzy_match_threshold" id="fuzzy_match_threshold" min="0" max="100" step="1" placeholder="80" style="max-width:6rem;" />
+              </div>
+            </div>
+            <p style="font-size:0.78rem; color:var(--text-dim); margin:0.5rem 0 0 0;">Minimum match confidence (0–100) for a fuzzy suggestion to be offered when importing a playlist. Higher = fewer, more accurate suggestions. Default 80.</p>
+          </div>
         </div>
 
         <!-- ── Last.fm ───────────────────────────────────────────────── -->
@@ -212,6 +225,9 @@
 
         const nspEl = document.getElementById('nsp_path');
         if (nspEl) nspEl.value = s.nsp_path || '';
+
+        const fzEl = document.getElementById('fuzzy_match_threshold');
+        if (fzEl) fzEl.value = s.fuzzy_match_threshold || '80';
         const nspStatus = document.getElementById('nspStatus');
         if (nspStatus) {
           nspStatus.textContent = s.nsp_path ? '✓ Configured' : '— Not set';
