@@ -34,6 +34,12 @@
       padding: 0.4rem 0.5rem; font-size: 0.85rem;
       border-bottom: 0.5px solid var(--border-subtle);
     }
+    /* Rows still needing action (not in library / fuzzy review): pale orange tint
+       + left accent bar. Translucent so it reads on both light and dark themes. */
+    .import-review .imp-row.imp-attention {
+      background: rgba(232, 160, 42, 0.12);
+      box-shadow: inset 3px 0 0 rgba(232, 160, 42, 0.75);
+    }
     .import-review .imp-orig { flex: 1; min-width: 0; display: flex; flex-direction: column; }
     .import-review .imp-orig .t { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .import-review .imp-orig .a { color: var(--text-faint); font-size: 0.78rem; }
@@ -2232,7 +2238,8 @@
           ctl = `<span class="imp-match">${esc(d.track?.title || '—')} · ${esc(d.track?.artist || '—')}</span><span class="imp-badge">${badge}</span>`;
         }
         ctl += `<button class="btn btn-secondary imp-browse" data-index="${i}">Browse…</button>`;
-        html += `<div class="imp-row">
+        const attn = (d.status === 'unmatched' || d.status === 'fuzzy') ? ' imp-attention' : '';
+        html += `<div class="imp-row${attn}">
           <span class="imp-orig"><span class="t">${esc(d.title || '—')}</span><span class="a">${esc(d.artist || '—')}</span></span>
           <span class="imp-ctl">${ctl}</span>
         </div>`;
