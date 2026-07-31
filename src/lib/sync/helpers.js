@@ -63,6 +63,8 @@ function matchLocal(artist, title, cache) {
 const FUZZY_MIN_SCORE    = 80;   // default floor for a candidate to be offered (user-configurable)
 const FUZZY_TOP_N        = 5;    // candidates shown in the review dropdown
 const FUZZY_ARTIST_FLOOR = 50;   // artist must be at least this similar, or the candidate is vetoed regardless of title
+const CONTAINMENT_MIN    = 0.75; // min proportion of the short title's significant tokens that must align contiguously
+const STOPWORDS = new Set(['the', 'a', 'an', 'of', 'and', 'or', 'to', 'in', 'on', 'for', 'with', 'feat', 'ft']);
 
 function normalizeForSearch(value) {
   return (value || '')
@@ -107,6 +109,39 @@ function similarity(na, nb) {
   return score;
 }
 
+// Significant tokens of an already-normalized string: drop stopwords and 1-char
+// fillers ("i", "n", roman "i") that only add noise to containment.
+function significantTokens(norm) {
+  return norm.split(' ').filter(t => t.length > 1 && !STOPWORDS.has(t));
+}
+
+// Containment: does the SHORTER title appear (near-)verbatim as a contiguous run
+// inside the longer one? Rescues "Rise N' Shine" ⊂ "…: I. Rise 'n Shine" that
+// Jaccard under-scores, without rewarding scattered single-token coincidences.
+// Slides a window (= short length) over the long token stream and takes the best
+// positional overlap, so contiguity + order are required; one miss is tolerated
+// only once titles are long enough that the ratio still clears CONTAINMENT_MIN.
+function bestContiguousRatio(a, b) {
+  let s = significantTokens(a), l = significantTokens(b);
+  if (s.length > l.length) { const t = s; s = l; l = t; }   // s = shorter
+  if (s.length < 2) return 0;                               // "not just one" — need ≥2 significant tokens
+  let best = 0;
+  for (let start = 0; start + s.length <= l.length; start++) {
+    let m = 0;
+    for (let i = 0; i < s.length; i++) if (s[i] === l[start + i]) m++;
+    if (m > best) best = m;
+  }
+  return best / s.length;
+}
+
+// Title-only containment score (0 or ~76–78). Gated so wrong pairs stay at 0;
+// the artist floor + weighting still decide whether a boosted title matches.
+function containmentScore(a, b) {
+  const ratio = bestContiguousRatio(a, b);
+  if (ratio < CONTAINMENT_MIN) return 0;
+  return 70 + 8 * ratio;   // 76 at ratio 0.75 → 78 at full containment
+}
+
 // Build a token index + normalized-key map from a resolved cache (key → id).
 // Cheap, once per import. Live-excluded keys (value null) are skipped.
 function buildFuzzyIndex(cache) {
@@ -149,7 +184,9 @@ function resolveImportMatch(artist, title, cache, index, minScore = FUZZY_MIN_SC
     const [ca, ct] = key.split('|||');
     const artistScore = similarity(na, normalizeForSearch(ca));
     if (na && artistScore < FUZZY_ARTIST_FLOOR) continue;   // veto right-title / wrong-artist
-    const score = similarity(nt, normalizeForSearch(ct)) * 0.75 + artistScore * 0.25;
+    const nCt = normalizeForSearch(ct);
+    const titleScore = Math.max(similarity(nt, nCt), containmentScore(nt, nCt));
+    const score = titleScore * 0.75 + artistScore * 0.25;
     if (score >= minScore) scored.push({ id, score: Math.round(score) });
   }
   if (!scored.length) return { status: 'unmatched' };
