@@ -144,7 +144,14 @@ router.get('/api/tracks', (req, res) => {
   const sortDir = order === 'desc' ? 'DESC' : 'ASC';
   const conditions = [], params = [];
 
-  if (search) { conditions.push(`(t.title LIKE ? OR t.artist LIKE ? OR t.album LIKE ?)`); const q = `%${search}%`; params.push(q, q, q); }
+  // Multi-word: each token must appear in title, artist or album (AND across tokens).
+  // Lets "vertical horizon everything you want" match even though no single column holds it all.
+  if (search) {
+    for (const tok of String(search).trim().split(/\s+/).filter(Boolean)) {
+      conditions.push(`(t.title LIKE ? OR t.artist LIKE ? OR t.album LIKE ?)`);
+      const q = `%${tok}%`; params.push(q, q, q);
+    }
+  }
   if (genre)  { conditions.push(`t.genre = ?`); params.push(genre); }
   if (year)   { conditions.push(`t.year = ?`);  params.push(parseInt(year)); }
 

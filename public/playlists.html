@@ -41,6 +41,22 @@
     .import-review .imp-ctl select { max-width: 100%; font-size: 0.82rem; padding: 0.3rem 0.5rem; }
     .import-review .imp-match { color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .import-review .imp-badge { font-size: 0.72rem; color: var(--text-faint); }
+    .import-review .imp-browse { padding: 0.25rem 0.6rem; font-size: 0.78rem; flex-shrink: 0; }
+    .browse-crumbs { display: flex; align-items: center; flex-wrap: wrap; gap: 0.35rem; font-size: 0.8rem; min-height: 1.2rem; }
+    .browse-crumbs .crumb { color: var(--accent); cursor: pointer; }
+    .browse-crumbs .crumb:hover { text-decoration: underline; }
+    .browse-crumbs .crumb-current { color: var(--text-2); }
+    .browse-crumbs .sep { color: var(--text-faint); }
+    .browse-results { max-height: 340px; overflow-y: auto; border: 0.5px solid var(--border); border-radius: 6px; }
+    .browse-results .br-section { padding: 0.45rem 0.75rem 0.3rem; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-faint); background: var(--surface); border-bottom: 0.5px solid var(--border); position: sticky; top: 0; }
+    .browse-results .br-row { display: flex; align-items: center; gap: 0.75rem; padding: 0.5rem 0.75rem; cursor: pointer; border-bottom: 0.5px solid var(--border); }
+    .browse-results .br-row:last-child { border-bottom: none; }
+    .browse-results .br-row:hover { background: var(--accent-tint); }
+    .browse-results .br-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+    .browse-results .br-t { font-size: 0.85rem; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .browse-results .br-a { font-size: 0.76rem; color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .browse-results .br-chevron { flex-shrink: 0; color: var(--text-faint); font-size: 1rem; }
+    .browse-results .br-empty { padding: 1rem 0.75rem; color: var(--text-faint); font-size: 0.82rem; text-align: center; }
   </style>
 </head>
 <body>
@@ -391,7 +407,9 @@
           <option value="navilist_csv">naviList CSV</option>
           <option value="navilist_json">naviList JSON</option>
         </select>
-        <input type="file" id="exportifyFile" accept=".csv,.json,.m3u,.m3u8,.jspf" style="font-size:0.88rem;" />
+        <input type="file" id="exportifyFile" accept=".csv,.json,.m3u,.m3u8,.jspf" style="display:none" />
+        <label for="exportifyFile" class="btn btn-secondary" style="cursor:pointer">Choose file</label>
+        <span id="exportifyFileName" style="font-size:0.85rem; color:var(--text-faint);"></span>
         <button class="btn btn-secondary" id="exportifyImportBtn">Import →</button>
         <span class="rb-status" id="exportifyStatus"></span>
       </div>
@@ -478,6 +496,20 @@
       <div class="modal-actions">
         <button class="btn btn-secondary" id="exportCancelBtn">Cancel</button>
         <button class="btn" id="exportDownloadBtn">↓ Download</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Browse library modal (manual import match) ───────────────────────── -->
+  <div class="modal-overlay" id="browseModal" style="display:none">
+    <div class="modal" style="max-width:640px">
+      <h3>Browse library</h3>
+      <p class="modal-sub" id="browseModalSub">Pick a track for this import row</p>
+      <input type="text" id="browseSearch" placeholder="Search tracks by title, artist or album…" autocomplete="off" />
+      <div class="browse-crumbs" id="browseCrumbs"></div>
+      <div class="browse-results" id="browseResults"></div>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" id="browseCancelBtn">Cancel</button>
       </div>
     </div>
   </div>
@@ -1628,6 +1660,7 @@
         exportifyMatchedTracks = []; exportifyUnmatched = []; importDecisions = [];
         document.getElementById('exportifyNameInput').value = '';
         document.getElementById('exportifyFile').value = '';
+        document.getElementById('exportifyFileName').textContent = '';
         document.getElementById('exportifyStatus').textContent = '';
         document.getElementById('exportifyPreviewPanel').style.display = 'none';
         document.getElementById('importFormat').value = 'm3u';
@@ -2156,6 +2189,7 @@
 
     document.getElementById('exportifyFile').addEventListener('change', () => {
       const file = document.getElementById('exportifyFile').files[0];
+      document.getElementById('exportifyFileName').textContent = file ? file.name : '';
       if (!file) return;
       const nameInput = document.getElementById('exportifyNameInput');
       if (!nameInput.value.trim()) {
@@ -2191,12 +2225,14 @@
             <select class="imp-fuzzy" data-index="${i}">${opts}<option value=""${!d.trackId ? ' selected' : ''}>— leave unmatched —</option></select>`;
         } else if (d.status === 'unmatched') {
           ctl = '<span class="lb-track-missing-pill">Not in library</span>';
+        } else if (d.status === 'manual') {
+          ctl = `<span class="imp-match">${esc(d.track?.title || '—')} · ${esc(d.track?.artist || '—')}</span><span class="imp-badge">manual</span>`;
         } else {
           const badge = d.status === 'normalized' ? 'matched ≈' : 'matched';
           ctl = `<span class="imp-match">${esc(d.track?.title || '—')} · ${esc(d.track?.artist || '—')}</span><span class="imp-badge">${badge}</span>`;
         }
-        const dim = d.status === 'unmatched' ? ' style="opacity:0.55"' : '';
-        html += `<div class="imp-row"${dim}>
+        ctl += `<button class="btn btn-secondary imp-browse" data-index="${i}">Browse…</button>`;
+        html += `<div class="imp-row">
           <span class="imp-orig"><span class="t">${esc(d.title || '—')}</span><span class="a">${esc(d.artist || '—')}</span></span>
           <span class="imp-ctl">${ctl}</span>
         </div>`;
@@ -2210,6 +2246,10 @@
           importDecisions[idx].trackId = sel.value || null;
           if (countEl) countEl.textContent = `— ${selCount()} tracks`;
         });
+      });
+
+      container.querySelectorAll('.imp-browse').forEach(btn => {
+        btn.addEventListener('click', () => openBrowseModal(parseInt(btn.getAttribute('data-index'), 10)));
       });
     }
 
@@ -2571,6 +2611,194 @@
       if (!exportPlaylistId) return;
       window.location.href = `/playlists/${exportPlaylistId}/export?format=${exportFormat}`;
       document.getElementById('exportModal').style.display = 'none';
+    });
+
+    // ── Browse library modal (manual import match) ─────────────────────────
+    // Two modes in one card: a top search box (flat track results) and, when the
+    // search is empty, a media browser — artist list → albums → tracks.
+    let browseRowIndex    = null;
+    let browseSearchTimer = null;
+    let browseView        = { mode: 'artists', artist: null, album: null };
+
+    function openBrowseModal(idx) {
+      browseRowIndex = idx;
+      const d = importDecisions[idx];
+      document.getElementById('browseModalSub').textContent =
+        `Pick a track for: ${d.title || '—'} · ${d.artist || '—'}`;
+      const input = document.getElementById('browseSearch');
+      input.value = '';
+      browseView = { mode: 'artists', artist: null, album: null };
+      document.getElementById('browseModal').style.display = 'flex';
+      input.focus();
+      loadBrowseArtists();
+    }
+
+    function closeBrowseModal() {
+      document.getElementById('browseModal').style.display = 'none';
+      browseRowIndex = null;
+    }
+
+    function pickBrowseTrack(id, title, artist) {
+      if (browseRowIndex == null || !id) return;
+      const d = importDecisions[browseRowIndex];
+      d.trackId = id;
+      d.track   = { id, title, artist };
+      d.status  = 'manual';
+      closeBrowseModal();
+      renderImportPreview();
+    }
+
+    function renderBrowseCrumbs() {
+      const c = document.getElementById('browseCrumbs');
+      if (browseView.mode === 'search') { c.innerHTML = '<span class="crumb-current">Search results</span>'; return; }
+      let html = `<span class="crumb" data-nav="artists">Artists</span>`;
+      if (browseView.artist) {
+        const cls = browseView.album ? 'crumb' : 'crumb-current';
+        html += ` <span class="sep">›</span> <span class="${cls}" data-nav="albums">${esc(browseView.artist.name)}</span>`;
+      }
+      if (browseView.album) {
+        html += ` <span class="sep">›</span> <span class="crumb-current">${esc(browseView.album.name)}</span>`;
+      }
+      c.innerHTML = html;
+      c.querySelectorAll('.crumb').forEach(el => el.addEventListener('click', () => {
+        const nav = el.getAttribute('data-nav');
+        if (nav === 'artists')      { browseView = { mode: 'artists', artist: null, album: null }; loadBrowseArtists(); }
+        else if (nav === 'albums')  { browseView.album = null; loadBrowseAlbums(browseView.artist.id); }
+      }));
+    }
+
+    function setBrowseResults(html) { document.getElementById('browseResults').innerHTML = html; }
+    const loadingHtml = '<div class="br-empty">Loading…</div>';
+
+    async function loadBrowseArtists() {
+      browseView.mode = 'artists'; renderBrowseCrumbs(); setBrowseResults(loadingHtml);
+      try {
+        const res  = await fetch('/library/api/artists?limit=5000');
+        const data = await res.json();
+        const artists = (data && data.artists) || [];
+        if (!artists.length) { setBrowseResults('<div class="br-empty">No artists in library</div>'); return; }
+        setBrowseResults(artists.map(a => `
+          <div class="br-row br-nav" data-id="${esc(a.artist_id)}" data-name="${esc(a.artist || '')}">
+            <span class="br-main">
+              <span class="br-t">${esc(a.artist || '—')}</span>
+              <span class="br-a">${a.album_count} album${a.album_count === 1 ? '' : 's'} · ${a.track_count} track${a.track_count === 1 ? '' : 's'}</span>
+            </span>
+            <span class="br-chevron">›</span>
+          </div>`).join(''));
+        document.querySelectorAll('#browseResults .br-nav').forEach(row => row.addEventListener('click', () => {
+          browseView.artist = { id: row.getAttribute('data-id'), name: row.getAttribute('data-name') };
+          browseView.album  = null;
+          loadBrowseAlbums(browseView.artist.id);
+        }));
+      } catch (e) { setBrowseResults('<div class="br-empty">Failed to load artists</div>'); }
+    }
+
+    async function loadBrowseAlbums(artistId) {
+      browseView.mode = 'albums'; renderBrowseCrumbs(); setBrowseResults(loadingHtml);
+      try {
+        const res  = await fetch(`/library/api/albums?artist_id=${encodeURIComponent(artistId)}&limit=1000`);
+        const data = await res.json();
+        const albums = (data && data.albums) || [];
+        if (!albums.length) { setBrowseResults('<div class="br-empty">No albums</div>'); return; }
+        setBrowseResults(albums.map(a => `
+          <div class="br-row br-nav" data-id="${esc(a.album_id)}" data-name="${esc(a.album || '')}">
+            <span class="br-main">
+              <span class="br-t">${esc(a.album || '—')}${a.year ? ' · ' + a.year : ''}</span>
+              <span class="br-a">${a.track_count} track${a.track_count === 1 ? '' : 's'}</span>
+            </span>
+            <span class="br-chevron">›</span>
+          </div>`).join(''));
+        document.querySelectorAll('#browseResults .br-nav').forEach(row => row.addEventListener('click', () => {
+          browseView.album = { id: row.getAttribute('data-id'), name: row.getAttribute('data-name') };
+          loadBrowseTracks(browseView.album.id);
+        }));
+      } catch (e) { setBrowseResults('<div class="br-empty">Failed to load albums</div>'); }
+    }
+
+    async function loadBrowseTracks(albumId) {
+      browseView.mode = 'tracks'; renderBrowseCrumbs(); setBrowseResults(loadingHtml);
+      try {
+        const res  = await fetch(`/library/api/albums/${encodeURIComponent(albumId)}/tracks`);
+        const data = await res.json();
+        const tracks = (data && data.tracks) || [];
+        if (!tracks.length) { setBrowseResults('<div class="br-empty">No tracks</div>'); return; }
+        renderBrowsePickRows(tracks);
+      } catch (e) { setBrowseResults('<div class="br-empty">Failed to load tracks</div>'); }
+    }
+
+    // Render a list of pickable track rows (used by album view and search).
+    function renderBrowsePickRows(tracks) {
+      setBrowseResults(tracks.map(t => `
+        <div class="br-row br-pick" data-id="${esc(t.id)}" data-title="${esc(t.title || '')}" data-artist="${esc(t.artist || '')}">
+          <span class="br-main">
+            <span class="br-t">${esc(t.title || '—')}</span>
+            <span class="br-a">${esc(t.artist || '—')}${t.album ? ' · ' + esc(t.album) : ''}${t.year ? ' · ' + t.year : ''}</span>
+          </span>
+        </div>`).join(''));
+      document.querySelectorAll('#browseResults .br-pick').forEach(row => row.addEventListener('click', () =>
+        pickBrowseTrack(row.getAttribute('data-id'), row.getAttribute('data-title'), row.getAttribute('data-artist'))
+      ));
+    }
+
+    async function runBrowseSearch() {
+      const q = document.getElementById('browseSearch').value.trim();
+      if (!q) { browseView = { mode: 'artists', artist: null, album: null }; loadBrowseArtists(); return; }
+      browseView.mode = 'search'; renderBrowseCrumbs(); setBrowseResults(loadingHtml);
+      try {
+        const [aRes, tRes] = await Promise.all([
+          fetch(`/library/api/artists?search=${encodeURIComponent(q)}&limit=50`),
+          fetch(`/library/api/tracks?search=${encodeURIComponent(q)}&limit=100`),
+        ]);
+        const artists = ((await aRes.json()) || {}).artists || [];
+        const tracks  = ((await tRes.json()) || {}).tracks  || [];
+        if (!artists.length && !tracks.length) { setBrowseResults('<div class="br-empty">No matches</div>'); return; }
+
+        let html = '';
+        if (artists.length) {
+          html += '<div class="br-section">Artists</div>';
+          html += artists.map(a => `
+            <div class="br-row br-nav-artist" data-id="${esc(a.artist_id)}" data-name="${esc(a.artist || '')}">
+              <span class="br-main">
+                <span class="br-t">${esc(a.artist || '—')}</span>
+                <span class="br-a">${a.album_count} album${a.album_count === 1 ? '' : 's'} · ${a.track_count} track${a.track_count === 1 ? '' : 's'}</span>
+              </span>
+              <span class="br-chevron">›</span>
+            </div>`).join('');
+        }
+        if (tracks.length) {
+          html += '<div class="br-section">Tracks</div>';
+          html += tracks.map(t => `
+            <div class="br-row br-pick" data-id="${esc(t.id)}" data-title="${esc(t.title || '')}" data-artist="${esc(t.artist || '')}">
+              <span class="br-main">
+                <span class="br-t">${esc(t.title || '—')}</span>
+                <span class="br-a">${esc(t.artist || '—')}${t.album ? ' · ' + esc(t.album) : ''}${t.year ? ' · ' + t.year : ''}</span>
+              </span>
+            </div>`).join('');
+        }
+        setBrowseResults(html);
+
+        document.querySelectorAll('#browseResults .br-pick').forEach(row => row.addEventListener('click', () =>
+          pickBrowseTrack(row.getAttribute('data-id'), row.getAttribute('data-title'), row.getAttribute('data-artist'))
+        ));
+        document.querySelectorAll('#browseResults .br-nav-artist').forEach(row => row.addEventListener('click', () => {
+          browseView.artist = { id: row.getAttribute('data-id'), name: row.getAttribute('data-name') };
+          browseView.album  = null;
+          document.getElementById('browseSearch').value = '';   // drop out of search, into browse
+          loadBrowseAlbums(browseView.artist.id);
+        }));
+      } catch (e) { setBrowseResults('<div class="br-empty">Search failed</div>'); }
+    }
+
+    document.getElementById('browseSearch').addEventListener('input', () => {
+      clearTimeout(browseSearchTimer);
+      browseSearchTimer = setTimeout(runBrowseSearch, 250);
+    });
+    document.getElementById('browseCancelBtn').addEventListener('click', closeBrowseModal);
+    document.getElementById('browseModal').addEventListener('click', e => {
+      if (e.target === e.currentTarget) closeBrowseModal();
+    });
+    document.addEventListener('keydown', e => {
+      if (e.key === 'Escape' && document.getElementById('browseModal').style.display === 'flex') closeBrowseModal();
     });
 
     // ── Sort + select ──────────────────────────────────────────────────────

@@ -60,8 +60,9 @@ function matchLocal(artist, title, cache) {
 // index, so it scores a few dozen candidates, never the whole library. It never
 // changes matchLocal (that stays exact-only for all sync paths).
 
-const FUZZY_MIN_SCORE = 80;   // default floor for a candidate to be offered (user-configurable)
-const FUZZY_TOP_N     = 5;    // candidates shown in the review dropdown
+const FUZZY_MIN_SCORE    = 80;   // default floor for a candidate to be offered (user-configurable)
+const FUZZY_TOP_N        = 5;    // candidates shown in the review dropdown
+const FUZZY_ARTIST_FLOOR = 50;   // artist must be at least this similar, or the candidate is vetoed regardless of title
 
 function normalizeForSearch(value) {
   return (value || '')
@@ -146,7 +147,9 @@ function resolveImportMatch(artist, title, cache, index, minScore = FUZZY_MIN_SC
     const id = cache.get(key);
     if (!id) continue;
     const [ca, ct] = key.split('|||');
-    const score = similarity(nt, normalizeForSearch(ct)) * 0.75 + similarity(na, normalizeForSearch(ca)) * 0.25;
+    const artistScore = similarity(na, normalizeForSearch(ca));
+    if (na && artistScore < FUZZY_ARTIST_FLOOR) continue;   // veto right-title / wrong-artist
+    const score = similarity(nt, normalizeForSearch(ct)) * 0.75 + artistScore * 0.25;
     if (score >= minScore) scored.push({ id, score: Math.round(score) });
   }
   if (!scored.length) return { status: 'unmatched' };
