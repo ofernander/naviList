@@ -6,7 +6,7 @@ const db = require('../db/index');
 const navidrome = require('../providers/navidrome');
 const engine    = require('./pl_engine');
 const logger = require('../utils/logger');
-const { writeMissingArtists, buildMatchCacheLocal, buildMatchCacheLocalWarmed, matchLocal, refineStudioPicks, runDetached } = require('./sync/helpers');
+const { writeMissingArtists, buildMatchCacheLocal, buildFuzzyIndex, resolveImportMatch, refineStudioPicks, runDetached } = require('./sync/helpers');
 
 // ── Helper: snapshot a playlist into local registry ───────────────────────────
 
@@ -683,35 +683,59 @@ router.post('/import-playlist', async (req, res) => {
   const { rows } = req.body;
   if (!Array.isArray(rows) || !rows.length) return res.json({ ok: false, error: 'rows required' });
 
-  // Studio-vs-live disambiguation. MB is fetched on-demand only for the same-title
-  // collisions among THESE imported rows — bounded to this list, never the library.
-  const items = rows.map(r => ({ artist: (r.artistName || '').split(',')[0].trim(), title: (r.trackName || '').trim() }));
-  const cache    = await buildMatchCacheLocalWarmed(db, items);
+  // Fast match path: cached is_live + heuristic, NO MB fetch, so the import preview
+  // stays snappy on large files. The studio tie-break runs post-save via
+  // scheduleStudioRefine (fuzzy picks the song → MB picks the studio copy in the background).
+  const cache    = buildMatchCacheLocal(db);
+  const index    = buildFuzzyIndex(cache);
   const getTrack = db.prepare('SELECT id, title, artist, duration FROM tracks WHERE id = ?');
+  // User-configurable fuzzy floor (0-100, default 80).
+  const fuzzyMin = Math.max(0, Math.min(100,
+    parseInt(db.prepare("SELECT value FROM settings WHERE key = 'fuzzy_match_threshold'").get()?.value, 10) || 80));
 
-  const matched   = [];
-  const unmatched = [];
+  const results = [];
+  let nMatched = 0, nFuzzy = 0, nUnmatched = 0;
 
   for (const row of rows) {
     const title  = (row.trackName  || '').trim();
     const artist = (row.artistName || '').split(',')[0].trim();
-    if (!title || !artist) { unmatched.push({ title, artist }); continue; }
-    const id = matchLocal(artist, title, cache);
-    if (id) matched.push(getTrack.get(id));
-    else unmatched.push({ title, artist });
+    if (!title || !artist) { results.push({ title, artist, status: 'unmatched' }); nUnmatched++; continue; }
+
+    const m = resolveImportMatch(artist, title, cache, index, fuzzyMin);
+    if (m.status === 'matched' || m.status === 'normalized') {
+      results.push({ title, artist, status: m.status, track: getTrack.get(m.id) });
+      nMatched++;
+    } else if (m.status === 'fuzzy') {
+      results.push({ title, artist, status: 'fuzzy', candidates: m.candidates.map(c => ({ ...getTrack.get(c.id), score: c.score })) });
+      nFuzzy++;
+    } else {
+      results.push({ title, artist, status: 'unmatched' });
+      nUnmatched++;
+    }
   }
 
-  logger.info('playlists', `import: ${matched.length} matched, ${unmatched.length} unmatched`);
-  res.json({ ok: true, matched, unmatched });
+  logger.info('playlists', `import: ${nMatched} matched, ${nFuzzy} to review, ${nUnmatched} unmatched`);
+  res.json({ ok: true, results, counts: { matched: nMatched, fuzzy: nFuzzy, unmatched: nUnmatched } });
 });
 
 // POST /playlists/save-import — create ND playlist, write missing artists
 router.post('/save-import', async (req, res) => {
-  const { name, trackIds, unmatched, format } = req.body;
-  if (!name?.trim())     return res.json({ ok: false, error: 'name required' });
-  if (!trackIds?.length) return res.json({ ok: false, error: 'trackIds required' });
+  const { name, trackIds, unmatched, format, decisions } = req.body;
+  if (!name?.trim()) return res.json({ ok: false, error: 'name required' });
 
-  const created = await navidrome.createPlaylist(db, name.trim(), trackIds);
+  // The review flow sends `decisions` (one per row: chosen trackId or unmatched);
+  // fall back to raw trackIds/unmatched for the plain flow.
+  let finalTrackIds  = Array.isArray(trackIds) ? trackIds.slice() : [];
+  let finalUnmatched = Array.isArray(unmatched) ? unmatched.slice() : [];
+  if (Array.isArray(decisions) && decisions.length) {
+    finalTrackIds  = decisions.map(d => d.trackId).filter(Boolean);
+    finalUnmatched = decisions
+      .filter(d => !d.trackId && (d.title || d.artist))
+      .map(d => ({ title: d.title || '', artist: d.artist || '' }));
+  }
+  if (!finalTrackIds.length) return res.json({ ok: false, error: 'trackIds required' });
+
+  const created = await navidrome.createPlaylist(db, name.trim(), finalTrackIds);
   if (!created.ok) return res.json(created);
 
   const playlistId = created.playlist?.id;
@@ -719,16 +743,17 @@ router.post('/save-import', async (req, res) => {
 
   const comment = 'navilist:import';
   await navidrome.updatePlaylist(db, playlistId, { comment });
-  snapshotPlaylist(db, playlistId, name.trim(), comment, trackIds, null);
+  snapshotPlaylist(db, playlistId, name.trim(), comment, finalTrackIds, null);
+  scheduleStudioRefine(playlistId, finalTrackIds, comment);   // fuzzy picked the song; studio tie-break picks the copy
 
   // Write unmatched artists to missing_artists — same pipeline as LB/LFM
-  if (unmatched?.length) {
-    const artists = [...new Set(unmatched.map(t => t.artist).filter(Boolean))];
+  if (finalUnmatched.length) {
+    const artists = [...new Set(finalUnmatched.map(t => t.artist).filter(Boolean))];
     if (artists.length) writeMissingArtists(db, artists, format || 'import');
   }
 
-  logger.info('playlists', `import playlist saved: "${name.trim()}" (${trackIds.length} tracks) [${format || 'unknown'}]`);
-  res.json({ ok: true, playlistId, count: trackIds.length });
+  logger.info('playlists', `import playlist saved: "${name.trim()}" (${finalTrackIds.length} tracks) [${format || 'unknown'}]`);
+  res.json({ ok: true, playlistId, count: finalTrackIds.length });
 });
 
 function escXml(str) {

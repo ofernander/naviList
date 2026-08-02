@@ -70,7 +70,8 @@ router.post('/', (req, res) => {
     'lidarr_quality_profile_id', 'lidarr_metadata_profile_id',
     'lidarr_auto_add',
     'deezer_artist_images',
-    'nsp_path'
+    'nsp_path',
+    'fuzzy_match_threshold'
   ];
 
   const upsert = db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)');

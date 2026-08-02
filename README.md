@@ -7,8 +7,8 @@ Self-hosted playlist manager and generator for [Navidrome](https://www.navidrome
 
 ## What it is
 
-- **Non A.I. dependant playlist generator** - No A.I. agent required, playlist are generated from database queries and clever rule sets"
-- **Playlist manager** - Manage Navidrom playlist including Navidrom Smart Playlist.
+- **Non A.I. dependant playlist generator** - No A.I. agent required, playlist are generated from database queries and clever rule sets
+- **Playlist manager** - Manage Navidrome playlist including Navidrome Smart Playlist.
 - **Playlist creator** - Create Navidrome playlist from tracks already present in your library based on rule based generation or from external services listed below.
 - **Playlist importer** - Import external playlist from outside sources into Navidrome, matching against tracks you already have in your library. 
 
