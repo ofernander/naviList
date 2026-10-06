@@ -149,6 +149,33 @@ async function getSimilarArtists(token, artistMbid, algorithm = 'session_based_d
   return request(token, `/similarity/artist/${artistMbid}/${algorithm}`, {});
 }
 
+// ── Playlists ─────────────────────────────────────────────────────────────────
+
+/**
+ * Playlists generated for a user (daily jams, weekly exploration…), newest first.
+ * Response: { playlists: [{ playlist: JSPF }], count, offset }
+ */
+async function getPlaylistsCreatedFor(token, username) {
+  return request(token, `/user/${username}/playlists/createdfor`, {});
+}
+
+/**
+ * The user's own playlists.
+ * Response: { playlists: [{ playlist: JSPF }], count, offset }
+ */
+async function getUserPlaylists(token, username) {
+  return request(token, `/user/${username}/playlists`, {});
+}
+
+/**
+ * One playlist with its tracks.
+ * Response: { playlist: JSPF } — playlist.track[] each has title, creator,
+ * identifier (recording URL) and the MusicBrainz track extension (artists[]).
+ */
+async function getPlaylist(token, mbid) {
+  return request(token, `/playlist/${mbid}`, {});
+}
+
 // ── User info ─────────────────────────────────────────────────────────────────
 
 /**
@@ -232,6 +259,10 @@ module.exports = {
   getRecommendations,
   // Artist similarity
   getSimilarArtists,
+  // Playlists
+  getPlaylistsCreatedFor,
+  getUserPlaylists,
+  getPlaylist,
   // User info
   validateToken,
   // Ingestion adapter

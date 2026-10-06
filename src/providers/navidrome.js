@@ -2,15 +2,10 @@ const crypto = require('crypto');
 const path   = require('path');
 const fs     = require('fs');
 const logger = require('../utils/logger');
+const { getSettings } = require('../db/settings');
+const { parseComment } = require('../lib/playlist_types');
 
 const PAGE_SIZE = 500;
-
-function getSettings(db) {
-  const rows = db.prepare('SELECT key, value FROM settings').all();
-  const s = {};
-  rows.forEach(r => { s[r.key] = r.value; });
-  return s;
-}
 
 function md5(str) {
   return crypto.createHash('md5').update(str).digest('hex');
@@ -255,12 +250,16 @@ async function syncPlaylistsToLocal(db) {
   if (!playlists.length) return { ok: true, synced: 0 };
 
   const now = Math.floor(Date.now() / 1000);
+  // type/config only fill gaps — the registry stays the source of truth for
+  // playlists naviList published.
   const upsertPl = db.prepare(`
-    INSERT INTO navilist_playlists (navidrome_id, name, comment, active, track_count, duration, created_at)
-    VALUES (@navidrome_id, @name, @comment, 1, @track_count, @duration, @created_at)
+    INSERT INTO navilist_playlists (navidrome_id, name, comment, type, config, active, track_count, duration, created_at)
+    VALUES (@navidrome_id, @name, @comment, @type, @config, 1, @track_count, @duration, @created_at)
     ON CONFLICT(navidrome_id) DO UPDATE SET
       name        = excluded.name,
       comment     = excluded.comment,
+      type        = COALESCE(navilist_playlists.type,   excluded.type),
+      config      = COALESCE(navilist_playlists.config, excluded.config),
       track_count = excluded.track_count,
       duration    = excluded.duration,
       active      = 1
@@ -278,11 +277,14 @@ async function syncPlaylistsToLocal(db) {
     if (!detail) continue;
     const tracks = Array.isArray(detail.entry) ? detail.entry : (detail.entry ? [detail.entry] : []);
 
+    const { type, config } = parseComment(p.comment);
     db.transaction(() => {
       upsertPl.run({
         navidrome_id: p.id,
         name:         p.name,
         comment:      p.comment || null,
+        type,
+        config:       config ? JSON.stringify(config) : null,
         track_count:  tracks.length,
         duration:     p.duration || null,
         created_at:   now
@@ -414,6 +416,7 @@ async function syncLibrary(db) {
   let inserted = 0;
   let updated = 0;
   let removed = 0;
+  let foundArtists = 0;
   const seenIds      = new Set();
   const newArtistIds = new Map(); // artistId → artistName, only for artists not yet imaged
   const syncedAt     = Math.floor(Date.now() / 1000);
@@ -526,22 +529,9 @@ async function syncLibrary(db) {
         }
       }
 
-      if (foundCount > 0) {
-        logger.info('navidrome', `${foundCount} missing artist(s) found — triggering smart playlist regeneration`);
-        const engine   = require('../lib/pl_engine');
-        const playlists = await getPlaylists(db);
-        for (const p of playlists) {
-          if (!p.comment?.startsWith('navilist:navilist')) continue;
-          try {
-            const rules    = JSON.parse(p.comment.replace(/^navilist:navilist\s*/, ''));
-            const trackIds = await engine.generatePlaylist(db, rules);
-            if (trackIds.length) await replacePlaylistTracks(db, p.id, trackIds);
-            logger.info('navidrome', `regenerated smart playlist "${p.name}" (${trackIds.length} tracks)`);
-          } catch (e) {
-            logger.warn('navidrome', `failed to regenerate "${p.name}": ${e.message}`);
-          }
-        }
-      }
+      // The caller (sync runner) regenerates rules playlists when artists turn up.
+      foundArtists = foundCount;
+      if (foundCount > 0) logger.info('navidrome', `${foundCount} missing artist(s) found`);
     } catch (e) {
       logger.warn('navidrome', `close-the-loop check failed: ${e.message}`);
     }
@@ -549,7 +539,7 @@ async function syncLibrary(db) {
 
   await syncPlaylistsToLocal(db);
 
-  return { ok: true, total, inserted, updated, removed };
+  return { ok: true, total, inserted, updated, removed, foundArtists };
 }
 
 module.exports = {
@@ -558,5 +548,5 @@ module.exports = {
   updatePlaylist, addTracksToPlaylist, removeTracksFromPlaylist, deletePlaylist,
   replacePlaylistTracks, syncLibrary, syncPlaylistsToLocal,
   getNativeToken, getNdTrackCount,
-  getSettings, buildParams
+  buildParams
 };

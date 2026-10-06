@@ -10,75 +10,7 @@
  */
 
 const logger = require('../utils/logger');
-const { resolveCandidateMap } = require('./sync/helpers');
-
-// ── Normalization helpers ─────────────────────────────────────────────────────
-
-function normalize(str) {
-  if (!str) return '';
-  return str
-    .toLowerCase()
-    .replace(/['']/g, '')           // smart quotes
-    .replace(/[^\w\s]/g, ' ')       // punctuation → space
-    .replace(/\s+/g, ' ')           // collapse whitespace
-    .trim();
-}
-
-// ── Match cache ───────────────────────────────────────────────────────────────
-
-/**
- * Build two lookup maps from the local tracks table.
- * Built once per ingest run, not per listen.
- *   exact:      'artist_lower|||title_lower' → track_id
- *   normalised: 'norm_artist|||norm_title'   → track_id
- */
-function buildMatchCache(db) {
-  const rows = db.prepare('SELECT id, artist, title, album, duration, mbid, is_live FROM tracks').all();
-  const exactMap = new Map();       // key → candidate[]
-  const normMap  = new Map();
-
-  for (const row of rows) {
-    const cand   = { id: row.id, artist: row.artist, title: row.title, album: row.album, duration: row.duration, mbid: row.mbid, is_live: row.is_live };
-    const artist = (row.artist || '').toLowerCase().trim();
-    const title  = (row.title  || '').toLowerCase().trim();
-    const ek = `${artist}|||${title}`;
-    if (!exactMap.has(ek)) exactMap.set(ek, []);
-    exactMap.get(ek).push(cand);
-
-    const nk = `${normalize(row.artist)}|||${normalize(row.title)}`;
-    if (!normMap.has(nk)) normMap.set(nk, []);
-    normMap.get(nk).push(cand);
-  }
-
-  return {
-    exact:      resolveCandidateMap(db, exactMap),
-    normalised: resolveCandidateMap(db, normMap),
-  };
-}
-
-function matchListen(listen, cache) {
-  const artist = (listen.artist || '').toLowerCase().trim();
-  const title  = (listen.title  || '').toLowerCase().trim();
-
-  // 1. Exact lowercase match
-  const exactKey = `${artist}|||${title}`;
-  if (cache.exact.has(exactKey)) {
-    logger.debug('ingestion', `exact match: "${listen.artist}" / "${listen.title}"`);
-    return cache.exact.get(exactKey);
-  }
-
-  // 2. Normalised match (strip punctuation etc.)
-  const na = normalize(listen.artist);
-  const nt = normalize(listen.title);
-  const normKey = `${na}|||${nt}`;
-  if (cache.normalised.has(normKey)) {
-    logger.debug('ingestion', `normalised match: "${listen.artist}" / "${listen.title}"`);
-    return cache.normalised.get(normKey);
-  }
-
-  logger.debug('ingestion', `no match: "${listen.artist}" / "${listen.title}"`);
-  return null;
-}
+const { buildMatcher } = require('./match');
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
@@ -87,10 +19,11 @@ function matchListen(listen, cache) {
  * Returns listens with track_id populated. Unmatched have track_id = null.
  */
 function matchListens(db, listens) {
-  const cache = buildMatchCache(db);
+  // excludeLive:false — scrobbles record what was actually played, live or not.
+  const matcher = buildMatcher(db, { excludeLive: false });
   return listens.map(listen => ({
     ...listen,
-    track_id: matchListen(listen, cache)
+    track_id: matcher.match({ artist: listen.artist, title: listen.title, mbid: listen.mbid || null })
   }));
 }
 

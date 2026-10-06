@@ -5,14 +5,14 @@ const db = require('../db/index');
 const navidrome = require('../providers/navidrome');
 const lidarr = require('../providers/lidarr');
 const { getSyncState } = require('./sync');
+const { getSettings } = require('../db/settings');
 
 // GET /status/api — return full status data as JSON
 router.get('/api', async (req, res) => {
   const ping        = await navidrome.ping(db);
-  const settings2   = {};
-  db.prepare('SELECT key, value FROM settings').all().forEach(r => { settings2[r.key] = r.value; });
-  const lidarrPing  = (settings2.lidarr_url && settings2.lidarr_api_key)
-    ? await lidarr.ping(settings2)
+  const settings    = getSettings(db);
+  const lidarrPing  = (settings.lidarr_url && settings.lidarr_api_key)
+    ? await lidarr.ping(settings)
     : { ok: false };
   const trackCount  = db.prepare('SELECT COUNT(*) as c FROM tracks').get().c;
   const albumCount  = db.prepare('SELECT COUNT(DISTINCT album_id) as c FROM tracks').get().c;
@@ -26,9 +26,6 @@ router.get('/api', async (req, res) => {
   const sourceMap = {};
   playsBySource.forEach(r => { sourceMap[r.source] = r.c; });
   const syncState = getSyncState();
-  const settings  = {};
-  db.prepare('SELECT key, value FROM settings').all()
-    .forEach(r => { settings[r.key] = r.value; });
 
   // Service connection status
   const services = {

@@ -6,47 +6,36 @@ const db = require('../db/index');
 const navidrome = require('../providers/navidrome');
 const engine    = require('./pl_engine');
 const logger = require('../utils/logger');
-const { writeMissingArtists, buildMatchCacheLocal, buildFuzzyIndex, resolveImportMatch, refineStudioPicks, runDetached } = require('./sync/helpers');
+const { writeMissingArtists } = require('./sync/helpers');
+const { publishPlaylist, snapshotPlaylist } = require('./publish');
+const { buildMatcher, FUZZY_MIN_SCORE }     = require('./match');
+const { ensureSimilarArtists }              = require('./similar');
+const { setRefreshSchedule, cancelPlaylistRefresh } = require('./refresh');
+const { TYPES, parseComment, normalizeRules } = require('./playlist_types');
+const { getSettings }                       = require('../db/settings');
 
-// ── Helper: snapshot a playlist into local registry ───────────────────────────
-
-function snapshotPlaylist(db, id, name, comment, trackIds, duration) {
-  const now = Math.floor(Date.now() / 1000);
-  // If name is null, keep existing name
-  const existing = db.prepare('SELECT name FROM navilist_playlists WHERE navidrome_id = ?').get(id);
-  const resolvedName = name ?? existing?.name ?? '';
-
-  const upsert = db.prepare(`
-    INSERT INTO navilist_playlists (navidrome_id, name, comment, active, track_count, duration, created_at)
-    VALUES (?, ?, ?, 1, ?, ?, ?)
-    ON CONFLICT(navidrome_id) DO UPDATE SET
-      name        = excluded.name,
-      comment     = excluded.comment,
-      track_count = excluded.track_count,
-      duration    = excluded.duration,
-      active      = 1
-  `);
-  const delTracks = db.prepare('DELETE FROM navilist_playlist_tracks WHERE playlist_id = ?');
-  const insTracks = db.prepare(
-    'INSERT OR IGNORE INTO navilist_playlist_tracks (playlist_id, track_id, position) VALUES (?, ?, ?)'
-  );
-  db.transaction(() => {
-    upsert.run(id, resolvedName, comment || null, trackIds.length, duration || null, now);
-    delTracks.run(id);
-    trackIds.forEach((tid, i) => insTracks.run(id, tid, i));
-  })();
+// type/config for a playlist: registry first, else the Navidrome comment.
+function playlistTypeConfig(id, fallbackComment) {
+  const row = db.prepare('SELECT type, config, comment FROM navilist_playlists WHERE navidrome_id = ?').get(id);
+  if (row?.type) {
+    let config = null;
+    try { config = row.config ? JSON.parse(row.config) : null; } catch (e) {}
+    return { type: row.type, config };
+  }
+  return parseComment(row?.comment || fallbackComment);
 }
 
-// Post-save MB studio refinement — runs detached so preview/save stay fast, then
-// swaps any wrong duplicate picks in the saved playlist and warms the cache.
-function scheduleStudioRefine(playlistId, trackIds, comment) {
-  runDetached(`studio-refine-${playlistId}`, async () => {
-    const refined = await refineStudioPicks(db, trackIds);
-    if (refined.length && refined.some((id, i) => id !== trackIds[i])) {
-      await navidrome.replacePlaylistTracks(db, playlistId, refined);
-      snapshotPlaylist(db, playlistId, null, comment, refined, null);
-      logger.info('playlists', `studio-refine: ${playlistId} updated after MB tie-break`);
-    }
+// Merge a subscription's cached source tracks with what's in Navidrome, so the
+// detail view also lists the source tracks that aren't in the library. The
+// playlist was built from the matched rows in order, so matched rows take the
+// Navidrome tracks in sequence — source titles can differ from library titles
+// (normalized / MBID / alias matches), so they're not paired by text.
+function mergeCachedTracks(playlist, cached) {
+  const ndTracks = Array.isArray(playlist.entry) ? playlist.entry : (playlist.entry ? [playlist.entry] : []);
+  let next = 0;
+  return cached.map(c => {
+    if (c.matched && next < ndTracks.length) return ndTracks[next++];
+    return { title: c.title, artist: c.artist, duration: 0, missing: true };
   });
 }
 
@@ -71,15 +60,13 @@ router.get('/api/list', async (req, res) => {
   const lbByMbid = new Map(lbCache.map(r => [r.lb_mbid, r]));
 
   function enrichPlaylist(p) {
-    const c = p.comment || '';
-    if (/^navilist:lb \{/.test(c)) {
-      try {
-        const data = JSON.parse(c.replace('navilist:lb ', ''));
-        const row  = lbByMbid.get(data.mbid);
-        if (row) return { ...p, lb_source_patch: row.source_patch, lb_title: row.title };
-      } catch (e) {}
+    const { type, config } = parseComment(p.comment);
+    const out = { ...p, type };
+    if (type === TYPES.LB && config?.mbid) {
+      const row = lbByMbid.get(config.mbid);
+      if (row) return { ...out, lb_source_patch: row.source_patch, lb_title: row.title };
     }
-    return p;
+    return out;
   }
 
   // NSP files from filesystem
@@ -108,7 +95,7 @@ router.get('/api/list', async (req, res) => {
   const playlists = [
     ...taggedActive.map(p => enrichPlaylist({ ...p, active: 1, created_at: createdAt[p.id] || null })),
     ...inactive.map(enrichPlaylist),
-    ...nspPlaylists,
+    ...nspPlaylists.map(p => ({ ...p, type: 'nsp' })),
   ];
   res.json({ ok: true, playlists });
 });
@@ -166,40 +153,13 @@ router.get('/api/:id', async (req, res) => {
   if (!playlist) return res.json({ ok: false, error: 'Not found' });
 
   // For LB/LFM playlists, merge in missing tracks from cache
-  const localRow = db.prepare('SELECT comment FROM navilist_playlists WHERE navidrome_id = ?').get(id);
-  const comment  = localRow?.comment || playlist.comment || '';
-
-  if (/^navilist:lb(-snapshot)?\s/.test(comment)) {
-    try {
-      const { mbid } = JSON.parse(comment.slice(comment.indexOf('{')));
-      const cached   = db.prepare('SELECT * FROM lb_playlist_tracks WHERE lb_mbid = ? ORDER BY position').all(mbid);
-      if (cached.length) {
-        const ndTracks  = Array.isArray(playlist.entry) ? playlist.entry : (playlist.entry ? [playlist.entry] : []);
-        const ndByTitle = new Map(ndTracks.map(t => [`${(t.artist||'').toLowerCase()}|||${(t.title||'').toLowerCase()}`, t]));
-        const merged    = cached.map(c => {
-          const key = `${(c.artist||'').toLowerCase()}|||${(c.title||'').toLowerCase()}`;
-          return ndByTitle.get(key) || { title: c.title, artist: c.artist, duration: 0, missing: true };
-        });
-        return res.json({ ok: true, playlist: { ...playlist, entry: merged } });
-      }
-    } catch (e) {}
-  }
-
-  if (/^navilist:lastfm(-snapshot)?\s/.test(comment)) {
-    try {
-      const { lfm_id } = JSON.parse(comment.slice(comment.indexOf('{')));
-      const cached     = db.prepare('SELECT * FROM lfm_playlist_tracks WHERE lfm_id = ? ORDER BY position').all(lfm_id);
-      if (cached.length) {
-        const ndTracks  = Array.isArray(playlist.entry) ? playlist.entry : (playlist.entry ? [playlist.entry] : []);
-        const ndByTitle = new Map(ndTracks.map(t => [`${(t.artist||'').toLowerCase()}|||${(t.title||'').toLowerCase()}`, t]));
-        const merged    = cached.map(c => {
-          const key = `${(c.artist||'').toLowerCase()}|||${(c.title||'').toLowerCase()}`;
-          return ndByTitle.get(key) || { title: c.title, artist: c.artist, duration: 0, missing: true };
-        });
-        return res.json({ ok: true, playlist: { ...playlist, entry: merged } });
-      }
-    } catch (e) {}
-  }
+  const { type, config } = playlistTypeConfig(id, playlist.comment);
+  let cached = [];
+  if ((type === TYPES.LB || type === TYPES.LB_SNAPSHOT) && config?.mbid)
+    cached = db.prepare('SELECT * FROM lb_playlist_tracks WHERE lb_mbid = ? ORDER BY position').all(config.mbid);
+  if ((type === TYPES.LASTFM || type === TYPES.LASTFM_SNAPSHOT) && config?.lfm_id)
+    cached = db.prepare('SELECT * FROM lfm_playlist_tracks WHERE lfm_id = ? ORDER BY position').all(config.lfm_id);
+  if (cached.length) return res.json({ ok: true, playlist: { ...playlist, entry: mergeCachedTracks(playlist, cached) } });
 
   res.json({ ok: true, playlist });
 });
@@ -209,109 +169,36 @@ router.post('/preview-radio', async (req, res) => {
   const { artists, depth, track_count, include_seed } = req.body;
   if (!artists?.length) return res.json({ ok: false, error: 'at least one artist required' });
 
-  const mb     = require('../providers/musicbrainz');
-  const lastfm = require('../providers/lastfm');
-
-  const settings = db.prepare('SELECT key, value FROM settings').all()
-    .reduce((s, r) => { s[r.key] = r.value; return s; }, {});
-  const apiKey = settings.lastfm_api_key;
-  if (!apiKey) return res.json({ ok: false, error: 'Last.fm API key not configured' });
-
-  const scoreThreshold = depth      ?? 0.25;
-  const limit          = track_count ?? 50;
-  const includeSeed    = include_seed ?? true;
-  const fetchedAt      = Math.floor(Date.now() / 1000);
+  const settings = getSettings(db);
+  if (!settings.lastfm_api_key) return res.json({ ok: false, error: 'Last.fm API key not configured' });
 
   const resolveArtistId = db.prepare('SELECT DISTINCT artist_id FROM tracks WHERE LOWER(artist) = LOWER(?) LIMIT 1');
-  const upsertArtist    = db.prepare(`
-    INSERT INTO artists (artist_id, name, mbid, updated_at)
-    VALUES (?, ?, ?, ?)
-    ON CONFLICT(artist_id) DO UPDATE SET
-      mbid       = excluded.mbid,
-      updated_at = excluded.updated_at
-  `);
-  const upsertSimilar = db.prepare(`
-    INSERT INTO artist_similar (artist_id, similar_name, similar_artist_id, score, source, fetched_at)
-    VALUES (@artistId, @similarName, @similarArtistId, @score, 'lastfm', @fetchedAt)
-    ON CONFLICT(artist_id, similar_name) DO UPDATE SET
-      similar_artist_id = excluded.similar_artist_id,
-      score             = excluded.score,
-      fetched_at        = excluded.fetched_at
-  `);
-  const resolveSimilarId = db.prepare('SELECT DISTINCT artist_id FROM tracks WHERE LOWER(artist) = LOWER(?) LIMIT 1');
-  const insertSentinel   = db.prepare(`
-    INSERT OR IGNORE INTO artist_similar (artist_id, similar_name, similar_artist_id, score, source, fetched_at)
-    VALUES (?, '__none__', NULL, NULL, 'lastfm', ?)
-  `);
-
-  const seedArtistIds = [];
-
-  for (const artistName of artists) {
-    const artistRow = resolveArtistId.get(artistName);
-    if (!artistRow) {
-      logger.warn('playlists', `create-radio: "${artistName}" not found in library`);
-      continue;
-    }
-    const artistId = artistRow.artist_id;
-    seedArtistIds.push(artistId);
-
-    // Fetch MBID — use cached value if available, otherwise look up
-    let mbid = db.prepare('SELECT mbid FROM artists WHERE artist_id = ?').get(artistId)?.mbid || null;
-    if (!mbid) {
-      try {
-        mbid = await mb.findArtistMbid(artistName);
-      } catch (e) {
-        logger.warn('playlists', `create-radio: MBID lookup failed for "${artistName}": ${e.message}`);
-      }
-    }
-    upsertArtist.run(artistId, artistName, mbid || null, fetchedAt);
-
-    // Only fetch similar artists if not already cached for this artist
-    const cachedCount = db.prepare(
-      'SELECT COUNT(*) as c FROM artist_similar WHERE artist_id = ?'
-    ).get(artistId).c;
-
-    if (!cachedCount) {
-      try {
-        const data    = await lastfm.getSimilarArtists(apiKey, { name: artistName, mbid: mbid || undefined }, 100);
-        const similar = data?.similarartists?.artist;
-        if (!Array.isArray(similar) || !similar.length) {
-          insertSentinel.run(artistId, fetchedAt);
-          logger.info('playlists', `create-radio: "${artistName}" — no similar artists from Last.fm`);
-        } else {
-          const rows = similar.map(s => ({
-            artistId,
-            similarName:     s.name,
-            similarArtistId: resolveSimilarId.get(s.name)?.artist_id ?? null,
-            score:           parseFloat(s.match) || 0,
-            fetchedAt
-          }));
-          db.transaction(rs => { for (const r of rs) upsertSimilar.run(r); })(rows);
-          logger.info('playlists', `create-radio: "${artistName}" → ${similar.length} similar artists cached`);
-        }
-      } catch (e) {
-        logger.warn('playlists', `create-radio: Last.fm similar failed for "${artistName}": ${e.message}`);
-        insertSentinel.run(artistId, fetchedAt);
-      }
-    } else {
-      logger.info('playlists', `create-radio: "${artistName}" similar artists already cached (${cachedCount} rows)`);
-    }
+  const seeds = [];
+  for (const name of artists) {
+    const row = resolveArtistId.get(name);
+    if (!row) { logger.warn('playlists', `create-radio: "${name}" not found in library`); continue; }
+    seeds.push({ artistId: row.artist_id, name });
   }
-
-  if (!seedArtistIds.length)
+  if (!seeds.length)
     return res.json({ ok: false, error: 'None of the seed artists were found in your library' });
 
-  // Resolve tracks from similar artist cache
-  const trackIds = await engine.resolveRadio(db, { artistIds: seedArtistIds, depth: scoreThreshold, includeSeed });
+  // Similar artists for new seeds are fetched once and cached (lib/similar.js)
+  await ensureSimilarArtists(db, seeds);
+
+  const config = {
+    artists,
+    artistIds:    seeds.map(s => s.artistId),
+    depth:        depth       ?? 0.25,
+    track_count:  track_count ?? 50,
+    include_seed: include_seed ?? true,
+    source:       'lastfm',
+  };
+  const trackIds = await engine.generateRadio(db, config);
   if (!trackIds.length)
     return res.json({ ok: false, error: 'No tracks found at this depth — try a wider setting' });
 
-  engine.fisherYates(trackIds);
-  const limited = trackIds.slice(0, limit);
-
   const getTrack = db.prepare('SELECT id, title, artist, duration FROM tracks WHERE id = ?');
-  const tracks   = limited.map(id => getTrack.get(id) || { id, title: '—', artist: '—', duration: 0 });
-  const config   = { artists, artistIds: seedArtistIds, depth: scoreThreshold, track_count: limit, include_seed: includeSeed, source: 'lastfm' };
+  const tracks   = trackIds.map(id => getTrack.get(id) || { id, title: '—', artist: '—', duration: 0 });
 
   logger.info('playlists', `radio preview: ${tracks.length} tracks for [${artists.join(', ')}]`);
   res.json({ ok: true, tracks, count: tracks.length, config });
@@ -324,28 +211,10 @@ router.post('/save-radio', async (req, res) => {
   if (!config)           return res.json({ ok: false, error: 'config required' });
   if (!trackIds?.length) return res.json({ ok: false, error: 'trackIds required' });
 
-  const created = await navidrome.createPlaylist(db, name.trim(), trackIds);
-  if (!created.ok) return res.json(created);
-
-  const playlistId = created.playlist?.id;
-  if (!playlistId) return res.json({ ok: false, error: 'No playlist ID returned from Navidrome' });
-
-  const comment = `navilist:radio ${JSON.stringify(config)}`;
-  await navidrome.updatePlaylist(db, playlistId, { comment });
-  snapshotPlaylist(db, playlistId, name.trim(), comment, trackIds, null);
-  scheduleStudioRefine(playlistId, trackIds, comment);
-
-  if (refresh_cron?.trim()) {
-    const nodeCron = require('node-cron');
-    if (nodeCron.validate(refresh_cron.trim())) {
-      db.prepare('UPDATE navilist_playlists SET refresh_cron = ? WHERE navidrome_id = ?')
-        .run(refresh_cron.trim(), playlistId);
-      const { schedulePlaylistRefresh } = require('./sync/index');
-      schedulePlaylistRefresh(playlistId, refresh_cron.trim());
-    } else {
-      logger.warn('playlists', `save-radio: invalid cron expression "${refresh_cron.trim()}" — skipping schedule`);
-    }
-  }
+  const published = await publishPlaylist(db, { name: name.trim(), type: TYPES.RADIO, config, trackIds });
+  if (!published.ok) return res.json(published);
+  const { playlistId } = published;
+  setRefreshSchedule(playlistId, refresh_cron, 'save-radio');
 
   logger.info('playlists', `radio playlist saved: "${name.trim()}" (${trackIds.length} tracks)`);
   res.json({ ok: true, playlistId, count: trackIds.length });
@@ -370,33 +239,16 @@ router.post('/preview-navilist', async (req, res) => {
 
 // POST /playlists/save-navilist — create in ND from previewed track list
 router.post('/save-navilist', async (req, res) => {
-  const { name, rules, trackIds, refresh_cron } = req.body;
+  const { name, trackIds, refresh_cron } = req.body;
+  const rules = normalizeRules(req.body.rules);   // store rules in the current shape
   if (!name?.trim())     return res.json({ ok: false, error: 'name required' });
   if (!rules)            return res.json({ ok: false, error: 'rules required' });
   if (!trackIds?.length) return res.json({ ok: false, error: 'trackIds required' });
 
-  const created = await navidrome.createPlaylist(db, name.trim(), trackIds);
-  if (!created.ok) return res.json(created);
-
-  const playlistId = created.playlist?.id;
-  if (!playlistId) return res.json({ ok: false, error: 'No playlist ID returned from Navidrome' });
-
-  const comment = `navilist:navilist ${JSON.stringify(rules)}`;
-  await navidrome.updatePlaylist(db, playlistId, { comment });
-  snapshotPlaylist(db, playlistId, name.trim(), comment, trackIds, null);
-  scheduleStudioRefine(playlistId, trackIds, comment);
-
-  if (refresh_cron?.trim()) {
-    const nodeCron = require('node-cron');
-    if (nodeCron.validate(refresh_cron.trim())) {
-      db.prepare('UPDATE navilist_playlists SET refresh_cron = ? WHERE navidrome_id = ?')
-        .run(refresh_cron.trim(), playlistId);
-      const { schedulePlaylistRefresh } = require('./sync/index');
-      schedulePlaylistRefresh(playlistId, refresh_cron.trim());
-    } else {
-      logger.warn('playlists', `save-navilist: invalid cron expression "${refresh_cron.trim()}" — skipping schedule`);
-    }
-  }
+  const published = await publishPlaylist(db, { name: name.trim(), type: TYPES.NAVILIST, config: rules, trackIds });
+  if (!published.ok) return res.json(published);
+  const { playlistId } = published;
+  setRefreshSchedule(playlistId, refresh_cron, 'save-navilist');
 
   logger.info('playlists', `navilist playlist saved: "${name.trim()}" (${trackIds.length} tracks)`);
   res.json({ ok: true, playlistId, count: trackIds.length });
@@ -408,10 +260,11 @@ router.post('/create', async (req, res) => {
   if (!name?.trim()) return res.json({ ok: false, error: 'Name is required' });
 
   const ids = trackIds ? (Array.isArray(trackIds) ? trackIds : [trackIds]) : [];
-  const result = await navidrome.createPlaylist(db, name.trim(), ids);
-  if (result.ok) snapshotPlaylist(db, result.playlist.id, name.trim(), null, ids, null);
+  // Manual playlists are untyped: hand-picked, no studio tie-break.
+  const result = await publishPlaylist(db, { name: name.trim(), trackIds: ids });
+  if (!result.ok) return res.json(result);
   logger.info('playlists', `create: ${name} (${ids.length} tracks)`);
-  res.json(result);
+  res.json({ ok: true, playlist: { id: result.playlistId } });
 });
 
 // POST /playlists/:id/rename — rename playlist
@@ -462,45 +315,19 @@ router.post('/:id/tracks/remove', async (req, res) => {
 
 // POST /playlists/:id/rules — save updated rules + regenerate
 router.post('/:id/rules', async (req, res) => {
-  const { rules } = req.body;
+  const rules = normalizeRules(req.body.rules);   // store rules in the current shape
   if (!rules) return res.json({ ok: false, error: 'rules required' });
 
   const validation = engine.validateRules(rules);
   if (!validation.ok) return res.json({ ok: false, errors: validation.errors });
 
-  const comment = `navilist:navilist ${JSON.stringify(rules)}`;
-  const saved = await navidrome.updatePlaylist(db, req.params.id, { comment });
-  if (!saved.ok) return res.json(saved);
-
   const trackIds = await engine.generatePlaylist(db, rules);
   if (!trackIds.length) return res.json({ ok: false, error: 'No tracks matched rules' });
 
-  const result = await navidrome.replacePlaylistTracks(db, req.params.id, trackIds);
+  const result = await publishPlaylist(db, { id: req.params.id, type: TYPES.NAVILIST, config: rules, trackIds });
   if (!result.ok) return res.json(result);
-
-  snapshotPlaylist(db, req.params.id, null, comment, trackIds, null);
 
   logger.info('playlists', `rules saved + regenerated ${req.params.id}: ${trackIds.length} tracks`);
-  res.json({ ok: true, count: trackIds.length });
-});
-
-// POST /playlists/:id/generate — run engine, replace playlist tracks in Navidrome
-router.post('/:id/generate', async (req, res) => {
-  const { rules } = req.body;
-  if (!rules) return res.json({ ok: false, error: 'rules required' });
-
-  const validation = engine.validateRules(rules);
-  if (!validation.ok) return res.json({ ok: false, errors: validation.errors });
-
-  const trackIds = await engine.generatePlaylist(db, rules);
-  if (!trackIds.length) return res.json({ ok: false, error: 'No tracks matched rules' });
-
-  const result = await navidrome.replacePlaylistTracks(db, req.params.id, trackIds);
-  if (!result.ok) return res.json(result);
-
-  snapshotPlaylist(db, req.params.id, null, null, trackIds, null);
-
-  logger.info('playlists', `generated playlist ${req.params.id}: ${trackIds.length} tracks`);
   res.json({ ok: true, count: trackIds.length });
 });
 
@@ -537,7 +364,6 @@ router.post('/:id/deactivate', async (req, res) => {
   const now = Math.floor(Date.now() / 1000);
   db.prepare('UPDATE navilist_playlists SET active = 0, deactivated_at = ? WHERE navidrome_id = ?').run(now, id);
   db.prepare('UPDATE lb_subscriptions SET navidrome_id = NULL WHERE navidrome_id = ?').run(id);
-  const { cancelPlaylistRefresh } = require('./sync/index');
   cancelPlaylistRefresh(id);
   logger.info('playlists', `deactivated "${id}" — removed from ND, kept locally`);
   res.json({ ok: true });
@@ -569,9 +395,9 @@ router.post('/:id/activate', async (req, res) => {
     // Replace registry row
     db.prepare('DELETE FROM navilist_playlists WHERE navidrome_id = ?').run(id);
     db.prepare(`
-      INSERT INTO navilist_playlists (navidrome_id, name, comment, active, track_count, duration, created_at)
-      VALUES (?, ?, ?, 1, ?, ?, ?)
-    `).run(newId, local.name, local.comment, local.track_count, local.duration, local.created_at);
+      INSERT INTO navilist_playlists (navidrome_id, name, comment, type, config, active, track_count, duration, created_at)
+      VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)
+    `).run(newId, local.name, local.comment, local.type, local.config, local.track_count, local.duration, local.created_at);
     db.prepare('UPDATE lb_subscriptions SET navidrome_id = ? WHERE navidrome_id = ?').run(newId, id);
   })();
 
@@ -605,7 +431,6 @@ router.post('/:id/delete', async (req, res) => {
     db.prepare('UPDATE lb_subscriptions SET navidrome_id = NULL WHERE navidrome_id = ?').run(id);
   })();
 
-  const { cancelPlaylistRefresh } = require('./sync/index');
   cancelPlaylistRefresh(id);
 
   logger.info('playlists', `deleted ${id} (was ${local?.active ? 'active' : 'inactive'})`);
@@ -685,13 +510,12 @@ router.post('/import-playlist', async (req, res) => {
 
   // Fast match path: cached is_live + heuristic, NO MB fetch, so the import preview
   // stays snappy on large files. The studio tie-break runs post-save via
-  // scheduleStudioRefine (fuzzy picks the song → MB picks the studio copy in the background).
-  const cache    = buildMatchCacheLocal(db);
-  const index    = buildFuzzyIndex(cache);
+  // publishPlaylist (fuzzy picks the song → MB picks the studio copy in the background).
+  const matcher  = buildMatcher(db);
   const getTrack = db.prepare('SELECT id, title, artist, duration FROM tracks WHERE id = ?');
   // User-configurable fuzzy floor (0-100, default 80).
   const fuzzyMin = Math.max(0, Math.min(100,
-    parseInt(db.prepare("SELECT value FROM settings WHERE key = 'fuzzy_match_threshold'").get()?.value, 10) || 80));
+    parseInt(getSettings(db).fuzzy_match_threshold, 10) || FUZZY_MIN_SCORE));
 
   const results = [];
   let nMatched = 0, nFuzzy = 0, nUnmatched = 0;
@@ -701,7 +525,7 @@ router.post('/import-playlist', async (req, res) => {
     const artist = (row.artistName || '').split(',')[0].trim();
     if (!title || !artist) { results.push({ title, artist, status: 'unmatched' }); nUnmatched++; continue; }
 
-    const m = resolveImportMatch(artist, title, cache, index, fuzzyMin);
+    const m = matcher.review({ artist, title }, fuzzyMin);
     if (m.status === 'matched' || m.status === 'normalized') {
       results.push({ title, artist, status: m.status, track: getTrack.get(m.id) });
       nMatched++;
@@ -735,16 +559,10 @@ router.post('/save-import', async (req, res) => {
   }
   if (!finalTrackIds.length) return res.json({ ok: false, error: 'trackIds required' });
 
-  const created = await navidrome.createPlaylist(db, name.trim(), finalTrackIds);
-  if (!created.ok) return res.json(created);
-
-  const playlistId = created.playlist?.id;
-  if (!playlistId) return res.json({ ok: false, error: 'No playlist ID returned from Navidrome' });
-
-  const comment = 'navilist:import';
-  await navidrome.updatePlaylist(db, playlistId, { comment });
-  snapshotPlaylist(db, playlistId, name.trim(), comment, finalTrackIds, null);
-  scheduleStudioRefine(playlistId, finalTrackIds, comment);   // fuzzy picked the song; studio tie-break picks the copy
+  // fuzzy picked the song; the publish-time studio tie-break picks the copy
+  const published = await publishPlaylist(db, { name: name.trim(), type: TYPES.IMPORT, trackIds: finalTrackIds });
+  if (!published.ok) return res.json(published);
+  const { playlistId } = published;
 
   // Write unmatched artists to missing_artists — same pipeline as LB/LFM
   if (finalUnmatched.length) {

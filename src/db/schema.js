@@ -1,7 +1,10 @@
 'use strict';
 
 // Full DB schema — all tables defined here.
-// No migrations. Drop the DB file and restart to rebuild clean.
+// New columns on existing tables are added by the guarded, idempotent migrations
+// at the bottom, so existing user DBs upgrade in place on startup.
+
+const { parseComment, normalizeRules } = require('../lib/playlist_types');
 
 module.exports = function (db) {
   db.exec(`
@@ -205,11 +208,15 @@ module.exports = function (db) {
 
     CREATE INDEX IF NOT EXISTS idx_lfm_playlist_tracks_id ON lfm_playlist_tracks(lfm_id);
 
-    -- naviList playlist registry — local copies of all known playlists
+    -- naviList playlist registry — local copies of all known playlists.
+    -- type/config are the source of truth for naviList playlists; comment mirrors
+    -- the Navidrome comment (see lib/playlist_types.js).
     CREATE TABLE IF NOT EXISTS navilist_playlists (
       navidrome_id    TEXT PRIMARY KEY,
       name            TEXT NOT NULL,
       comment         TEXT,
+      type            TEXT,
+      config          TEXT,
       active          INTEGER NOT NULL DEFAULT 1,
       track_count     INTEGER,
       duration        INTEGER,
@@ -242,4 +249,38 @@ module.exports = function (db) {
 
   // Drop the obsolete MB length cache — superseded by per-track mbid/is_live.
   db.exec('DROP TABLE IF EXISTS mb_recordings');
+
+  // Registry type/config (pre-existing DBs), backfilled from the mirrored comment.
+  const plCols = db.prepare('PRAGMA table_info(navilist_playlists)').all().map(c => c.name);
+  if (!plCols.includes('type'))   db.exec('ALTER TABLE navilist_playlists ADD COLUMN type TEXT');
+  if (!plCols.includes('config')) db.exec('ALTER TABLE navilist_playlists ADD COLUMN config TEXT');
+
+  const untyped = db.prepare(
+    "SELECT navidrome_id, comment FROM navilist_playlists WHERE type IS NULL AND comment LIKE 'navilist:%'"
+  ).all();
+  if (untyped.length) {
+    const setType = db.prepare('UPDATE navilist_playlists SET type = ?, config = ? WHERE navidrome_id = ?');
+    db.transaction(rows => {
+      for (const r of rows) {
+        const { type, config } = parseComment(r.comment);
+        if (type) setType.run(type, config ? JSON.stringify(config) : null, r.navidrome_id);
+      }
+    })(untyped);
+  }
+
+  // Rules configs saved in an older shape (term `tag` → `genre`, `required` →
+  // `use`). The Navidrome comment is rewritten from this config on the
+  // playlist's next publish. Only rows that actually change are written.
+  const rulesRows = db.prepare(
+    "SELECT navidrome_id, config FROM navilist_playlists WHERE type = 'navilist' AND config IS NOT NULL"
+  ).all();
+  const setConfig = db.prepare('UPDATE navilist_playlists SET config = ? WHERE navidrome_id = ?');
+  db.transaction(rows => {
+    for (const r of rows) {
+      let current;
+      try { current = JSON.stringify(normalizeRules(JSON.parse(r.config))); }
+      catch (e) { continue; }   // malformed config — left as is; the engine normalizes on read
+      if (current !== r.config) setConfig.run(current, r.navidrome_id);
+    }
+  })(rulesRows);
 };

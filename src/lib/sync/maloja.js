@@ -8,7 +8,8 @@
 
 const maloja = require('../../providers/maloja');
 const logger = require('../../utils/logger');
-const { sleep, buildMatchCacheLocal, matchLocal, writeMissingArtists } = require('./helpers');
+const { sleep, writeMissingArtists } = require('./helpers');
+const { buildMatcher } = require('../match');
 
 const MALOJA_PERIODS = ['week', 'month', 'quarter', 'half_year', 'year', 'all_time'];
 
@@ -58,7 +59,7 @@ async function syncTopTracksMaloja(db, settings) {
   const { maloja_url: baseUrl, maloja_api_key: apiKey } = settings;
   if (!baseUrl || !apiKey) return { ok: false, error: 'Maloja URL and API key required' };
 
-  const cache  = buildMatchCacheLocal(db);
+  const matcher = buildMatcher(db);
   const upsert = db.prepare(`
     INSERT INTO user_top_tracks (track_id, source, period, rank, play_count, fetched_at)
     VALUES (@track_id, 'maloja', @period, @rank, @play_count, @fetched_at)
@@ -80,7 +81,7 @@ async function syncTopTracksMaloja(db, settings) {
       const artist  = typeof artists[0] === 'string' ? artists[0] : (artists[0]?.name || '');
       const title   = t.track?.title || '';
       if (!artist || !title) return;
-      const id = matchLocal(artist, title, cache);
+      const id = matcher.match({ artist, title });
       if (!id) return;
       rows.push({ track_id: id, period, rank: i + 1, play_count: t.scrobbles || null, fetched_at: fetchedAt });
     });

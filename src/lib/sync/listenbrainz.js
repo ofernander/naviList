@@ -8,19 +8,43 @@
  */
 
 const listenbrainz = require('../../providers/listenbrainz');
-const mb           = require('../../providers/musicbrainz');
 const logger       = require('../../utils/logger');
-const {
-  sleep,
-  buildMatchCacheLocal,
-  buildMatchCacheLocalWarmed,
-  matchLocal,
-  writeMissingArtists,
-  resolveArtistWithAliases,
-  buildNaviTitle
-} = require('./helpers');
+const { sleep, writeMissingArtists, buildNaviTitle } = require('./helpers');
+const { buildMatcher, buildMatcherWarmed } = require('../match');
+const { TYPES } = require('../playlist_types');
 
 const LB_PERIODS = ['week', 'month', 'quarter', 'half_year', 'year', 'all_time'];
+
+// ── JSPF helpers ──────────────────────────────────────────────────────────────
+
+const JSPF_TRACK_EXT = 'https://musicbrainz.org/doc/jspf#track';
+const JSPF_PL_EXT    = 'https://musicbrainz.org/doc/jspf#playlist';
+
+// One JSPF track → { title, artist, artistMbid, mbid } for the matcher.
+function jspfTrack(t) {
+  const artists = t.extension?.[JSPF_TRACK_EXT]?.additional_metadata?.artists || [];
+  const ids     = Array.isArray(t.identifier) ? t.identifier : [t.identifier];
+  const recUrl  = ids.find(i => typeof i === 'string' && i.includes('/recording/'));
+  return {
+    title:      t.title || '',
+    artist:     artists[0]?.artist_credit_name || t.creator || '',
+    artistMbid: artists[0]?.artist_mbid || null,
+    mbid:       recUrl ? recUrl.split('/recording/')[1].replace(/\/$/, '') : null,
+  };
+}
+
+const playlistMbid = pl => pl.playlist?.identifier?.split('/playlist/')?.[1]?.replace(/\/$/, '') || null;
+const sourcePatch  = pl => pl.playlist?.extension?.[JSPF_PL_EXT]?.additional_metadata?.algorithm_metadata?.source_patch || null;
+
+// Created-for + own playlist lists; a failed list fetch counts as empty.
+async function fetchPlaylistLists(token, username) {
+  const safe = p => p.catch(e => { logger.warn('sync', `lb-playlists: list fetch failed: ${e.message}`); return { playlists: [] }; });
+  const [cfData, ownData] = await Promise.all([
+    safe(listenbrainz.getPlaylistsCreatedFor(token, username)),
+    safe(listenbrainz.getUserPlaylists(token, username)),
+  ]);
+  return { createdFor: cfData?.playlists || [], own: ownData?.playlists || [] };
+}
 
 // ── Loved tracks ──────────────────────────────────────────────────────────────
 
@@ -28,7 +52,7 @@ async function syncLovedListenbrainz(db, settings) {
   const { listenbrainz_token: token, listenbrainz_username: username } = settings;
   if (!token || !username) return { ok: false, error: 'ListenBrainz credentials required' };
 
-  const cache     = buildMatchCacheLocal(db);
+  const matcher   = buildMatcher(db);
   const fetchedAt = Math.floor(Date.now() / 1000);
   const upsert    = db.prepare(`
     INSERT INTO loved_tracks (track_id, source, score, loved_at)
@@ -47,7 +71,7 @@ async function syncLovedListenbrainz(db, settings) {
     for (const f of feedback) {
       const artist = f.track_metadata?.artist_name || '';
       const title  = f.track_metadata?.track_name  || '';
-      const id     = matchLocal(artist, title, cache);
+      const id     = matcher.match({ artist, title, mbid: f.recording_mbid || null });
       if (!id) { unmatched++; continue; }
       rows.push({ track_id: id, score, loved_at: f.created || fetchedAt });
       matched++;
@@ -100,8 +124,8 @@ async function syncTopTracksListenbrainz(db, settings) {
   const { listenbrainz_token: token, listenbrainz_username: username } = settings;
   if (!token || !username) return { ok: false, error: 'ListenBrainz credentials required' };
 
-  const cache  = buildMatchCacheLocal(db);
-  const upsert = db.prepare(`
+  const matcher = buildMatcher(db);
+  const upsert  = db.prepare(`
     INSERT INTO user_top_tracks (track_id, source, period, rank, play_count, fetched_at)
     VALUES (@track_id, 'listenbrainz', @period, @rank, @play_count, @fetched_at)
     ON CONFLICT(track_id, source, period) DO UPDATE SET
@@ -116,7 +140,7 @@ async function syncTopTracksListenbrainz(db, settings) {
     if (!recordings?.length) continue;
     const rows = [];
     recordings.forEach((r, i) => {
-      const id = matchLocal(r.artist_name || '', r.track_name || '', cache);
+      const id = matcher.match({ artist: r.artist_name || '', title: r.track_name || '', mbid: r.recording_mbid || null });
       if (!id) return;
       rows.push({ track_id: id, period, rank: i + 1, play_count: r.listen_count || null, fetched_at: fetchedAt });
     });
@@ -133,24 +157,15 @@ async function fetchAndCacheLbPlaylists(db, s) {
   if (!s.listenbrainz_token || !s.listenbrainz_username)
     throw new Error('ListenBrainz credentials required');
 
-  const BASE     = 'https://api.listenbrainz.org/1';
   const username = s.listenbrainz_username;
   const token    = s.listenbrainz_token;
-  const headers  = { Authorization: `Token ${token}` };
-
-  const [cfRes, ownRes] = await Promise.all([
-    fetch(`${BASE}/user/${username}/playlists/createdfor`, { headers }),
-    fetch(`${BASE}/user/${username}/playlists`, { headers })
-  ]);
-  const cfData  = cfRes.ok  ? await cfRes.json()  : { playlists: [] };
-  const ownData = ownRes.ok ? await ownRes.json() : { playlists: [] };
+  const { createdFor, own } = await fetchPlaylistLists(token, username);
 
   const normalise = (playlists, type) => (playlists || []).map(pl => ({
-    lb_mbid:       pl.playlist?.identifier?.split('/playlist/')?.[1]?.replace(/\/$/, '') || null,
+    lb_mbid:       playlistMbid(pl),
     title:         pl.playlist?.title || 'Untitled',
     playlist_type: type,
-    source_patch:  pl.playlist?.extension?.['https://musicbrainz.org/doc/jspf#playlist']
-                     ?.additional_metadata?.algorithm_metadata?.source_patch || null,
+    source_patch:  sourcePatch(pl),
   })).filter(p => p.lb_mbid);
 
   // For generated playlists, keep only the newest (first) entry per source_patch.
@@ -166,8 +181,8 @@ async function fetchAndCacheLbPlaylists(db, s) {
   };
 
   const remote     = [
-    ...dedupeByPatch(normalise(cfData.playlists, 'generated')),
-    ...normalise(ownData.playlists, 'user'),
+    ...dedupeByPatch(normalise(createdFor, 'generated')),
+    ...normalise(own, 'user'),
   ];
   const fetched_at = Math.floor(Date.now() / 1000);
 
@@ -225,7 +240,7 @@ async function fetchAndCacheLbPlaylists(db, s) {
   }
 
   // Fetch and cache tracks for all playlists (for UI display)
-  const cache        = buildMatchCacheLocal(db);
+  const matcher      = buildMatcher(db);
   const deleteTracks = db.prepare('DELETE FROM lb_playlist_tracks WHERE lb_mbid = ?');
   const insertTrack  = db.prepare(`
     INSERT INTO lb_playlist_tracks (lb_mbid, position, artist, title, matched)
@@ -234,21 +249,14 @@ async function fetchAndCacheLbPlaylists(db, s) {
 
   for (const p of remote) {
     try {
-      const plRes = await fetch(`${BASE}/playlist/${p.lb_mbid}`, { headers });
-      if (!plRes.ok) { logger.warn('sync', `lb-playlists: track fetch failed for "${p.title}": ${plRes.status}`); continue; }
-      const jspfTracks = (await plRes.json())?.playlist?.track || [];
+      const jspfTracks = (await listenbrainz.getPlaylist(token, p.lb_mbid))?.playlist?.track || [];
       if (!jspfTracks.length) continue;
 
       const trackRows = [];
       for (let i = 0; i < jspfTracks.length; i++) {
-        const t          = jspfTracks[i];
-        const title      = t.title || 'Unknown track';
-        const artists    = t.extension?.['https://musicbrainz.org/doc/jspf#track']?.additional_metadata?.artists || [];
-        const artistName = artists[0]?.artist_credit_name || t.creator || 'Unknown';
-        const artistMbid = artists[0]?.artist_mbid || null;
-        const resolved   = await resolveArtistWithAliases(artistName, artistMbid, cache);
-        const id         = matchLocal(resolved, title, cache);
-        trackRows.push({ lb_mbid: p.lb_mbid, position: i, artist: artistName, title, matched: id ? 1 : 0 });
+        const row = jspfTrack(jspfTracks[i]);
+        const id  = await matcher.matchWithAliases(row);
+        trackRows.push({ lb_mbid: p.lb_mbid, position: i, artist: row.artist || 'Unknown', title: row.title || 'Unknown track', matched: id ? 1 : 0 });
       }
       db.transaction(() => {
         deleteTracks.run(p.lb_mbid);
@@ -275,8 +283,7 @@ async function fetchAndCacheLbPlaylists(db, s) {
 async function syncLbPlaylists(db, settings) {
   const token   = settings.listenbrainz_token;
   const nav     = require('../../providers/navidrome');
-  const BASE    = 'https://api.listenbrainz.org/1';
-  const headers = { Authorization: `Token ${token}` };
+  const { publishPlaylist } = require('../publish');
 
   const subs = db.prepare('SELECT * FROM lb_subscriptions').all();
   if (!subs.length) {
@@ -285,35 +292,23 @@ async function syncLbPlaylists(db, settings) {
   }
 
   // Fetch current playlists from LB to detect expired MBIDs and find replacements
-  const [cfRes, ownRes] = await Promise.all([
-    fetch(`${BASE}/user/${settings.listenbrainz_username}/playlists/createdfor`, { headers }),
-    fetch(`${BASE}/user/${settings.listenbrainz_username}/playlists`, { headers }),
-  ]);
-  const cfData  = cfRes.ok  ? await cfRes.json()  : { playlists: [] };
-  const ownData = ownRes.ok ? await ownRes.json() : { playlists: [] };
-
-  const extractMbid        = pl => pl.playlist?.identifier?.split('/playlist/')?.[1]?.replace(/\/$/, '') || null;
-  const extractSourcePatch = pl => pl.playlist?.extension?.['https://musicbrainz.org/doc/jspf#playlist']
-                                     ?.additional_metadata?.algorithm_metadata?.source_patch || null;
+  const { createdFor, own } = await fetchPlaylistLists(token, settings.listenbrainz_username);
 
   // All current MBIDs from LB
-  const currentMbids = new Set([
-    ...(cfData.playlists  || []).map(extractMbid),
-    ...(ownData.playlists || []).map(extractMbid),
-  ].filter(Boolean));
+  const currentMbids = new Set([...createdFor, ...own].map(playlistMbid).filter(Boolean));
 
   // source_patch → newest MBID (first in createdfor list = most recent)
   const patchToNewestMbid = new Map();
-  for (const pl of (cfData.playlists || [])) {
-    const mbid  = extractMbid(pl);
-    const patch = extractSourcePatch(pl);
+  for (const pl of createdFor) {
+    const mbid  = playlistMbid(pl);
+    const patch = sourcePatch(pl);
     if (mbid && patch && !patchToNewestMbid.has(patch)) patchToNewestMbid.set(patch, mbid);
   }
 
   // mbid → LB title (for display name generation)
   const mbidToTitle = new Map();
-  for (const pl of [...(cfData.playlists || []), ...(ownData.playlists || [])]) {
-    const mbid = extractMbid(pl);
+  for (const pl of [...createdFor, ...own]) {
+    const mbid = playlistMbid(pl);
     if (mbid) mbidToTitle.set(mbid, pl.playlist?.title || '');
   }
 
@@ -349,31 +344,24 @@ async function syncLbPlaylists(db, settings) {
 
       const lbTitle      = mbidToTitle.get(mbid) || '';
       const displayTitle = buildNaviTitle(lbTitle, sub.source_patch);
-      const comment      = `navilist:lb ${JSON.stringify({ source: 'listenbrainz', source_patch: sub.source_patch || null, mbid })}`;
+      const config       = { source: 'listenbrainz', source_patch: sub.source_patch || null, mbid };
 
       // Fetch fresh tracks
-      const res = await fetch(`${BASE}/playlist/${mbid}`, { headers });
-      if (!res.ok) { logger.warn('sync', `lb-sync: fetch failed for ${mbid}: ${res.status}`); continue; }
-      const jspfTracks = (await res.json())?.playlist?.track || [];
+      let jspfTracks;
+      try { jspfTracks = (await listenbrainz.getPlaylist(token, mbid))?.playlist?.track || []; }
+      catch (e) { logger.warn('sync', `lb-sync: fetch failed for ${mbid}: ${e.message}`); continue; }
       if (!jspfTracks.length) { logger.info('sync', `lb-sync: ${mbid} has no tracks`); continue; }
 
-      const cache = await buildMatchCacheLocalWarmed(db, jspfTracks.map(t => {
-        const a = t.extension?.['https://musicbrainz.org/doc/jspf#track']?.additional_metadata?.artists || [];
-        return { artist: a[0]?.artist_credit_name || t.creator || '', title: t.title || '' };
-      }));
+      const rows    = jspfTracks.map(jspfTrack);
+      const matcher = await buildMatcherWarmed(db, rows);
 
       // Resolve tracks
       const trackIds       = [];
       const missingArtists = new Set();
-      for (const t of jspfTracks) {
-        const trackTitle = t.title || '';
-        const artists    = t.extension?.['https://musicbrainz.org/doc/jspf#track']?.additional_metadata?.artists || [];
-        const artistName = artists[0]?.artist_credit_name || t.creator || '';
-        const artistMbid = artists[0]?.artist_mbid || null;
-        if (!artistName || !trackTitle) continue;
-        const resolved = await resolveArtistWithAliases(artistName, artistMbid, cache);
-        const id       = matchLocal(resolved, trackTitle, cache);
-        if (id) trackIds.push(id); else missingArtists.add(artistName);
+      for (const row of rows) {
+        if (!row.artist || !row.title) continue;
+        const id = await matcher.matchWithAliases(row);
+        if (id) trackIds.push(id); else missingArtists.add(row.artist);
       }
       if (missingArtists.size)
         writeMissingArtists(db, [...missingArtists], 'lb_playlist');
@@ -387,14 +375,13 @@ async function syncLbPlaylists(db, settings) {
           deleteSub.run(sub.id);
           continue;
         }
-        await nav.replacePlaylistTracks(db, sub.navidrome_id, trackIds);
-        await nav.updatePlaylist(db, sub.navidrome_id, { name: displayTitle, comment });
+        const result = await publishPlaylist(db, { id: sub.navidrome_id, name: displayTitle, type: TYPES.LB, config, trackIds });
+        if (!result.ok) { logger.warn('sync', `lb-sync: failed to update "${displayTitle}": ${result.error}`); continue; }
         logger.info('sync', `lb-sync: "${displayTitle}" updated (${trackIds.length} tracks)`);
       } else {
-        const result = await nav.createPlaylist(db, displayTitle, trackIds);
+        const result = await publishPlaylist(db, { name: displayTitle, type: TYPES.LB, config, trackIds });
         if (!result.ok) { logger.warn('sync', `lb-sync: failed to create "${displayTitle}": ${result.error}`); continue; }
-        await nav.updatePlaylist(db, result.playlist.id, { comment });
-        db.prepare('UPDATE lb_subscriptions SET navidrome_id = ? WHERE id = ?').run(result.playlist.id, sub.id);
+        db.prepare('UPDATE lb_subscriptions SET navidrome_id = ? WHERE id = ?').run(result.playlistId, sub.id);
         logger.info('sync', `lb-sync: "${displayTitle}" created (${trackIds.length} tracks)`);
       }
       synced++;

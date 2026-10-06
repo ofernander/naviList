@@ -5,6 +5,7 @@ const db = require('../db/index');
 const navidrome = require('../providers/navidrome');
 const lidarr    = require('../providers/lidarr');
 const logger = require('../utils/logger');
+const { getSettings } = require('../db/settings');
 
 router.post('/test-navidrome', async (req, res) => {
   const { navidrome_url, navidrome_user, navidrome_password } = req.body;
@@ -37,10 +38,7 @@ router.post('/test-lidarr', async (req, res) => {
 
 router.get('/lidarr-profiles', async (req, res) => {
   try {
-    const settings = {};
-    db.prepare('SELECT key, value FROM settings').all()
-      .forEach(r => { settings[r.key] = r.value; });
-    const profiles = await lidarr.getAllProfiles(settings);
+    const profiles = await lidarr.getAllProfiles(getSettings(db));
     res.json({ ok: true, ...profiles });
   } catch (e) {
     res.json({ ok: false, error: e.message });
@@ -49,10 +47,7 @@ router.get('/lidarr-profiles', async (req, res) => {
 
 // GET /settings/api — return saved settings as JSON
 router.get('/api', (req, res) => {
-  const settings = {};
-  db.prepare('SELECT key, value FROM settings').all()
-    .forEach(r => { settings[r.key] = r.value; });
-  res.json({ ok: true, settings });
+  res.json({ ok: true, settings: getSettings(db) });
 });
 
 router.get('/', (req, res) => {
