@@ -10,7 +10,7 @@ const { writeMissingArtists } = require('./sync/helpers');
 const { publishPlaylist, snapshotPlaylist } = require('./publish');
 const { buildMatcher, FUZZY_MIN_SCORE }     = require('./match');
 const { ensureSimilarArtists }              = require('./similar');
-const { setRefreshSchedule, cancelPlaylistRefresh } = require('./refresh');
+const { setRefreshSchedule, cancelPlaylistRefresh, schedulePlaylistRefresh } = require('./refresh');
 const { TYPES, parseComment, normalizeRules } = require('./playlist_types');
 const { getSettings }                       = require('../db/settings');
 
@@ -363,7 +363,8 @@ router.post('/:id/deactivate', async (req, res) => {
   if (!result.ok) return res.json(result);
   const now = Math.floor(Date.now() / 1000);
   db.prepare('UPDATE navilist_playlists SET active = 0, deactivated_at = ? WHERE navidrome_id = ?').run(now, id);
-  db.prepare('UPDATE lb_subscriptions SET navidrome_id = NULL WHERE navidrome_id = ?').run(id);
+  // A subscription keeps pointing at this (now inactive) playlist: sync treats it
+  // as paused until the playlist is activated again.
   cancelPlaylistRefresh(id);
   logger.info('playlists', `deactivated "${id}" — removed from ND, kept locally`);
   res.json({ ok: true });
@@ -395,11 +396,14 @@ router.post('/:id/activate', async (req, res) => {
     // Replace registry row
     db.prepare('DELETE FROM navilist_playlists WHERE navidrome_id = ?').run(id);
     db.prepare(`
-      INSERT INTO navilist_playlists (navidrome_id, name, comment, type, config, active, track_count, duration, created_at)
-      VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)
-    `).run(newId, local.name, local.comment, local.type, local.config, local.track_count, local.duration, local.created_at);
+      INSERT INTO navilist_playlists (navidrome_id, name, comment, type, config, active, track_count, duration, created_at, refresh_cron)
+      VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
+    `).run(newId, local.name, local.comment, local.type, local.config, local.track_count, local.duration, local.created_at, local.refresh_cron);
+    // Resume any subscription paused on the old id
     db.prepare('UPDATE lb_subscriptions SET navidrome_id = ? WHERE navidrome_id = ?').run(newId, id);
+    db.prepare('UPDATE lfm_playlists SET navidrome_id = ? WHERE navidrome_id = ?').run(newId, id);
   })();
+  if (local.refresh_cron) schedulePlaylistRefresh(newId, local.refresh_cron);
 
   logger.info('playlists', `activated "${local.name}" → new ND id ${newId} (${trackIds.length} tracks)`);
   res.json({ ok: true, newId, count: trackIds.length });
@@ -428,7 +432,9 @@ router.post('/:id/delete', async (req, res) => {
   db.transaction(() => {
     db.prepare('DELETE FROM navilist_playlist_tracks WHERE playlist_id = ?').run(id);
     db.prepare('DELETE FROM navilist_playlists WHERE navidrome_id = ?').run(id);
-    db.prepare('UPDATE lb_subscriptions SET navidrome_id = NULL WHERE navidrome_id = ?').run(id);
+    // Deleting a subscription's playlist ends the subscription (deactivate pauses it).
+    db.prepare('DELETE FROM lb_subscriptions WHERE navidrome_id = ?').run(id);
+    db.prepare('UPDATE lfm_playlists SET enabled = 0, navidrome_id = NULL WHERE navidrome_id = ?').run(id);
   })();
 
   cancelPlaylistRefresh(id);

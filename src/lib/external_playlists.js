@@ -22,10 +22,17 @@ const { buildMatcherWarmed } = require('./match');
 const { publishPlaylist }    = require('./publish');
 const { TYPES }              = require('./playlist_types');
 
-// Resolve cached { artist, title } rows to local track ids for a snapshot.
+// Local track ids for a snapshot of cached source rows. Uses the id matched at
+// cache time (MBID / alias matches included) while it still exists in the
+// library; rows cached before track_id was stored fall back to a text match.
 async function resolveCachedRows(rows) {
-  const matcher = await buildMatcherWarmed(db, rows);
-  return rows.map(r => matcher.match({ artist: r.artist, title: r.title })).filter(Boolean);
+  const exists  = db.prepare('SELECT 1 FROM tracks WHERE id = ?');
+  const legacy  = rows.filter(r => !r.track_id);
+  const matcher = legacy.length ? await buildMatcherWarmed(db, legacy) : null;
+  return rows.map(r => r.track_id
+    ? (exists.get(r.track_id) ? r.track_id : null)
+    : matcher.match({ artist: r.artist, title: r.title })
+  ).filter(Boolean);
 }
 
 // ── ListenBrainz ──────────────────────────────────────────────────────────────

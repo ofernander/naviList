@@ -36,14 +36,16 @@ function jspfTrack(t) {
 const playlistMbid = pl => pl.playlist?.identifier?.split('/playlist/')?.[1]?.replace(/\/$/, '') || null;
 const sourcePatch  = pl => pl.playlist?.extension?.[JSPF_PL_EXT]?.additional_metadata?.algorithm_metadata?.source_patch || null;
 
-// Created-for + own playlist lists; a failed list fetch counts as empty.
+// Created-for + own playlist lists. A failed list fetch counts as empty; `ok` is
+// false when either failed, so callers never mistake an outage for "no playlists".
 async function fetchPlaylistLists(token, username) {
-  const safe = p => p.catch(e => { logger.warn('sync', `lb-playlists: list fetch failed: ${e.message}`); return { playlists: [] }; });
+  let ok = true;
+  const safe = p => p.catch(e => { ok = false; logger.warn('sync', `lb-playlists: list fetch failed: ${e.message}`); return { playlists: [] }; });
   const [cfData, ownData] = await Promise.all([
     safe(listenbrainz.getPlaylistsCreatedFor(token, username)),
     safe(listenbrainz.getUserPlaylists(token, username)),
   ]);
-  return { createdFor: cfData?.playlists || [], own: ownData?.playlists || [] };
+  return { ok, createdFor: cfData?.playlists || [], own: ownData?.playlists || [] };
 }
 
 // ── Loved tracks ──────────────────────────────────────────────────────────────
@@ -243,8 +245,8 @@ async function fetchAndCacheLbPlaylists(db, s) {
   const matcher      = buildMatcher(db);
   const deleteTracks = db.prepare('DELETE FROM lb_playlist_tracks WHERE lb_mbid = ?');
   const insertTrack  = db.prepare(`
-    INSERT INTO lb_playlist_tracks (lb_mbid, position, artist, title, matched)
-    VALUES (@lb_mbid, @position, @artist, @title, @matched)
+    INSERT INTO lb_playlist_tracks (lb_mbid, position, artist, title, matched, track_id)
+    VALUES (@lb_mbid, @position, @artist, @title, @matched, @track_id)
   `);
 
   for (const p of remote) {
@@ -256,7 +258,7 @@ async function fetchAndCacheLbPlaylists(db, s) {
       for (let i = 0; i < jspfTracks.length; i++) {
         const row = jspfTrack(jspfTracks[i]);
         const id  = await matcher.matchWithAliases(row);
-        trackRows.push({ lb_mbid: p.lb_mbid, position: i, artist: row.artist || 'Unknown', title: row.title || 'Unknown track', matched: id ? 1 : 0 });
+        trackRows.push({ lb_mbid: p.lb_mbid, position: i, artist: row.artist || 'Unknown', title: row.title || 'Unknown track', matched: id ? 1 : 0, track_id: id || null });
       }
       db.transaction(() => {
         deleteTracks.run(p.lb_mbid);
@@ -291,8 +293,13 @@ async function syncLbPlaylists(db, settings) {
     return { ok: true, synced: 0 };
   }
 
-  // Fetch current playlists from LB to detect expired MBIDs and find replacements
-  const { createdFor, own } = await fetchPlaylistLists(token, settings.listenbrainz_username);
+  // Fetch current playlists from LB to detect expired MBIDs and find replacements.
+  // Without both lists every subscription would look expired — do nothing instead.
+  const { ok: listsOk, createdFor, own } = await fetchPlaylistLists(token, settings.listenbrainz_username);
+  if (!listsOk) {
+    logger.warn('sync', 'playlists/listenbrainz: LB playlist lists unavailable — skipping this sync, subscriptions left untouched');
+    return { ok: false, error: 'ListenBrainz playlist lists unavailable' };
+  }
 
   // All current MBIDs from LB
   const currentMbids = new Set([...createdFor, ...own].map(playlistMbid).filter(Boolean));
@@ -313,11 +320,17 @@ async function syncLbPlaylists(db, settings) {
   }
 
   const updateSub = db.prepare('UPDATE lb_subscriptions SET lb_mbid = ?, navidrome_id = ? WHERE id = ?');
+  const isPaused  = db.prepare('SELECT 1 FROM navilist_playlists WHERE navidrome_id = ? AND active = 0');
   const deleteSub = db.prepare('DELETE FROM lb_subscriptions WHERE id = ?');
   let synced = 0;
 
   for (const sub of subs) {
     try {
+      // Deactivated playlist = paused subscription; activate relinks and resumes it.
+      if (sub.navidrome_id && isPaused.get(sub.navidrome_id)) {
+        logger.debug('sync', `lb-sync: subscription ${sub.lb_mbid} paused (playlist deactivated) — skipping`);
+        continue;
+      }
       let mbid = sub.lb_mbid;
 
       // Auto-rotate: if a newer MBID exists for the same source_patch, switch to it.

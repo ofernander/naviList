@@ -190,10 +190,11 @@ async function syncLfmPlaylists(db, settings) {
   `);
   const deleteTracks = db.prepare('DELETE FROM lfm_playlist_tracks WHERE lfm_id = ?');
   const insertTrack  = db.prepare(`
-    INSERT INTO lfm_playlist_tracks (lfm_id, position, artist, title, matched)
-    VALUES (@lfm_id, @position, @artist, @title, @matched)
+    INSERT INTO lfm_playlist_tracks (lfm_id, position, artist, title, matched, track_id)
+    VALUES (@lfm_id, @position, @artist, @title, @matched, @track_id)
   `);
   const updateNd    = db.prepare('UPDATE lfm_playlists SET navidrome_id = ?, last_imported_at = ? WHERE lfm_id = ?');
+  const isPaused    = db.prepare('SELECT 1 FROM navilist_playlists WHERE navidrome_id = ? AND active = 0');
   const unsubscribe = db.prepare('UPDATE lfm_playlists SET enabled = 0, navidrome_id = NULL WHERE lfm_id = ?');
 
   let total = 0;
@@ -215,7 +216,7 @@ async function syncLfmPlaylists(db, settings) {
       const matcher = await buildMatcherWarmed(db, items);
       const ids     = [];
       for (const it of items) ids.push(await matcher.matchWithAliases(it));
-      const rows = items.map((it, i) => ({ lfm_id, position: i, artist: it.artist, title: it.title, matched: ids[i] ? 1 : 0 }));
+      const rows = items.map((it, i) => ({ lfm_id, position: i, artist: it.artist, title: it.title, matched: ids[i] ? 1 : 0, track_id: ids[i] || null }));
 
       db.transaction(() => {
         deleteTracks.run(lfm_id);
@@ -229,7 +230,10 @@ async function syncLfmPlaylists(db, settings) {
 
       // Push to ND for subscribed playlists
       const sub = db.prepare('SELECT * FROM lfm_playlists WHERE lfm_id = ?').get(lfm_id);
-      if (sub?.enabled) {
+      // Deactivated playlist = paused subscription; activate relinks and resumes it.
+      const paused = sub?.navidrome_id && isPaused.get(sub.navidrome_id);
+      if (paused) logger.debug('sync', `lfm-playlists: "${title}" paused (playlist deactivated) — not pushed`);
+      if (sub?.enabled && !paused) {
         const trackIds = ids.filter(Boolean);
         if (trackIds.length) {
           const config  = { source: 'lastfm', lfm_id };

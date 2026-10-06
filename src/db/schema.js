@@ -171,6 +171,7 @@ module.exports = function (db) {
       artist    TEXT NOT NULL,
       title     TEXT NOT NULL,
       matched   INTEGER NOT NULL DEFAULT 0,
+      track_id  TEXT,
       PRIMARY KEY (lb_mbid, position)
     );
 
@@ -203,6 +204,7 @@ module.exports = function (db) {
       artist    TEXT NOT NULL,
       title     TEXT NOT NULL,
       matched   INTEGER NOT NULL DEFAULT 0,
+      track_id  TEXT,
       PRIMARY KEY (lfm_id, position)
     );
 
@@ -249,6 +251,13 @@ module.exports = function (db) {
 
   // Drop the obsolete MB length cache — superseded by per-track mbid/is_live.
   db.exec('DROP TABLE IF EXISTS mb_recordings');
+
+  // Matched local track id on cached LB / Last.fm source rows (pre-existing DBs),
+  // so snapshots reuse the exact match instead of re-matching text.
+  for (const table of ['lb_playlist_tracks', 'lfm_playlist_tracks']) {
+    const cols = db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name);
+    if (!cols.includes('track_id')) db.exec(`ALTER TABLE ${table} ADD COLUMN track_id TEXT`);
+  }
 
   // Registry type/config (pre-existing DBs), backfilled from the mirrored comment.
   const plCols = db.prepare('PRAGMA table_info(navilist_playlists)').all().map(c => c.name);

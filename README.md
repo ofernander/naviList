@@ -7,7 +7,7 @@ Self-hosted playlist manager and generator for [Navidrome](https://www.navidrome
 
 ## What it is
 
-- **Non A.I. dependant playlist generator** - No A.I. agent required, playlist are generated from database queries and clever rule sets
+- **Non A.I. dependant playlist generator** - No A.I. agent required (or even available), playlist are generated from database queries and clever rule sets
 - **Playlist manager** - Manage Navidrome playlist including Navidrome Smart Playlist.
 - **Playlist creator** - Create Navidrome playlist from tracks already present in your library based on rule based generation or from external services listed below.
 - **Playlist importer** - Import external playlist from outside sources into Navidrome, matching against tracks you already have in your library. 
@@ -18,18 +18,19 @@ Self-hosted playlist manager and generator for [Navidrome](https://www.navidrome
 - **Media downloader** - naviList has no ability to download new music directly. It can send missing artist to Lidarr from an imported playlist but will not build playlist from tracks not present in your library. 
 
 ## Features
-- **naviList playlists** — rules-based generation using stats, tags, artists, decades, etc... Rules are weighted and interleaved, not concatenated. Supports auto-refresh on a cron schedule.
-- **Radio style playlists** — seed one or more artists and naviList finds similar music from your library using cached Last.fm similarity data. Adjustable depth (close / medium / wide).
-- **Navidrome Smart Playlists (NSP)** — a UI wrapper for Navidrome's native `.nsp` smart playlist format.
-- **Manual playlists** — browse your library and build playlists by hand.
-- **Import playlists** — Import external playlist, support for m3u, JSPF, [exportify.net](https://exportify.net) CSV, naviList CSV, naviList JSON.
+- **naviList playlists** - In house rules-based generation using stats, tags, genres, artists, decades, etc... 
+- **Radio style playlists** - seed one or more artists and naviList finds similar music from your library using cached Last.fm similarity data. Adjustable depth (close / medium / wide).
+- **Navidrome Smart Playlists (NSP)** - a UI wrapper for Navidrome's native `.nsp` smart playlist format.
+- **Manual playlists** - browse your library and build playlists by hand.
+- **Import playlists** - Import external playlist, support for m3u, JSPF, [exportify.net](https://exportify.net) CSV, naviList CSV, naviList JSON.
+- **Cron Scheduling** - All playlist support Cron scheduling. Use case would be daily generation of playlist for daily variety. 
 
 ## External service integration
-- **Last.fm** — syncs listen history, loved tracks, top artists, top tracks, artist tags, similar artists, and chart-based playlists (weekly, monthly, all-time). Subscribe to auto-updating playlists or save point-in-time snapshots.
-- **ListenBrainz** — syncs listen history, loved tracks, top artists, top tracks, and generated playlists (Weekly Jams, Weekly Exploration, Daily Jams). Same subscribe/snapshot model as Last.fm.
-- **Maloja** — self-hosted scrobbler integration. Syncs listen history, top artists, and top tracks from your own [Maloja](https://github.com/krateng/maloja) instance. Configured via URL and API key.
-- **Spotify/Exportify** — Spotify cannot be directly integrated at this time. Spotify playlist can be imported via the third party exporter [exportify.net](https://exportify.net). Further Spotify support will not be pursued due to their API restrictions & cost. 
-- **Lidarr** — when a subscribed playlist contains artists not in your library, naviList can automatically queue them in Lidarr for download.
+- **Last.fm** - syncs listen history, loved tracks, top artists, top tracks, artist tags, similar artists, and chart-based playlists (weekly, monthly, all-time). Subscribe to auto-updating playlists or save point-in-time snapshots.
+- **ListenBrainz** - syncs listen history, loved tracks, top artists, top tracks, and generated playlists (Weekly Jams, Weekly Exploration, Daily Jams). Same subscribe/snapshot model as Last.fm.
+- **Maloja** - self-hosted scrobbler integration. Syncs listen history, top artists, and top tracks from your own [Maloja](https://github.com/krateng/maloja) instance. Configured via URL and API key.
+- **Spotify/Exportify** - Spotify cannot be directly integrated at this time. Spotify playlist can be imported via the third party exporter [exportify.net](https://exportify.net). Further Spotify support will not be pursued due to their API restrictions & cost. 
+- **Lidarr** - when a subscribed playlist contains artists not in your library, naviList can automatically queue them in Lidarr for download.
 
 ## A.I. Disclosure 
 Coding agents were used for the development of this project with human oversight and understanding of all core functions.
@@ -51,7 +52,7 @@ services:
       - "3000:3000"
     volumes:
       - ./data:/app/data
-      - ./nsp:/nsp                # NSP playlist output — must match Navidrome's PlaylistsPath
+      - ./nsp:/nsp                # NSP playlist output - must match Navidrome's PlaylistsPath
     environment:
       - PORT=3000
       - LOG_LEVEL=info
@@ -70,22 +71,22 @@ services:
 | `PORT` | `3000` | HTTP port naviList listens on |
 | `LOG_LEVEL` | `info` | Log verbosity: `debug`, `info`, `warn`, `error` |
 | `DB_PATH` | `/app/data/navilist.db` | Path to the SQLite database file |
-| `NAVIDROME_URL` | — | Navidrome base URL e.g. `http://navidrome:4533` |
-| `NAVIDROME_USER` | — | Navidrome username |
-| `NAVIDROME_PASSWORD` | — | Navidrome password |
-| `MUSIC_FOLDER_IDS` | — | Comma-separated Navidrome music folder IDs to restrict sync to |
-| `LASTFM_API_KEY` | — | Last.fm API key |
-| `LASTFM_USERNAME` | — | Last.fm username |
-| `LISTENBRAINZ_TOKEN` | — | ListenBrainz user token |
-| `LISTENBRAINZ_USERNAME` | — | ListenBrainz username |
-| `MALOJA_URL` | — | Maloja base URL e.g. `http://maloja:42010` |
-| `MALOJA_API_KEY` | — | Maloja API key |
-| `LIDARR_URL` | — | Lidarr base URL e.g. `http://lidarr:8686` |
-| `LIDARR_API_KEY` | — | Lidarr API key |
-| `LIDARR_ROOT_FOLDER` | — | Lidarr root folder path e.g. `/music` |
-| `LIDARR_QUALITY_PROFILE_ID` | — | Lidarr quality profile ID |
-| `LIDARR_METADATA_PROFILE_ID` | — | Lidarr metadata profile ID |
-| `NL_NSP_PATH` | — | Path inside the container where `.nsp` files are written |
+| `NAVIDROME_URL` | - | Navidrome base URL e.g. `http://navidrome:4533` |
+| `NAVIDROME_USER` | - | Navidrome username |
+| `NAVIDROME_PASSWORD` | - | Navidrome password |
+| `MUSIC_FOLDER_IDS` | - | Comma-separated Navidrome music folder IDs to restrict sync to |
+| `LASTFM_API_KEY` | - | Last.fm API key |
+| `LASTFM_USERNAME` | - | Last.fm username |
+| `LISTENBRAINZ_TOKEN` | - | ListenBrainz user token |
+| `LISTENBRAINZ_USERNAME` | - | ListenBrainz username |
+| `MALOJA_URL` | - | Maloja base URL e.g. `http://maloja:42010` |
+| `MALOJA_API_KEY` | - | Maloja API key |
+| `LIDARR_URL` | - | Lidarr base URL e.g. `http://lidarr:8686` |
+| `LIDARR_API_KEY` | - | Lidarr API key |
+| `LIDARR_ROOT_FOLDER` | - | Lidarr root folder path e.g. `/music` |
+| `LIDARR_QUALITY_PROFILE_ID` | - | Lidarr quality profile ID |
+| `LIDARR_METADATA_PROFILE_ID` | - | Lidarr metadata profile ID |
+| `NL_NSP_PATH` | - | Path inside the container where `.nsp` files are written |
 
 ### 3. Navidrome configuration
 
@@ -123,7 +124,7 @@ npm install
 npm run dev
 ```
 
-Runs with `nodemon` — restarts automatically on file changes. Server starts on `http://localhost:3000`.
+Runs with `nodemon` - restarts automatically on file changes. Server starts on `http://localhost:3000`.
 
 ### Production
 
@@ -140,7 +141,7 @@ docker build -t navilist .
 
 ## First run
 
-1. Open `http://localhost:3000` — you'll land on the Playlists page.
+1. Open `http://localhost:3000` - you'll land on the Playlists page.
 2. Go to **Settings** and configure Navidrome credentials. Hit **Test Connection**.
 3. Go to **Services** and hit **Sync Library** to pull your Navidrome library into naviList's local database.
 4. Optionally configure Last.fm, ListenBrainz, and Lidarr in Settings.
@@ -154,34 +155,34 @@ After initial setup, naviList polls Navidrome for library changes every 5 minute
 
 ```
 src/
-  server.js           — entry point, route mounts, startup
+  server.js           - entry point, route mounts, startup
   db/
-    index.js          — DB initialisation
-    schema.js         — full schema (all tables)
+    index.js          - DB initialisation
+    schema.js         - full schema (all tables)
   lib/
-    playlists.js      — playlist CRUD routes
-    pl_engine.js      — rules-based playlist generation engine
-    nsp.js            — NSP filesystem routes
-    settings.js       — settings save/load routes
-    status.js         — services status route
-    logs.js           — log streaming route
+    playlists.js      - playlist CRUD routes
+    pl_engine.js      - rules-based playlist generation engine
+    nsp.js            - NSP filesystem routes
+    settings.js       - settings save/load routes
+    status.js         - services status route
+    logs.js           - log streaming route
     sync/
-      index.js        — sync orchestration, auto-refresh, cron scheduling
-      listenbrainz.js — ListenBrainz sync jobs
-      lastfm.js       — Last.fm sync jobs
-      helpers.js      — shared sync utilities
+      index.js        - sync orchestration, auto-refresh, cron scheduling
+      listenbrainz.js - ListenBrainz sync jobs
+      lastfm.js       - Last.fm sync jobs
+      helpers.js      - shared sync utilities
   providers/
-    navidrome.js      — Navidrome / Subsonic API
-    lastfm.js         — Last.fm API
-    listenbrainz.js   — ListenBrainz API
-    lidarr.js         — Lidarr API
-    musicbrainz.js    — MusicBrainz API
-    deezer.js         — Deezer API (artist images)
+    navidrome.js      - Navidrome / Subsonic API
+    lastfm.js         - Last.fm API
+    listenbrainz.js   - ListenBrainz API
+    lidarr.js         - Lidarr API
+    musicbrainz.js    - MusicBrainz API
+    deezer.js         - Deezer API (artist images)
 public/
-  playlists.html      — main UI
-  settings.html       — settings UI
-  status.html         — services UI
-  css/main.css        — all styles
+  playlists.html      - main UI
+  settings.html       - settings UI
+  status.html         - services UI
+  css/main.css        - all styles
   assets/
 ```
 
