@@ -996,6 +996,69 @@ select:focus {
 }
 .rb-rule-remove:hover { color: var(--danger); background: var(--danger-tint); }
 
+/* ── Rule builder blocks ─────────────────────────────────────────────────── */
+.rb-section-hint { font-size: 0.8rem; color: var(--text-dim); margin: -0.25rem 0 0.6rem; }
+
+.rb-blocks { display: flex; flex-direction: column; gap: 0.75rem; margin-bottom: 0.75rem; }
+
+.rb-block {
+  border: 0.5px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--surface-2);
+  padding: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+/* Block start: rule type | value | share | count | remove */
+.rb-rule.rb-block-head { grid-template-columns: 130px 1fr 125px auto 2rem; }
+
+/* Similar options under an Artist block */
+.rb-block-opts {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem;
+  padding: 0 0.75rem 0 calc(130px + 1.25rem);
+}
+.rb-block-opts select,
+.rb-block-opts input[type="number"] {
+  padding: 0.3rem 0.45rem;
+  background: var(--surface);
+  border: 0.5px solid var(--border);
+  border-radius: 5px;
+  font-size: 0.82rem;
+  color: var(--text);
+}
+.rb-block-opts select { width: 150px; }
+
+/* Conditions: indented under the block start */
+.rb-block-conds { display: flex; flex-direction: column; gap: 0.4rem; margin-left: 1.25rem; }
+.rb-rule.rb-cond { grid-template-columns: 1.6rem 130px 1fr 90px 2rem; padding: 0.45rem 0.75rem; }
+.rb-cond-joiner { font-size: 0.75rem; color: var(--text-dim); text-align: right; }
+
+.rb-inline-field {
+  display: flex; flex-direction: row; align-items: center; gap: 0.3rem;
+  margin: 0;   /* the global label style stacks + spaces fields */
+  font-size: 0.78rem; color: var(--text-dim); white-space: nowrap;
+}
+.rb-rule .rb-inline-field input[type="number"],
+.rb-block-opts .rb-inline-field input[type="number"] { width: 64px; flex-shrink: 0; }
+
+.rb-add-cond {
+  align-self: flex-start;
+  margin-left: 1.25rem;
+  background: none; border: none; cursor: pointer;
+  font-size: 0.8rem; color: var(--accent);
+  padding: 0.15rem 0.25rem;
+}
+.rb-add-cond:hover { text-decoration: underline; }
+
+@media (max-width: 640px) {
+  .rb-rule.rb-block-head { grid-template-columns: 1fr 1fr; }
+  .rb-rule.rb-cond       { grid-template-columns: 1fr 1fr; }
+  .rb-block-opts         { padding-left: 0.75rem; }
+  .rb-cond-joiner:empty  { display: none; }
+}
+
 .rb-preview-count {
   font-size: 0.72rem;
   color: var(--text-dimmer);

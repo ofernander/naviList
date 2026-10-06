@@ -108,32 +108,36 @@ async function regenerateRulesPlaylists(reason) {
   for (const row of rows) await refreshPlaylist(row, reason);
 }
 
-// ── Legacy radio playlists ────────────────────────────────────────────────────
+// ── Legacy comments ───────────────────────────────────────────────────────────
 
-// Radio playlists became rules playlists (artist rule + similar option). The
-// registry is converted by schema.js; this rewrites the Navidrome comment of any
-// playlist still carrying `navilist:radio`, so the UI and Navidrome agree. Runs
-// at startup; idempotent (a failed write is retried next start).
-async function migrateLegacyRadioComments() {
-  const rows = db.prepare("SELECT * FROM navilist_playlists WHERE comment LIKE 'navilist:radio %'").all();
-  if (!rows.length) return;
+// The registry is converted to the current config shape by schema.js; this
+// rewrites the Navidrome comment of any rules / legacy radio playlist whose
+// comment is still in an older shape (radio, flat v1 rules), so the UI and
+// Navidrome agree. Runs at startup; idempotent (a failed write is retried next
+// start).
+async function migrateLegacyComments() {
+  const rows = db.prepare(
+    "SELECT * FROM navilist_playlists WHERE comment LIKE 'navilist:radio %' OR comment LIKE 'navilist:navilist %'"
+  ).all();
   const setComment = db.prepare('UPDATE navilist_playlists SET comment = ? WHERE navidrome_id = ?');
-  let done = 0;
+  let done = 0, stale = 0;
   for (const row of rows) {
     const { type, config } = typeAndConfig(row);
     const comment = buildComment(type, config);
+    if (comment === row.comment) continue;
+    stale++;
     if (row.active) {
       const res = await navidrome.updatePlaylist(db, row.navidrome_id, { comment });
-      if (!res.ok) { logger.warn('refresh', `radio migration: "${row.name}" comment not updated: ${res.error}`); continue; }
+      if (!res.ok) { logger.warn('refresh', `comment migration: "${row.name}" not updated: ${res.error}`); continue; }
     }
     setComment.run(comment, row.navidrome_id);
     done++;
   }
-  logger.info('refresh', `radio migration: ${done}/${rows.length} radio playlist(s) now rules playlists`);
+  if (stale) logger.info('refresh', `comment migration: ${done}/${stale} playlist comment(s) updated to the current rules format`);
 }
 
 module.exports = {
-  migrateLegacyRadioComments,
+  migrateLegacyComments,
   refreshPlaylist,
   schedulePlaylistRefresh,
   cancelPlaylistRefresh,

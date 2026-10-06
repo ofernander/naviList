@@ -303,7 +303,7 @@ module.exports = function (db) {
 
   // Configs saved in an older shape: rules (term `tag` → `genre`, `required` →
   // `use`) and legacy radio playlists (→ rules playlist with similar-artist
-  // rules). The Navidrome comment follows (refresh.migrateLegacyRadioComments /
+  // rules). The Navidrome comment follows (refresh.migrateLegacyComments /
   // next publish). Only rows that actually change are written.
   const configRows = db.prepare(
     "SELECT navidrome_id, type, config FROM navilist_playlists WHERE type IN ('navilist', 'radio') AND config IS NOT NULL"

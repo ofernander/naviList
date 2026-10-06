@@ -130,6 +130,14 @@ router.get('/api/artists', (req, res) => {
   res.json({ ok: true, artists });
 });
 
+// GET /playlists/api/:id/rules — a rules playlist's config in the current (v2)
+// shape, for the rule builder: registry first, else the Navidrome comment.
+router.get('/api/:id/rules', (req, res) => {
+  const { type, config } = playlistTypeConfig(req.params.id, null);
+  if (type !== TYPES.NAVILIST || !config) return res.json({ ok: false, error: 'Not a rules playlist' });
+  res.json({ ok: true, rules: config });
+});
+
 // GET /playlists/api/:id — JSON detail (inactive playlists served from local snapshot)
 router.get('/api/:id', async (req, res) => {
   const { id } = req.params;
@@ -188,6 +196,8 @@ router.post('/save-navilist', async (req, res) => {
   if (!name?.trim())     return res.json({ ok: false, error: 'name required' });
   if (!rules)            return res.json({ ok: false, error: 'rules required' });
   if (!trackIds?.length) return res.json({ ok: false, error: 'trackIds required' });
+  const validation = engine.validateRules(rules);
+  if (!validation.ok) return res.json({ ok: false, error: validation.errors.join(' ') });
 
   const published = await publishPlaylist(db, { name: name.trim(), type: TYPES.NAVILIST, config: rules, trackIds });
   if (!published.ok) return res.json(published);
@@ -275,16 +285,11 @@ router.post('/:id/rules', async (req, res) => {
   res.json({ ok: true, count: trackIds.length });
 });
 
-// POST /playlists/:id/preview — dry run, returns per-rule counts
-router.post('/:id/preview', async (req, res) => {
-  const { rules } = req.body;
-  if (!rules) return res.json({ ok: false, error: 'rules required' });
-
-  const validation = engine.validateRules(rules);
-  if (!validation.ok) return res.json({ ok: false, errors: validation.errors });
-
-  const preview = await engine.previewRules(db, rules);
-  res.json({ ok: true, preview });
+// POST /playlists/preview-blocks — per-block track counts for the rule builder
+// (no combining, no ND writes)
+router.post('/preview-blocks', async (req, res) => {
+  const result = await engine.previewRules(db, req.body.rules);
+  res.json(result);
 });
 
 // POST /playlists/:id/deactivate — remove from ND, keep locally

@@ -171,9 +171,16 @@
     </div>
 
     <div class="rb-section">
-      <div class="rb-section-label">Rules</div>
-      <div class="rb-rules-list" id="rbRulesList"></div>
-      <button class="rb-add-rule" id="rbAddRule">+ Add rule</button>
+      <div class="rb-section-label">Global Conditions</div>
+      <div class="rb-rules-list" id="rbSharedConditions"></div>
+      <button class="rb-add-rule" id="rbAddShared">+ Add condition</button>
+    </div>
+
+    <div class="rb-section">
+      <div class="rb-section-label">Rule Blocks</div>
+      <div class="rb-section-hint">Each block is a starting point narrowed by its own conditions. The playlist mixes the blocks.</div>
+      <div class="rb-blocks" id="rbBlocks"></div>
+      <button class="rb-add-rule" id="rbAddBlock">+ Add block</button>
     </div>
 
     <div class="rb-section" style="margin-top:1rem;">
@@ -444,7 +451,7 @@
     // Rule builder state
     let rbPlaylistName      = '';
     let rbReturnTo          = 'list';
-    let rbRules             = [];
+    let rbConfig            = { blocks: [], conditions: [] };   // rules config being edited (v2 blocks)
     let rbMode              = 'create';
     let rbEditingPlaylistId = null;
     let rbPreviewTracks     = [];
@@ -1022,14 +1029,13 @@
 
     // ── Playlist actions ───────────────────────────────────────────────────
     function editRules(p) {
-      const existing = parseRules(p);
-      openRuleBuilder(p.name, existing, 'detail', p.id);
+      openRuleBuilder(p.name, 'detail', p.id);
     }
 
     async function regenerate(id, btn) {
       const p        = allPlaylists.find(pl => pl.id === id);
-      const existing = parseRules(p);
-      if (!existing?.rules?.length) { alert('No rules found. Use "Edit rules" first.'); return; }
+      const existing = parseRules(p);   // any saved shape — the server normalizes it
+      if (!existing) { alert('No rules found. Use "Edit rules" first.'); return; }
       if (btn) { btn.disabled = true; btn.textContent = 'Regenerating...'; }
       try {
         const res  = await fetch(`/playlists/${id}/rules`, {
@@ -1162,21 +1168,18 @@
     async function loadArtists() { try { const d = await (await fetch('/playlists/api/artists')).json(); artistList = d.artists || []; } catch (e) {} }
     async function loadAlbums()  { try { const d = await (await fetch('/playlists/api/albums')).json();  albumList  = d.albums  || []; } catch (e) {} }
 
-    function openRuleBuilder(playlistName, existingRules, returnTo, editingId = null) {
+    // Open the rule builder: a new playlist starts with one Artist block; an
+    // existing one loads its config from the server, already in the current
+    // (v2 block) shape whatever format it was saved in.
+    async function openRuleBuilder(playlistName, returnTo, editingId = null) {
       loadGenres(); loadArtists();
       rbPlaylistName      = playlistName;
       rbReturnTo          = returnTo;
       rbMode              = editingId ? 'edit' : 'create';
       rbEditingPlaylistId = editingId || null;
       rbPreviewTracks     = [];
-
-      if (existingRules?.rules?.length) {
-        document.getElementById('rbLimit').value         = existingRules.limit          ?? 25;
-        rbRules = existingRules.rules.map(normalizeRule);
-      } else {
-        document.getElementById('rbLimit').value         = 25;
-        rbRules = [defaultRule()];
-      }
+      rbConfig            = { blocks: [newBlock()], conditions: [] };
+      document.getElementById('rbLimit').value = 25;
 
       document.getElementById('rulesNameInput').value       = playlistName;
       document.getElementById('rbStatus').textContent       = '';
@@ -1187,98 +1190,228 @@
       document.getElementById('rulesSaveBtn').disabled    = false;
       document.getElementById('rulesSaveBtn').textContent = 'Save & Generate';
 
-      renderRuleRows();
+      if (editingId) {
+        document.getElementById('rbBlocks').innerHTML = '<div class="rb-section-hint">Loading rules…</div>';
+        document.getElementById('rbSharedConditions').innerHTML = '';
+        showRulesView();
+        try {
+          const d = await (await fetch(`/playlists/api/${editingId}/rules`)).json();
+          if (d.ok) {
+            rbConfig = { blocks: d.rules.blocks || [], conditions: d.rules.conditions || [] };
+            if (!rbConfig.blocks.length) rbConfig.blocks = [newBlock()];
+            document.getElementById('rbLimit').value = d.rules.limit ?? 25;
+          }
+        } catch (e) {}
+        renderBuilder();
+        return;
+      }
+      renderBuilder();
       showRulesView();
-      if (rbMode === 'create') setTimeout(() => document.getElementById('rulesNameInput').focus(), 50);
+      setTimeout(() => document.getElementById('rulesNameInput').focus(), 50);
     }
 
-    function defaultRule() { return { term: 'decade', value: '', weight: 1, options: {}, use: 'require' }; }
-
-    // Rule in the current shape. Legacy saved rules used term 'tag' for genre,
-    // `required: true|false` instead of `use`, and an unused `mode` — loaded in the
-    // current shape so saving writes it (mirrors normalizeRules in lib/playlist_types.js).
-    const RULE_USES = { require: 'Required', prefer: 'Preferred', exclude: 'Excluded' };
-    // Artist rule option: also include the artist's most similar artists (the
+    // Artist block option: also include the artist's most similar artists (the
     // "radio" option) — Close / Medium / Wide = 5 / 15 / 40 artists you own —
     // from ListenBrainz (default, no key needed) or Last.fm (needs an API key).
+    // Seed share = how much of the block the artist itself gets (blank = even).
     const SIMILAR_OPTIONS = { '': 'Similar: Off', close: 'Similar: Close', medium: 'Similar: Medium', wide: 'Similar: Wide' };
     const SIMILAR_SOURCE_OPTIONS = { listenbrainz: 'via ListenBrainz', lastfm: 'via Last.fm' };
     const SIMILAR_DEFAULT_SOURCE = 'listenbrainz';
-    function normalizeRule(r) {
-      const { required, mode, ...rest } = r;
-      const use = RULE_USES[r.use] ? r.use : (required === false ? 'prefer' : 'require');
-      return { ...rest, term: r.term === 'tag' ? 'genre' : r.term, use };
+    // Conditions narrow a block: Only matching tracks, or Not them.
+    const CONDITION_USES = { require: 'Only', exclude: 'Not' };
+
+    function newBlock()     { return { rule: { term: 'artist', value: '', options: {} }, conditions: [] }; }
+    function newCondition() { return { term: 'decade', value: '', options: {}, use: 'require' }; }
+    const hasValue = v => !(v === undefined || v === null || v === '' || (Array.isArray(v) && !v.length));
+
+    // Block shares are strict percentages of the playlist: all blank = even;
+    // set shares total 100%, or stay under 100% so blank blocks split the rest.
+    // Mirrors shareProblem() in lib/playlist_types.js (the server also refuses).
+    function shareProblem(blocks) {
+      if (blocks.length < 2) return null;
+      const set = blocks.map(b => b.share).filter(s => typeof s === 'number');
+      if (!set.length) return null;
+      const total  = Math.round(set.reduce((n, s) => n + s, 0) * 10) / 10;
+      const blanks = blocks.length - set.length;
+      if (!blanks) return Math.abs(total - 100) <= 0.5 ? null : `Block shares add up to ${total}% — they need to total 100%.`;
+      return total < 99.5 ? null
+        : `Block shares add up to ${total}%, leaving nothing for the ${blanks === 1 ? 'block' : `${blanks} blocks`} without a share — keep the total under 100% or clear the shares.`;
     }
 
-    function renderRuleRows() {
-      const list = document.getElementById('rbRulesList');
-      list.innerHTML = '';
-      rbRules.forEach((rule, i) => list.appendChild(buildRuleRow(rule, i)));
+    function renderBuilder() {
+      renderBlocks();
+      renderConditionList(document.getElementById('rbSharedConditions'), rbConfig.conditions, { shared: true });
+      scheduleRuleCountPreview();
     }
 
-    function buildRuleRow(rule, index) {
-      const row = document.createElement('div');
-      row.className = 'rb-rule'; row.dataset.index = index;
+    function renderBlocks() {
+      const wrap = document.getElementById('rbBlocks');
+      wrap.innerHTML = '';
+      rbConfig.blocks.forEach((block, i) => wrap.appendChild(buildBlockCard(block, i)));
+    }
 
-      const termSel = document.createElement('select');
-      termSel.setAttribute('aria-label', 'Term');
+    // Term dropdown; changing the term resets the rule's value and options.
+    function buildTermSelect(rule, onChange) {
+      const sel = document.createElement('select');
+      sel.setAttribute('aria-label', 'Rule type');
       Object.entries(TERMS).forEach(([key, def]) => {
         const opt = document.createElement('option');
         opt.value = key; opt.textContent = def.label;
         if (key === rule.term) opt.selected = true;
-        termSel.appendChild(opt);
+        sel.appendChild(opt);
       });
+      sel.addEventListener('change', () => {
+        rule.term = sel.value;
+        rule.value = sel.value === 'stats' ? 'top_played' : '';
+        rule.options = {};
+        onChange();
+      });
+      return sel;
+    }
 
+    function removeButton(title, onClick) {
+      const btn = document.createElement('button');
+      btn.className = 'rb-rule-remove'; btn.textContent = '✕'; btn.title = title;
+      btn.addEventListener('click', onClick);
+      return btn;
+    }
+
+    function buildBlockCard(block, index) {
+      const card = document.createElement('div');
+      card.className = 'rb-block';
+
+      // Head: what the block starts from
+      const head = document.createElement('div');
+      head.className = 'rb-rule rb-block-head';
       const valueWrap = document.createElement('div');
       valueWrap.style.minWidth = '0';
-      renderValueInput(valueWrap, rule);
+      renderValueInput(valueWrap, block.rule);
 
-      // Required (filter in) / Preferred (boost by weight) / Excluded (filter out)
-      const useSel = document.createElement('select');
-      useSel.className = `rb-use is-${rule.use}`;
-      useSel.setAttribute('aria-label', 'How this rule is used');
-      Object.entries(RULE_USES).forEach(([value, label]) => {
-        const opt = document.createElement('option');
-        opt.value = value; opt.textContent = label;
-        if (value === rule.use) opt.selected = true;
-        useSel.appendChild(opt);
+      const shareWrap = document.createElement('label');
+      shareWrap.className = 'rb-inline-field';
+      shareWrap.title = 'Share of the playlist (blank = split evenly with the other blocks)';
+      const shareInput = document.createElement('input');
+      shareInput.type = 'number'; shareInput.min = '1'; shareInput.max = '100'; shareInput.placeholder = 'even';
+      shareInput.value = block.share ?? '';
+      shareInput.addEventListener('input', () => {
+        const v = parseFloat(shareInput.value);
+        if (v > 0) block.share = Math.min(100, v); else delete block.share;
       });
-      useSel.addEventListener('change', () => {
-        rbRules[index].use = useSel.value;
-        renderRuleRows();
+      shareWrap.append(shareInput, document.createTextNode('% share'));
+      shareWrap.style.visibility = rbConfig.blocks.length > 1 ? '' : 'hidden';
+
+      const count = document.createElement('span');
+      count.className = 'rb-preview-count';
+
+      head.append(
+        buildTermSelect(block.rule, () => { renderBlocks(); scheduleRuleCountPreview(); }),
+        valueWrap, shareWrap, count,
+        removeButton('Remove block', () => { rbConfig.blocks.splice(index, 1); renderBlocks(); scheduleRuleCountPreview(); })
+      );
+      card.appendChild(head);
+
+      if (block.rule.term === 'artist') card.appendChild(buildSimilarOptions(block.rule));
+
+      const conds = document.createElement('div');
+      conds.className = 'rb-block-conds';
+      renderConditionList(conds, block.conditions);
+      const addCond = document.createElement('button');
+      addCond.className = 'rb-add-cond'; addCond.textContent = '+ Add condition';
+      addCond.addEventListener('click', () => { block.conditions.push(newCondition()); renderConditionList(conds, block.conditions); });
+      card.append(conds, addCond);
+      return card;
+    }
+
+    // Similar options for an Artist block: depth, source, seed share.
+    function buildSimilarOptions(rule) {
+      const row = document.createElement('div');
+      row.className = 'rb-block-opts';
+      const o = rule.options || (rule.options = {});
+
+      const simSel = document.createElement('select');
+      simSel.setAttribute('aria-label', 'Similar artists');
+      simSel.title = 'Also include similar artists from your library';
+      Object.entries(SIMILAR_OPTIONS).forEach(([value, label]) => {
+        const opt = document.createElement('option'); opt.value = value; opt.textContent = label;
+        if (value === (o.similar || '')) opt.selected = true;
+        simSel.appendChild(opt);
       });
-
-      const weightWrap = document.createElement('div');
-      weightWrap.className    = 'rb-weight-wrap';
-      // Weight only applies to Preferred rules; hidden (not removed) so the grid column stays aligned.
-      weightWrap.style.visibility = rule.use === 'prefer' ? '' : 'hidden';
-      const weightLabel = document.createElement('span'); weightLabel.textContent = 'Weight';
-      const weightInput = document.createElement('input');
-      weightInput.type  = 'number'; weightInput.min = '1'; weightInput.max = '10'; weightInput.style.width = '60px';
-      weightInput.value = rule.weight ?? 1; weightInput.setAttribute('aria-label', 'Weight');
-      weightWrap.appendChild(weightLabel); weightWrap.appendChild(weightInput);
-
-      const removeBtn = document.createElement('button');
-      removeBtn.className = 'rb-rule-remove'; removeBtn.textContent = '✕'; removeBtn.title = 'Remove rule';
-
-      termSel.addEventListener('change', () => {
-        rbRules[index].term = termSel.value;
-        rbRules[index].value = termSel.value === 'stats' ? 'top_played' : '';
-        rbRules[index].options = {};
-        renderValueInput(valueWrap, rbRules[index]);
+      simSel.addEventListener('change', () => {
+        if (simSel.value) { o.similar = simSel.value; o.similar_source = o.similar_source || SIMILAR_DEFAULT_SOURCE; }
+        else { delete o.similar; delete o.similar_source; delete o.seed_share; }
+        row.replaceWith(buildSimilarOptions(rule));
         scheduleRuleCountPreview();
       });
-      weightInput.addEventListener('change', () => { rbRules[index].weight = parseInt(weightInput.value) || 1; });
-      removeBtn.addEventListener('click', () => { rbRules.splice(index, 1); renderRuleRows(); });
+      row.appendChild(simSel);
+      if (!o.similar) return row;
 
-      const previewSpan = document.createElement('span');
-      previewSpan.className = 'rb-preview-count'; previewSpan.textContent = '';
+      const srcSel = document.createElement('select');
+      srcSel.setAttribute('aria-label', 'Similar artists source');
+      Object.entries(SIMILAR_SOURCE_OPTIONS).forEach(([value, label]) => {
+        const opt = document.createElement('option'); opt.value = value; opt.textContent = label;
+        if (value === (o.similar_source || SIMILAR_DEFAULT_SOURCE)) opt.selected = true;
+        srcSel.appendChild(opt);
+      });
+      srcSel.addEventListener('change', () => { o.similar_source = srcSel.value; scheduleRuleCountPreview(); });
 
-      row.appendChild(termSel); row.appendChild(valueWrap);
-      row.appendChild(useSel); row.appendChild(weightWrap);
-      row.appendChild(removeBtn); row.appendChild(previewSpan);
-      scheduleRuleCountPreview();
+      const seedWrap = document.createElement('label');
+      seedWrap.className = 'rb-inline-field';
+      seedWrap.title = 'How much of this block is the artist itself (blank = one artist among the similar ones)';
+      const seedInput = document.createElement('input');
+      seedInput.type = 'number'; seedInput.min = '0'; seedInput.max = '100'; seedInput.placeholder = 'even';
+      seedInput.value = o.seed_share ?? '';
+      seedInput.addEventListener('change', () => {
+        const v = parseFloat(seedInput.value);
+        if (v >= 0) o.seed_share = Math.min(100, v); else delete o.seed_share;
+      });
+      seedWrap.append(document.createTextNode('seed'), seedInput, document.createTextNode('%'));
+
+      row.append(srcSel, seedWrap);
       return row;
+    }
+
+    // Condition rows for a block (or the shared section). A condition repeating
+    // the previous one's type with Only is labelled "or" — either matches.
+    // Shared conditions: Artist can only be Not — "Only artist X" for every
+    // block would reduce the playlist to one artist.
+    function renderConditionList(container, list, { shared = false } = {}) {
+      const rerender = () => renderConditionList(container, list, { shared });
+      container.innerHTML = '';
+      list.forEach((cond, j) => {
+        const notOnly = shared && cond.term === 'artist';
+        if (notOnly) cond.use = 'exclude';
+        const row = document.createElement('div');
+        row.className = 'rb-rule rb-cond';
+
+        const prev = list[j - 1];
+        const joiner = document.createElement('span');
+        joiner.className = 'rb-cond-joiner';
+        joiner.textContent = prev && prev.term === cond.term && prev.use === 'require' && cond.use === 'require' ? 'or' : '';
+
+        const valueWrap = document.createElement('div');
+        valueWrap.style.minWidth = '0';
+        renderValueInput(valueWrap, cond);
+
+        const useSel = document.createElement('select');
+        useSel.className = `rb-use is-${cond.use}`;
+        useSel.setAttribute('aria-label', 'Only or Not');
+        Object.entries(CONDITION_USES).forEach(([value, label]) => {
+          if (notOnly && value !== 'exclude') return;
+          const opt = document.createElement('option'); opt.value = value; opt.textContent = label;
+          if (value === cond.use) opt.selected = true;
+          useSel.appendChild(opt);
+        });
+        if (notOnly) useSel.title = 'An artist applied to every block can only be excluded';
+        useSel.addEventListener('change', () => { cond.use = useSel.value; rerender(); scheduleRuleCountPreview(); });
+
+        row.append(
+          joiner,
+          buildTermSelect(cond, () => { rerender(); scheduleRuleCountPreview(); }),
+          valueWrap, useSel,
+          removeButton('Remove condition', () => { list.splice(j, 1); rerender(); scheduleRuleCountPreview(); })
+        );
+        container.appendChild(row);
+      });
     }
 
     function renderValueInput(container, rule) {
@@ -1390,79 +1523,59 @@
           debounce = setTimeout(() => scheduleRuleCountPreview(), 400);
         });
 
-        if (rule.term === 'artist') {
-          const wrap = document.createElement('div');
-          wrap.style.cssText = 'display:flex; gap:0.4rem; min-width:0; width:100%;';
-          input.style.flex = '1';
-          const simSel = document.createElement('select');
-          simSel.setAttribute('aria-label', 'Similar artists'); simSel.style.cssText = 'width:150px; flex-shrink:0;';
-          simSel.title = 'Also include similar artists (via Last.fm)';
-          Object.entries(SIMILAR_OPTIONS).forEach(([value, label]) => {
-            const opt = document.createElement('option'); opt.value = value; opt.textContent = label;
-            if (value === (rule.options?.similar || '')) opt.selected = true;
-            simSel.appendChild(opt);
-          });
-          const srcSel = document.createElement('select');
-          srcSel.setAttribute('aria-label', 'Similar artists source'); srcSel.style.cssText = 'width:140px; flex-shrink:0;';
-          Object.entries(SIMILAR_SOURCE_OPTIONS).forEach(([value, label]) => {
-            const opt = document.createElement('option'); opt.value = value; opt.textContent = label;
-            if (value === (rule.options?.similar_source || SIMILAR_DEFAULT_SOURCE)) opt.selected = true;
-            srcSel.appendChild(opt);
-          });
-          srcSel.style.display = rule.options?.similar ? '' : 'none';
-
-          simSel.addEventListener('change', () => {
-            const { similar, similar_source, ...rest } = rule.options || {};
-            if (simSel.value && !similar) srcSel.value = similar_source || SIMILAR_DEFAULT_SOURCE;   // newly switched on
-            rule.options = simSel.value ? { ...rest, similar: simSel.value, similar_source: srcSel.value } : rest;
-            srcSel.style.display = simSel.value ? '' : 'none';
-            scheduleRuleCountPreview();
-          });
-          srcSel.addEventListener('change', () => {
-            rule.options = { ...rule.options, similar_source: srcSel.value };
-            scheduleRuleCountPreview();
-          });
-          wrap.appendChild(input); wrap.appendChild(simSel); wrap.appendChild(srcSel);
-          container.appendChild(wrap);
-        } else {
-          container.appendChild(input);
-        }
+        container.appendChild(input);
       }
     }
 
     let ruleCountTimer = null;
     function scheduleRuleCountPreview() { clearTimeout(ruleCountTimer); ruleCountTimer = setTimeout(runRuleCountPreview, 500); }
 
+    // Per-block track counts while building (create and edit).
     async function runRuleCountPreview() {
-      if (rbMode !== 'edit' || !rbEditingPlaylistId) return;
-      const rules = buildRulesPayload();
-      if (!rules.rules.length) return;
+      const { config, blockIndex } = rulesPayload();
+      const counts = [...document.querySelectorAll('#rbBlocks .rb-block-head .rb-preview-count')];
+      counts.forEach(span => { span.textContent = ''; span.className = 'rb-preview-count'; });
+      if (!config.blocks.length) return;
       try {
-        const res  = await fetch(`/playlists/${rbEditingPlaylistId}/preview`, {
+        const res  = await fetch('/playlists/preview-blocks', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ rules })
+          body: JSON.stringify({ rules: config })
         });
         const data = await res.json();
         if (!data.ok) return;
-        document.querySelectorAll('.rb-rule').forEach((row, i) => {
-          const prev = data.preview[i]; const span = row.querySelector('.rb-preview-count');
-          if (!prev || !span) return;
-          span.className = `rb-preview-count ${prev.count > 0 ? 'has-tracks' : 'no-tracks'}`;
-          span.textContent = `${prev.count} tracks`;
+        data.blocks.forEach((b, k) => {
+          const span = counts[blockIndex[k]];
+          if (!span) return;
+          span.className = `rb-preview-count ${b.count > 0 ? 'has-tracks' : 'no-tracks'}`;
+          span.textContent = `${b.count} tracks`;
         });
       } catch (e) {}
     }
 
-    function buildRulesPayload() {
+    // The rules config to save (v2). Blocks / conditions without a value are
+    // left out; blockIndex maps each saved block back to its card.
+    function rulesPayload() {
+      const clean = r => ({ term: r.term, value: r.value, options: { ...(r.options || {}) } });
+      const conds = list => list.filter(c => hasValue(c.value)).map(c => ({ ...clean(c), use: c.use || 'require' }));
+      const blocks = [], blockIndex = [];
+      rbConfig.blocks.forEach((b, i) => {
+        if (!hasValue(b.rule.value)) return;
+        const out = { rule: clean(b.rule), conditions: conds(b.conditions) };
+        if (typeof b.share === 'number') out.share = b.share;
+        blocks.push(out); blockIndex.push(i);
+      });
+      if (blocks.length === 1) delete blocks[0].share;   // a single block is the whole playlist
       return {
-        version:        1,
-        limit:          parseInt(document.getElementById('rbLimit').value)         || 50,
-        shuffle:        true,
-        rules: rbRules.filter(r => r.value !== '' && !(Array.isArray(r.value) && !r.value.length)).map(r => ({
-          term: r.term, value: r.value, weight: r.weight || 1, options: r.options || {}, use: r.use || 'require'
-        }))
+        config: {
+          version:    2,
+          limit:      parseInt(document.getElementById('rbLimit').value) || 50,
+          blocks,
+          conditions: conds(rbConfig.conditions),
+        },
+        blockIndex,
       };
     }
+    function buildRulesPayload() { return rulesPayload().config; }
 
     document.getElementById('rulesPreviewBtn').addEventListener('click', async () => {
       const name      = document.getElementById('rulesNameInput').value.trim();
@@ -1471,7 +1584,9 @@
       const previewBtn = document.getElementById('rulesPreviewBtn');
 
       if (!name)              { status.textContent = 'Add a playlist name'; status.className = 'rb-status status-err'; return; }
-      if (!rules.rules.length){ status.textContent = 'Add at least one rule'; status.className = 'rb-status status-err'; return; }
+      if (!rules.blocks.length){ status.textContent = 'Add at least one block'; status.className = 'rb-status status-err'; return; }
+      const shareErr = shareProblem(rules.blocks);
+      if (shareErr)           { status.textContent = shareErr; status.className = 'rb-status status-err'; return; }
 
       previewBtn.disabled = true; previewBtn.textContent = 'Previewing...'; status.textContent = '';
 
@@ -1525,7 +1640,9 @@
       const rules   = buildRulesPayload();
       const status  = document.getElementById('rbStatus');
       const saveBtn = document.getElementById('rulesSaveBtn');
-      if (!rules.rules.length) { status.textContent = 'Add at least one rule'; status.className = 'rb-status status-err'; return; }
+      if (!rules.blocks.length) { status.textContent = 'Add at least one block'; status.className = 'rb-status status-err'; return; }
+      const shareErr = shareProblem(rules.blocks);
+      if (shareErr)            { status.textContent = shareErr; status.className = 'rb-status status-err'; return; }
       saveBtn.disabled = true; saveBtn.textContent = 'Saving...'; status.textContent = ''; status.className = 'rb-status';
       try {
         const res  = await fetch(`/playlists/${rbEditingPlaylistId}/rules`, {
@@ -1556,7 +1673,11 @@
       if (rbReturnTo === 'detail' && rbEditingPlaylistId) { const p = allPlaylists.find(pl => pl.id === rbEditingPlaylistId); if (p) { openDetail(p); return; } }
       showListView();
     });
-    document.getElementById('rbAddRule').addEventListener('click', () => { rbRules.push(defaultRule()); renderRuleRows(); });
+    document.getElementById('rbAddBlock').addEventListener('click', () => { rbConfig.blocks.push(newBlock()); renderBlocks(); });
+    document.getElementById('rbAddShared').addEventListener('click', () => {
+      rbConfig.conditions.push(newCondition());
+      renderConditionList(document.getElementById('rbSharedConditions'), rbConfig.conditions, { shared: true });
+    });
 
     // ── New playlist modal ─────────────────────────────────────────────────
     document.getElementById('newPlaylistWideBtn').addEventListener('click', () => {
@@ -1581,7 +1702,7 @@
       document.getElementById('newPlaylistModal').style.display = 'none';
 
       if (selectedType === 'navilist') {
-        openRuleBuilder('', null, 'list');
+        openRuleBuilder('', 'list');
         return;
       }
       if (selectedType === 'nsp') { openNspBuilder(null, null); return; }
