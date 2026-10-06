@@ -14,13 +14,13 @@ RUN apk add --no-cache su-exec
 
 WORKDIR /app
 
-# Copy compiled node_modules from builder stage
-COPY --from=builder /app/node_modules ./node_modules
-COPY package*.json ./
-COPY . .
+RUN addgroup -S navilist && adduser -S navilist -G navilist
 
-RUN addgroup -S navilist && adduser -S navilist -G navilist && \
-    chown -R navilist:navilist /app
+# App files stay root-owned and read-only to the app user — it only writes to
+# /app/data, which docker-entrypoint.sh creates and chowns at startup. (A
+# chown -R of /app here re-copied all of node_modules on every source change.)
+COPY --from=builder /app/node_modules ./node_modules
+COPY . .
 
 COPY docker-entrypoint.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
