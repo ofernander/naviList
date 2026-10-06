@@ -12,36 +12,32 @@ const cron   = require('node-cron');
 const db     = require('../db/index');
 const engine = require('./pl_engine');
 const logger = require('../utils/logger');
+const navidrome = require('../providers/navidrome');
 const { publishPlaylist } = require('./publish');
 const { runDetached }     = require('./sync/helpers');
-const { TYPES, SCHEDULED_TYPES, parseComment, normalizeRules } = require('./playlist_types');
+const { TYPES, SCHEDULED_TYPES, parseComment, buildComment, currentTypeConfig } = require('./playlist_types');
 
 const scheduledTasks = new Map(); // navidrome_id → cron.ScheduledTask
 
-// type/config from the registry columns, falling back to the mirrored comment.
+// type/config from the registry columns (falling back to the mirrored comment),
+// in the current shape — legacy radio configs come back as rules playlists.
 function typeAndConfig(row) {
-  if (row.type) {
-    let config = null;
-    try { config = row.config ? JSON.parse(row.config) : null; } catch (e) {}
-    return { type: row.type, config };
-  }
-  return parseComment(row.comment);
+  let { type, config } = row.type ? { type: row.type, config: null } : parseComment(row.comment);
+  if (row.type) { try { config = row.config ? JSON.parse(row.config) : null; } catch (e) {} }
+  return currentTypeConfig(type, config);
 }
 
-// Rebuild one playlist's tracks from its type/config. Only scheduled types
-// (rules, radio) regenerate; everything else is skipped.
+// Rebuild one playlist's tracks from its type/config. Only rules playlists
+// regenerate; everything else is skipped. Republishing writes the current
+// config shape to the Navidrome comment.
 async function refreshPlaylist(row, reason = 'cron-refresh') {
-  const { type, config: stored } = typeAndConfig(row);
-  // Republishing with current rule-term names rewrites a legacy Navidrome comment.
-  const config = type === TYPES.NAVILIST ? normalizeRules(stored) : stored;
+  const { type, config } = typeAndConfig(row);
   if (!SCHEDULED_TYPES.has(type) || !config) {
     logger.debug('refresh', `${reason}: "${row.name}" is not a regenerable playlist (type: ${type}) — skipping`);
     return;
   }
   try {
-    const trackIds = type === TYPES.NAVILIST
-      ? await engine.generatePlaylist(db, config)
-      : await engine.generateRadio(db, config);
+    const trackIds = await engine.generatePlaylist(db, config);
     if (!trackIds.length) { logger.warn('refresh', `${reason}: no tracks for "${row.name}" — skipping`); return; }
 
     const result = await publishPlaylist(db, { id: row.navidrome_id, type, config, trackIds });
@@ -112,7 +108,32 @@ async function regenerateRulesPlaylists(reason) {
   for (const row of rows) await refreshPlaylist(row, reason);
 }
 
+// ── Legacy radio playlists ────────────────────────────────────────────────────
+
+// Radio playlists became rules playlists (artist rule + similar option). The
+// registry is converted by schema.js; this rewrites the Navidrome comment of any
+// playlist still carrying `navilist:radio`, so the UI and Navidrome agree. Runs
+// at startup; idempotent (a failed write is retried next start).
+async function migrateLegacyRadioComments() {
+  const rows = db.prepare("SELECT * FROM navilist_playlists WHERE comment LIKE 'navilist:radio %'").all();
+  if (!rows.length) return;
+  const setComment = db.prepare('UPDATE navilist_playlists SET comment = ? WHERE navidrome_id = ?');
+  let done = 0;
+  for (const row of rows) {
+    const { type, config } = typeAndConfig(row);
+    const comment = buildComment(type, config);
+    if (row.active) {
+      const res = await navidrome.updatePlaylist(db, row.navidrome_id, { comment });
+      if (!res.ok) { logger.warn('refresh', `radio migration: "${row.name}" comment not updated: ${res.error}`); continue; }
+    }
+    setComment.run(comment, row.navidrome_id);
+    done++;
+  }
+  logger.info('refresh', `radio migration: ${done}/${rows.length} radio playlist(s) now rules playlists`);
+}
+
 module.exports = {
+  migrateLegacyRadioComments,
   refreshPlaylist,
   schedulePlaylistRefresh,
   cancelPlaylistRefresh,

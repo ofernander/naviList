@@ -428,8 +428,10 @@ function startAutoRefresh() {
     runExternalServiceSyncs();
   }, 30 * 60 * 1000);
 
-  // ── 6. On startup: load cron schedules for all naviList / Radio playlists ─────
+  // ── 6. On startup: load cron schedules for naviList playlists, and rewrite any
+  //       legacy radio playlist comments to the rules format ───────────────────
   refresh.loadScheduledPlaylists();
+  runDetached('migrate-radio-comments', () => refresh.migrateLegacyRadioComments());
 
   logger.info('sync', 'auto-refresh scheduled: library poll every 5m, full sync every 6h, services every 30m, playlist refresh via cron');
 }

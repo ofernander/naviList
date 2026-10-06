@@ -4,7 +4,7 @@
 // New columns on existing tables are added by the guarded, idempotent migrations
 // at the bottom, so existing user DBs upgrade in place on startup.
 
-const { parseComment, normalizeRules } = require('../lib/playlist_types');
+const { parseComment, normalizeRules, currentTypeConfig } = require('../lib/playlist_types');
 
 module.exports = function (db) {
   db.exec(`
@@ -63,7 +63,7 @@ module.exports = function (db) {
       result         TEXT
     );
 
-    -- Artists — optional MBID lookup cache (populated on demand, e.g. radio playlist creation)
+    -- Artists — optional MBID lookup cache (populated on demand, e.g. similar-artist lookups)
     CREATE TABLE IF NOT EXISTS artists (
       artist_id   TEXT PRIMARY KEY,
       name        TEXT NOT NULL,
@@ -82,7 +82,7 @@ module.exports = function (db) {
       score             REAL,
       source            TEXT NOT NULL DEFAULT 'lastfm',
       fetched_at        INTEGER NOT NULL,
-      PRIMARY KEY (artist_id, similar_name)
+      PRIMARY KEY (artist_id, source, similar_name)
     );
 
     CREATE INDEX IF NOT EXISTS idx_artist_similar_artist_id ON artist_similar(artist_id);
@@ -252,6 +252,30 @@ module.exports = function (db) {
   // Drop the obsolete MB length cache — superseded by per-track mbid/is_live.
   db.exec('DROP TABLE IF EXISTS mb_recordings');
 
+  // artist_similar keyed per source (Last.fm + ListenBrainz). SQLite can't alter a
+  // primary key, so pre-existing DBs rebuild the table once; rows are kept.
+  const simPk = db.prepare('PRAGMA table_info(artist_similar)').all().filter(c => c.pk > 0).map(c => c.name);
+  if (!simPk.includes('source')) {
+    db.transaction(() => {
+      db.exec(`
+        CREATE TABLE artist_similar_new (
+          artist_id         TEXT NOT NULL,
+          similar_name      TEXT NOT NULL,
+          similar_artist_id TEXT,
+          score             REAL,
+          source            TEXT NOT NULL DEFAULT 'lastfm',
+          fetched_at        INTEGER NOT NULL,
+          PRIMARY KEY (artist_id, source, similar_name)
+        );
+        INSERT INTO artist_similar_new (artist_id, similar_name, similar_artist_id, score, source, fetched_at)
+          SELECT artist_id, similar_name, similar_artist_id, score, source, fetched_at FROM artist_similar;
+        DROP TABLE artist_similar;
+        ALTER TABLE artist_similar_new RENAME TO artist_similar;
+        CREATE INDEX IF NOT EXISTS idx_artist_similar_artist_id ON artist_similar(artist_id);
+      `);
+    })();
+  }
+
   // Matched local track id on cached LB / Last.fm source rows (pre-existing DBs),
   // so snapshots reuse the exact match instead of re-matching text.
   for (const table of ['lb_playlist_tracks', 'lfm_playlist_tracks']) {
@@ -277,19 +301,21 @@ module.exports = function (db) {
     })(untyped);
   }
 
-  // Rules configs saved in an older shape (term `tag` → `genre`, `required` →
-  // `use`). The Navidrome comment is rewritten from this config on the
-  // playlist's next publish. Only rows that actually change are written.
-  const rulesRows = db.prepare(
-    "SELECT navidrome_id, config FROM navilist_playlists WHERE type = 'navilist' AND config IS NOT NULL"
+  // Configs saved in an older shape: rules (term `tag` → `genre`, `required` →
+  // `use`) and legacy radio playlists (→ rules playlist with similar-artist
+  // rules). The Navidrome comment follows (refresh.migrateLegacyRadioComments /
+  // next publish). Only rows that actually change are written.
+  const configRows = db.prepare(
+    "SELECT navidrome_id, type, config FROM navilist_playlists WHERE type IN ('navilist', 'radio') AND config IS NOT NULL"
   ).all();
-  const setConfig = db.prepare('UPDATE navilist_playlists SET config = ? WHERE navidrome_id = ?');
+  const setTypeConfig = db.prepare('UPDATE navilist_playlists SET type = ?, config = ? WHERE navidrome_id = ?');
   db.transaction(rows => {
     for (const r of rows) {
       let current;
-      try { current = JSON.stringify(normalizeRules(JSON.parse(r.config))); }
-      catch (e) { continue; }   // malformed config — left as is; the engine normalizes on read
-      if (current !== r.config) setConfig.run(current, r.navidrome_id);
+      try { current = currentTypeConfig(r.type, JSON.parse(r.config)); }
+      catch (e) { continue; }   // malformed config — left as is; read paths normalize too
+      const json = JSON.stringify(current.config);
+      if (current.type !== r.type || json !== r.config) setTypeConfig.run(current.type, json, r.navidrome_id);
     }
-  })(rulesRows);
+  })(configRows);
 };

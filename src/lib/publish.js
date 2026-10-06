@@ -82,7 +82,7 @@ function scheduleStudioRefine(db, playlistId, trackIds, comment) {
  *   id       — existing Navidrome playlist id; omit to create a new playlist
  *   name     — required on create; on replace, renames the playlist if given
  *   type     — playlist type (lib/playlist_types.js); omit for manual playlists
- *   config   — type config (rules, radio config, subscription ids…)
+ *   config   — type config (rules, subscription ids…)
  *   trackIds — final ordered track ids (callers guard against empty lists)
  *
  * Typed playlists get the studio tie-break; manual (untyped) ones are hand-picked

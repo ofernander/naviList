@@ -14,7 +14,7 @@
 
 const TYPES = {
   NAVILIST:        'navilist',          // rules engine
-  RADIO:           'radio',             // seed artists + similar
+  RADIO:           'radio',             // legacy: seed artists + similar, now an artist rule option
   LB:              'lb',                // ListenBrainz subscription
   LB_SNAPSHOT:     'lb-snapshot',
   LASTFM:          'lastfm',            // Last.fm chart subscription
@@ -24,7 +24,7 @@ const TYPES = {
 };
 
 // Types regenerated on their cron schedule by refresh.js.
-const SCHEDULED_TYPES = new Set([TYPES.NAVILIST, TYPES.RADIO]);
+const SCHEDULED_TYPES = new Set([TYPES.NAVILIST]);
 
 const COMMENT_RE = /^navilist:([a-z-]+)(?:\s+(\{[\s\S]*\}))?\s*$/;
 
@@ -81,4 +81,43 @@ function normalizeRules(rules) {
   return out;
 }
 
-module.exports = { TYPES, SCHEDULED_TYPES, RULE_USES, parseComment, buildComment, canonicalTerm, normalizeRules };
+// ── Similar artists (artist rule option) ──────────────────────────────────────
+
+// Artist rule option `similar`: also take the N most similar artists that are
+// in the library. Ranked, so a depth means the same for every source. Absent =
+// artist only. `similar_source` picks the source (lastfm | listenbrainz).
+const SIMILAR_DEPTHS  = { close: 5, medium: 15, wide: 40 };
+const SIMILAR_SOURCES = ['lastfm', 'listenbrainz'];
+
+// Depth name for a legacy radio similarity threshold (0.5 / 0.25 / 0.1).
+const LEGACY_RADIO_DEPTHS = { close: 0.5, medium: 0.25, wide: 0.1 };
+function depthName(depth) {
+  const d = typeof depth === 'number' ? depth : 0.25;
+  return Object.entries(LEGACY_RADIO_DEPTHS)
+    .reduce((best, [name, v]) => Math.abs(v - d) < Math.abs(LEGACY_RADIO_DEPTHS[best] - d) ? name : best, 'medium');
+}
+
+// A legacy radio config ({ artists, depth, include_seed, track_count }) as the
+// equivalent rules config: one artist rule per seed with similar expansion via
+// Last.fm (radio's only source); "include seed artists" off becomes an excluded
+// artist rule per seed.
+function radioConfigToRules(config = {}) {
+  const seeds   = (config.artists || []).filter(Boolean);
+  const similar = depthName(config.depth);
+  const rules   = seeds.map(name => ({ term: 'artist', value: name, use: 'require', options: { similar, similar_source: 'lastfm' } }));
+  if (config.include_seed === false)
+    seeds.forEach(name => rules.push({ term: 'artist', value: name, use: 'exclude', options: {} }));
+  return { rules, limit: config.track_count || 50 };
+}
+
+// type/config with legacy types converted: radio → rules playlist.
+function currentTypeConfig(type, config) {
+  if (type === TYPES.RADIO) return { type: TYPES.NAVILIST, config: radioConfigToRules(config || {}) };
+  if (type === TYPES.NAVILIST) return { type, config: normalizeRules(config) };
+  return { type, config };
+}
+
+module.exports = {
+  TYPES, SCHEDULED_TYPES, RULE_USES, SIMILAR_DEPTHS, SIMILAR_SOURCES,
+  parseComment, buildComment, canonicalTerm, normalizeRules, radioConfigToRules, currentTypeConfig,
+};

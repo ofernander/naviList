@@ -98,7 +98,6 @@
       <select id="filterSelect" class="pl-filter-select">
         <option value="all">All</option>
         <option value="navilist">naviList</option>
-        <option value="radio">Radio</option>
         <option value="listenbrainz">ListenBrainz</option>
         <option value="manual">Manual</option>
         <option value="deactivated">Deactivated</option>
@@ -212,87 +211,6 @@
         <button class="btn btn-secondary" id="rbPreviewCancelBtn">Discard</button>
         <button class="btn" id="rbSaveBtn">Save Playlist</button>
         <span class="rb-status" id="rbSaveStatus"></span>
-      </div>
-    </div>
-  </main>
-
-  <!-- ── Radio builder view ─────────────────────────────────────────────── -->
-  <main id="viewRadio" style="display:none">
-    <button class="pl-detail-back" id="radioBackBtn">← Back</button>
-    <div class="pl-detail-header">
-      <div>
-        <input type="text" id="radioNameInput" class="pl-builder-name-input" placeholder="Station name..." />
-        <div class="pl-detail-meta">Seed artists — naviList finds similar music from your library via Last.fm</div>
-      </div>
-    </div>
-    <hr style="border:none; border-top: 0.5px solid #eeeee8; margin-bottom: 1.5rem;" />
-
-    <div class="rb-section">
-      <div class="rb-section-label">Seed artists</div>
-      <div class="radio-seeds" id="radioSeedChips"></div>
-      <div class="radio-seed-input-row">
-        <input type="text" id="radioSeedInput" placeholder="Artist name..." list="radioArtistList" autocomplete="off" />
-        <datalist id="radioArtistList"></datalist>
-        <button class="btn btn-secondary btn-sm" id="radioAddSeedBtn">+ Add</button>
-      </div>
-    </div>
-
-    <div class="rb-section" style="margin-top:1.5rem;">
-      <div class="rb-section-label">Settings</div>
-      <div class="rb-globals">
-        <div class="rb-global-field">
-          <label>Depth</label>
-          <div class="radio-depth-options">
-            <label class="radio-depth-option"><input type="radio" name="radioDepth" value="0.5" /> Close</label>
-            <label class="radio-depth-option"><input type="radio" name="radioDepth" value="0.25" checked /> Medium</label>
-            <label class="radio-depth-option"><input type="radio" name="radioDepth" value="0.1" /> Wide</label>
-          </div>
-        </div>
-        <div class="rb-global-field">
-          <label for="radioTrackCount">Tracks</label>
-          <input type="number" id="radioTrackCount" min="10" max="200" value="50" style="width:70px;" />
-        </div>
-        <label class="rb-toggle">
-          <input type="checkbox" id="radioIncludeSeed" checked />
-          Include seed artists
-        </label>
-      </div>
-    </div>
-
-    <div class="rb-section" style="margin-top:1rem;">
-      <div class="rb-section-label">Auto-refresh</div>
-      <div class="rb-globals">
-        <div class="rb-global-field" style="flex-direction:column; align-items:flex-start; gap:0.4rem;">
-          <label for="radioRefreshCron">Cron schedule</label>
-          <input type="text" id="radioRefreshCron" placeholder="e.g. 0 6 * * *" style="width:160px; font-family:monospace;" />
-          <div style="font-size:0.78rem; color:#aaa; line-height:1.7;">
-            <code>* * * * *</code> every minute &nbsp;·&nbsp;
-            <code>0 * * * *</code> hourly &nbsp;·&nbsp;
-            <code>0 6 * * *</code> daily 6am &nbsp;·&nbsp;
-            <code>0 6 * * 1</code> Mon 6am &nbsp;·&nbsp;
-            <code>0 6 1 * *</code> 1st of month &nbsp;·&nbsp;
-            leave blank to disable
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <div class="rb-actions" style="margin-top:1.5rem;">
-      <button class="btn btn-secondary" id="radioCancelBtn">Cancel</button>
-      <button class="btn" id="radioPreviewBtn">Preview →</button>
-      <span class="rb-status" id="radioStatus"></span>
-    </div>
-
-    <div id="radioPreviewPanel" style="display:none; margin-top:1.5rem;">
-      <hr style="border:none; border-top: 0.5px solid #eeeee8; margin-bottom:1rem;" />
-      <div class="rb-section-label" style="margin-bottom:0.75rem;">
-        Preview <span id="radioPreviewCount" style="font-weight:400; color:#aaa;"></span>
-      </div>
-      <div class="rb-preview-tracks" id="radioPreviewTracks"></div>
-      <div class="rb-actions" style="margin-top:1rem;">
-        <button class="btn btn-secondary" id="radioPreviewCancelBtn">Discard</button>
-        <button class="btn" id="radioSaveBtn">Save Playlist</button>
-        <span class="rb-status" id="radioSaveStatus"></span>
       </div>
     </div>
   </main>
@@ -443,10 +361,6 @@
           <div class="pl-type-title">Navidrome Smart Playlist</div>
           <div class="pl-type-desc">Navidrome smart playlist wrapper</div>
         </div>
-        <div class="pl-type-option" data-type="radio" id="typeRadio">
-          <div class="pl-type-title">Radio</div>
-          <div class="pl-type-desc">Similar artist playlist generation provided by Last.fm</div>
-        </div>
         <div class="pl-type-option" data-type="listenbrainz" id="typeLb">
           <div class="pl-type-title">ListenBrainz</div>
           <div class="pl-type-desc">Import ListenBrainz playlists</div>
@@ -535,10 +449,6 @@
     let rbEditingPlaylistId = null;
     let rbPreviewTracks     = [];
 
-    // Radio builder state
-    let radioSeeds          = [];
-    let radioPreviewTracks  = [];
-    let radioPreviewConfig  = null;
 
     // Exportify state
     let exportifyMatchedTracks = [];
@@ -568,7 +478,6 @@
     function isSmartPlaylist(p)  { return p.comment?.startsWith('navilist:navilist') || false; }
     function isLbPlaylist(p)     { return p.comment?.startsWith('navilist:lb')       || false; }
     function isLfmPlaylist(p)    { return p.comment?.startsWith('navilist:lastfm')   || false; }
-    function isRadioPlaylist(p)  { return p.comment?.startsWith('navilist:radio')    || false; }
     function isNspPlaylist(p)       { return p.id?.startsWith('nsp:') || p.comment?.startsWith('navilist:nsp') || false; }
     function isExportifyPlaylist(p) {
       return p.comment?.startsWith('navilist:import') || p.comment?.startsWith('navilist:exportify') || false;
@@ -579,7 +488,6 @@
       if (isSmartPlaylist(p))     return 'navilist';
       if (isLfmPlaylist(p))       return 'lastfm';
       if (isLbPlaylist(p))        return 'listenbrainz';
-      if (isRadioPlaylist(p))     return 'radio';
       if (isNspPlaylist(p))       return 'nsp';
       if (isExportifyPlaylist(p)) return 'exportify';
       return 'manual';
@@ -595,7 +503,6 @@
         case 'nsp':          return 'Navidrome';
         case 'exportify':    return 'Import';
         case 'listenbrainz': return 'ListenBrainz';
-        case 'radio':        return 'Radio';
         case 'lastfm':       return 'Last.fm';
         default:             return 'Manual';
       }
@@ -659,7 +566,7 @@
 
     // ── Views ──────────────────────────────────────────────────────────────
     function hideAllViews() {
-      ['viewList','viewDetail','viewRules','viewLb','viewRadio','viewLfm','viewNsp','viewExportify'].forEach(id => {
+      ['viewList','viewDetail','viewRules','viewLb','viewLfm','viewNsp','viewExportify'].forEach(id => {
         document.getElementById(id).style.display = 'none';
       });
     }
@@ -667,7 +574,6 @@
     function showListView()   { hideAllViews(); document.getElementById('viewList').style.display   = ''; }
     function showDetailView() { hideAllViews(); document.getElementById('viewDetail').style.display = ''; }
     function showRulesView()  { hideAllViews(); document.getElementById('viewRules').style.display  = ''; }
-    function showRadioView()  { hideAllViews(); document.getElementById('viewRadio').style.display  = ''; }
     function showNspView()   { hideAllViews(); document.getElementById('viewNsp').style.display   = ''; }
     function showExportifyView() { hideAllViews(); document.getElementById('viewExportify').style.display = ''; }
     function showManualView() { window.location.href = '/library?mode=manual'; }
@@ -711,7 +617,6 @@
           (!inactive && (
             activeFilter === type ||
             (activeFilter === 'navilist' && type === 'navilist') ||
-            (activeFilter === 'radio'    && type === 'radio')    ||
             (activeFilter === 'manual'   && type === 'manual')
           ));
         return matchSearch && matchFilter;
@@ -769,7 +674,7 @@
           <div class="pl-card-name">${esc(getListDisplayName(p))}</div>
           <button class="pl-card-menu" title="Options">⋯</button>
         </div>
-        <div class="pl-card-desc">${esc(p.comment?.replace(/^navilist:(navilist|lb|radio)\s*(\{.*\})?/, '').trim() || '')}</div>
+        <div class="pl-card-desc">${esc(p.comment?.replace(/^navilist:(navilist|lb)\s*(\{.*\})?/, '').trim() || '')}</div>
         <div class="pl-card-footer">
           <span class="pl-badge ${badgeClass(type)}">${badgeLabel(type)}</span>
           <span class="pl-card-meta">${esc(meta)}</span>
@@ -1293,6 +1198,12 @@
     // `required: true|false` instead of `use`, and an unused `mode` — loaded in the
     // current shape so saving writes it (mirrors normalizeRules in lib/playlist_types.js).
     const RULE_USES = { require: 'Required', prefer: 'Preferred', exclude: 'Excluded' };
+    // Artist rule option: also include the artist's most similar artists (the
+    // "radio" option) — Close / Medium / Wide = 5 / 15 / 40 artists you own —
+    // from ListenBrainz (default, no key needed) or Last.fm (needs an API key).
+    const SIMILAR_OPTIONS = { '': 'Similar: Off', close: 'Similar: Close', medium: 'Similar: Medium', wide: 'Similar: Wide' };
+    const SIMILAR_SOURCE_OPTIONS = { listenbrainz: 'via ListenBrainz', lastfm: 'via Last.fm' };
+    const SIMILAR_DEFAULT_SOURCE = 'listenbrainz';
     function normalizeRule(r) {
       const { required, mode, ...rest } = r;
       const use = RULE_USES[r.use] ? r.use : (required === false ? 'prefer' : 'require');
@@ -1478,7 +1389,44 @@
           rule.value = input.value; clearTimeout(debounce);
           debounce = setTimeout(() => scheduleRuleCountPreview(), 400);
         });
-        container.appendChild(input);
+
+        if (rule.term === 'artist') {
+          const wrap = document.createElement('div');
+          wrap.style.cssText = 'display:flex; gap:0.4rem; min-width:0; width:100%;';
+          input.style.flex = '1';
+          const simSel = document.createElement('select');
+          simSel.setAttribute('aria-label', 'Similar artists'); simSel.style.cssText = 'width:150px; flex-shrink:0;';
+          simSel.title = 'Also include similar artists (via Last.fm)';
+          Object.entries(SIMILAR_OPTIONS).forEach(([value, label]) => {
+            const opt = document.createElement('option'); opt.value = value; opt.textContent = label;
+            if (value === (rule.options?.similar || '')) opt.selected = true;
+            simSel.appendChild(opt);
+          });
+          const srcSel = document.createElement('select');
+          srcSel.setAttribute('aria-label', 'Similar artists source'); srcSel.style.cssText = 'width:140px; flex-shrink:0;';
+          Object.entries(SIMILAR_SOURCE_OPTIONS).forEach(([value, label]) => {
+            const opt = document.createElement('option'); opt.value = value; opt.textContent = label;
+            if (value === (rule.options?.similar_source || SIMILAR_DEFAULT_SOURCE)) opt.selected = true;
+            srcSel.appendChild(opt);
+          });
+          srcSel.style.display = rule.options?.similar ? '' : 'none';
+
+          simSel.addEventListener('change', () => {
+            const { similar, similar_source, ...rest } = rule.options || {};
+            if (simSel.value && !similar) srcSel.value = similar_source || SIMILAR_DEFAULT_SOURCE;   // newly switched on
+            rule.options = simSel.value ? { ...rest, similar: simSel.value, similar_source: srcSel.value } : rest;
+            srcSel.style.display = simSel.value ? '' : 'none';
+            scheduleRuleCountPreview();
+          });
+          srcSel.addEventListener('change', () => {
+            rule.options = { ...rule.options, similar_source: srcSel.value };
+            scheduleRuleCountPreview();
+          });
+          wrap.appendChild(input); wrap.appendChild(simSel); wrap.appendChild(srcSel);
+          container.appendChild(wrap);
+        } else {
+          container.appendChild(input);
+        }
       }
     }
 
@@ -1636,24 +1584,6 @@
         openRuleBuilder('', null, 'list');
         return;
       }
-      if (selectedType === 'radio') {
-        radioSeeds = []; radioPreviewTracks = []; radioPreviewConfig = null;
-        renderRadioSeeds();
-        document.getElementById('radioNameInput').value            = '';
-        document.getElementById('radioRefreshCron').value           = '';
-        document.getElementById('radioStatus').textContent          = '';
-        document.getElementById('radioPreviewPanel').style.display = 'none';
-        document.getElementById('radioPreviewBtn').disabled        = false;
-        document.getElementById('radioPreviewBtn').textContent     = 'Preview →';
-        showRadioView();
-        setTimeout(() => document.getElementById('radioNameInput').focus(), 50);
-        loadArtists().then(() => {
-          const dl = document.getElementById('radioArtistList');
-          dl.innerHTML = '';
-          artistList.forEach(a => { const o = document.createElement('option'); o.value = a; dl.appendChild(o); });
-        });
-        return;
-      }
       if (selectedType === 'nsp') { openNspBuilder(null, null); return; }
       if (selectedType === 'listenbrainz') { showLbView(); return; }
       if (selectedType === 'lastfm')       { showLfmView(); return; }
@@ -1695,95 +1625,6 @@
     });
 
     document.getElementById('backBtn').addEventListener('click', () => { showListView(); loadPlaylists(); });
-
-    // ── Radio builder ──────────────────────────────────────────────────────
-    function renderRadioSeeds() {
-      const chips = document.getElementById('radioSeedChips');
-      chips.innerHTML = '';
-      radioSeeds.forEach((name, i) => {
-        const chip = document.createElement('div');
-        chip.className = 'radio-seed-chip';
-        chip.innerHTML = `<span>${esc(name)}</span><button title="Remove">✕</button>`;
-        chip.querySelector('button').addEventListener('click', () => { radioSeeds.splice(i, 1); renderRadioSeeds(); });
-        chips.appendChild(chip);
-      });
-    }
-
-    function addRadioSeed() {
-      const input = document.getElementById('radioSeedInput');
-      const name  = input.value.trim();
-      if (!name || radioSeeds.includes(name)) { input.value = ''; return; }
-      radioSeeds.push(name); input.value = ''; renderRadioSeeds();
-    }
-
-    document.getElementById('radioAddSeedBtn').addEventListener('click', addRadioSeed);
-    document.getElementById('radioSeedInput').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addRadioSeed(); } });
-    document.getElementById('radioCancelBtn').addEventListener('click', () => showListView());
-    document.getElementById('radioBackBtn').addEventListener('click',   () => showListView());
-
-    document.getElementById('radioPreviewBtn').addEventListener('click', async () => {
-      const stationName = document.getElementById('radioNameInput').value.trim();
-      const status      = document.getElementById('radioStatus');
-      const previewBtn  = document.getElementById('radioPreviewBtn');
-
-      if (!stationName)       { status.textContent = 'Add a station name'; status.className = 'rb-status status-err'; return; }
-      if (!radioSeeds.length) { status.textContent = 'Add at least one seed artist'; status.className = 'rb-status status-err'; return; }
-
-      const depth        = parseFloat(document.querySelector('input[name="radioDepth"]:checked')?.value || '0.25');
-      const track_count  = parseInt(document.getElementById('radioTrackCount').value) || 50;
-      const include_seed = document.getElementById('radioIncludeSeed').checked;
-
-      previewBtn.disabled = true; previewBtn.textContent = 'Previewing...'; status.textContent = ''; status.className = 'rb-status';
-
-      try {
-        const res  = await fetch('/playlists/preview-radio', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ artists: radioSeeds, depth, track_count, include_seed })
-        });
-        const data = await res.json();
-        if (data.ok) {
-          radioPreviewTracks = data.tracks;
-          radioPreviewConfig = data.config;
-          document.getElementById('radioPreviewCount').textContent = `— ${data.count} tracks`;
-          renderPreviewTracks('radioPreviewTracks', radioPreviewTracks, (idx) => {
-            radioPreviewTracks.splice(idx, 1);
-            renderPreviewTracks('radioPreviewTracks', radioPreviewTracks, arguments.callee);
-            document.getElementById('radioPreviewCount').textContent = `— ${radioPreviewTracks.length} tracks`;
-          });
-          document.getElementById('radioPreviewPanel').style.display = '';
-          document.getElementById('radioSaveStatus').textContent     = '';
-        } else { status.textContent = `✗ ${data.error}`; status.className = 'rb-status status-err'; }
-      } catch (e) { status.textContent = '✗ Request failed'; status.className = 'rb-status status-err'; }
-      finally { previewBtn.disabled = false; previewBtn.textContent = 'Preview →'; }
-    });
-
-    document.getElementById('radioSaveBtn').addEventListener('click', async () => {
-      const stationName = document.getElementById('radioNameInput').value.trim();
-      const status      = document.getElementById('radioSaveStatus');
-      const saveBtn     = document.getElementById('radioSaveBtn');
-      if (!radioPreviewTracks.length) { status.textContent = 'Nothing to save — run Preview first'; status.className = 'rb-status status-err'; return; }
-      saveBtn.disabled = true; saveBtn.textContent = 'Saving...';
-      try {
-        const refreshCron = document.getElementById('radioRefreshCron').value.trim() || null;
-        const res  = await fetch('/playlists/save-radio', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: stationName, config: radioPreviewConfig, trackIds: radioPreviewTracks.map(t => t.id), refresh_cron: refreshCron })
-        });
-        const data = await res.json();
-        if (data.ok) {
-          await loadPlaylists();
-          setTimeout(() => { const c = allPlaylists.find(p => p.id === data.playlistId); if (c) openDetail(c); else showListView(); }, 400);
-        } else {
-          status.textContent = `✗ ${data.error}`; status.className = 'rb-status status-err';
-          saveBtn.disabled = false; saveBtn.textContent = 'Save Playlist';
-        }
-      } catch (e) { status.textContent = '✗ Request failed'; status.className = 'rb-status status-err'; saveBtn.disabled = false; saveBtn.textContent = 'Save Playlist'; }
-    });
-
-    document.getElementById('radioPreviewCancelBtn').addEventListener('click', () => {
-      radioPreviewTracks = []; radioPreviewConfig = null;
-      document.getElementById('radioPreviewPanel').style.display = 'none';
-    });
 
     // ── NSP detail ──────────────────────────────────────────────────────────
     function openNspDetail(p) {

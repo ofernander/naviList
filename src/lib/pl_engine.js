@@ -11,13 +11,12 @@
  *   resolveRule(db, rule)        → Promise<string[]>   — single term → ranked track ID pool
  *   validateRules(rules)         → { ok, errors[] }    — validate rules JSON
  *   previewRules(db, rules)      → Promise<Object[]>   — per-rule count + sample, no full resolution
- *   generateRadio(db, config)    → Promise<string[]>   — radio: seeds + similar artists, shuffled
  */
 
 const logger = require('../utils/logger');
 const { finalize } = require('./finalize');
-const { getSimilarArtists } = require('./similar');
-const { RULE_USES, canonicalTerm, normalizeRules } = require('./playlist_types');
+const { effectiveSource, ensureSimilarArtists, getSimilarArtists } = require('./similar');
+const { RULE_USES, SIMILAR_DEPTHS, SIMILAR_SOURCES, canonicalTerm, normalizeRules } = require('./playlist_types');
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -48,6 +47,14 @@ function validateRules(rules) {
     }
     if (!RULE_USES.includes(rule.use)) {
       errors.push(`rule[${i}]: use must be one of ${RULE_USES.join(' | ')}`);
+    }
+    const similar = rule.options?.similar;
+    if (similar !== undefined && !SIMILAR_DEPTHS[similar]) {
+      errors.push(`rule[${i}]: similar must be one of ${Object.keys(SIMILAR_DEPTHS).join(' | ')}`);
+    }
+    const similarSource = rule.options?.similar_source;
+    if (similarSource !== undefined && !SIMILAR_SOURCES.includes(similarSource)) {
+      errors.push(`rule[${i}]: similar_source must be one of ${SIMILAR_SOURCES.join(' | ')}`);
     }
   });
 
@@ -401,12 +408,16 @@ function resolveGenre(db, rule) {
 }
 
 /**
- * artist — tracks by the named artist only. Rules playlists are strict to the
- * rules the user sets; similar-artist expansion is radio's job (generateRadio).
- * options.nosim is accepted for old saved rules but no longer needed.
+ * artist — tracks by the named artist. With options.similar (close | medium |
+ * wide) the rule also takes that artist's 5 / 15 / 40 most similar artists that
+ * are in the library — the "radio" option — from options.similar_source
+ * (lastfm | listenbrainz; default Last.fm when a key is configured, else
+ * ListenBrainz). Without it the rule is strict to the named artist. Similar
+ * artists are fetched once per artist and source, then cached (lib/similar.js).
  */
 async function resolveArtist(db, rule) {
   const name   = rule.value;
+  const depth  = SIMILAR_DEPTHS[rule.options?.similar];
 
   // Find artist_id(s) matching the name
   const artistRows = db.prepare(`
@@ -421,6 +432,17 @@ async function resolveArtist(db, rule) {
   }
 
   const artistIds = new Set(artistRows.map(r => r.artist_id));
+
+  if (depth !== undefined) {
+    const source = effectiveSource(db, rule.options?.similar_source);
+    const seeds  = [...artistIds];
+    await ensureSimilarArtists(db, seeds.map(artistId => ({ artistId, name })), source);
+    for (const artistId of seeds) {
+      const owned = [...new Set(getSimilarArtists(db, artistId, source).map(r => r.artistId))]
+        .filter(id => !seeds.includes(id));
+      owned.slice(0, depth).forEach(id => artistIds.add(id));
+    }
+  }
 
   const placeholders = [...artistIds].map(() => '?').join(', ');
   const rows = db.prepare(`
@@ -490,47 +512,6 @@ function windowToCutoff(window) {
   }
 }
 
-// ── Radio ───────────────────────────────────────────────────────────────────
-
-/**
- * resolveRadio — candidate pool for a set of seed artist_ids: the seeds (unless
- * includeSeed is false) plus their cached similar artists scoring >= depth,
- * ordered by play count. Cache-only — the preview route fetches similar artists
- * for new seeds before calling this.
- */
-function resolveRadio(db, { artistIds, depth = 0.25, includeSeed = true }) {
-  if (!artistIds?.length) return [];
-
-  const allArtistIds = new Set();
-  if (includeSeed) artistIds.forEach(id => allArtistIds.add(id));
-  for (const artistId of artistIds) {
-    getSimilarArtists(db, artistId).filter(r => r.score >= depth).forEach(r => allArtistIds.add(r.artistId));
-  }
-  if (!allArtistIds.size) return [];
-
-  const placeholders = [...allArtistIds].map(() => '?').join(', ');
-  return db.prepare(`
-    SELECT id FROM tracks
-    WHERE artist_id IN (${placeholders})
-    ORDER BY play_count DESC
-  `).all(...allArtistIds).map(r => r.id);
-}
-
-/**
- * generateRadio — full radio track list from a saved radio config
- * ({ artistIds, depth, include_seed, track_count }):
- * pool → shuffle → shared finalize (disliked, studio, even split by artist, limit).
- */
-async function generateRadio(db, config) {
-  const pool = resolveRadio(db, {
-    artistIds:   config.artistIds,
-    depth:       config.depth ?? 0.25,
-    includeSeed: config.include_seed ?? true,
-  });
-  fisherYates(pool);
-  return finalize(db, pool, { limit: config.track_count || 50, label: 'radio' });
-}
-
 // ── Exports ───────────────────────────────────────────────────────────────────
 
-module.exports = { generatePlaylist, resolveRule, validateRules, previewRules, generateRadio };
+module.exports = { generatePlaylist, resolveRule, validateRules, previewRules };

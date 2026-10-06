@@ -9,9 +9,8 @@ const logger = require('../utils/logger');
 const { writeMissingArtists } = require('./sync/helpers');
 const { publishPlaylist, snapshotPlaylist } = require('./publish');
 const { buildMatcher, FUZZY_MIN_SCORE }     = require('./match');
-const { ensureSimilarArtists }              = require('./similar');
 const { setRefreshSchedule, cancelPlaylistRefresh, schedulePlaylistRefresh } = require('./refresh');
-const { TYPES, parseComment, normalizeRules } = require('./playlist_types');
+const { TYPES, parseComment, normalizeRules, currentTypeConfig } = require('./playlist_types');
 const { getSettings }                       = require('../db/settings');
 
 // type/config for a playlist: registry first, else the Navidrome comment.
@@ -20,9 +19,10 @@ function playlistTypeConfig(id, fallbackComment) {
   if (row?.type) {
     let config = null;
     try { config = row.config ? JSON.parse(row.config) : null; } catch (e) {}
-    return { type: row.type, config };
+    return currentTypeConfig(row.type, config);
   }
-  return parseComment(row?.comment || fallbackComment);
+  const parsed = parseComment(row?.comment || fallbackComment);
+  return currentTypeConfig(parsed.type, parsed.config);
 }
 
 // Merge a subscription's cached source tracks with what's in Navidrome, so the
@@ -162,62 +162,6 @@ router.get('/api/:id', async (req, res) => {
   if (cached.length) return res.json({ ok: true, playlist: { ...playlist, entry: mergeCachedTracks(playlist, cached) } });
 
   res.json({ ok: true, playlist });
-});
-
-// POST /playlists/preview-radio — fetch/cache similar artists, resolve tracks, no ND writes
-router.post('/preview-radio', async (req, res) => {
-  const { artists, depth, track_count, include_seed } = req.body;
-  if (!artists?.length) return res.json({ ok: false, error: 'at least one artist required' });
-
-  const settings = getSettings(db);
-  if (!settings.lastfm_api_key) return res.json({ ok: false, error: 'Last.fm API key not configured' });
-
-  const resolveArtistId = db.prepare('SELECT DISTINCT artist_id FROM tracks WHERE LOWER(artist) = LOWER(?) LIMIT 1');
-  const seeds = [];
-  for (const name of artists) {
-    const row = resolveArtistId.get(name);
-    if (!row) { logger.warn('playlists', `create-radio: "${name}" not found in library`); continue; }
-    seeds.push({ artistId: row.artist_id, name });
-  }
-  if (!seeds.length)
-    return res.json({ ok: false, error: 'None of the seed artists were found in your library' });
-
-  // Similar artists for new seeds are fetched once and cached (lib/similar.js)
-  await ensureSimilarArtists(db, seeds);
-
-  const config = {
-    artists,
-    artistIds:    seeds.map(s => s.artistId),
-    depth:        depth       ?? 0.25,
-    track_count:  track_count ?? 50,
-    include_seed: include_seed ?? true,
-    source:       'lastfm',
-  };
-  const trackIds = await engine.generateRadio(db, config);
-  if (!trackIds.length)
-    return res.json({ ok: false, error: 'No tracks found at this depth — try a wider setting' });
-
-  const getTrack = db.prepare('SELECT id, title, artist, duration FROM tracks WHERE id = ?');
-  const tracks   = trackIds.map(id => getTrack.get(id) || { id, title: '—', artist: '—', duration: 0 });
-
-  logger.info('playlists', `radio preview: ${tracks.length} tracks for [${artists.join(', ')}]`);
-  res.json({ ok: true, tracks, count: tracks.length, config });
-});
-
-// POST /playlists/save-radio — create in ND from previewed radio track list
-router.post('/save-radio', async (req, res) => {
-  const { name, config, trackIds, refresh_cron } = req.body;
-  if (!name?.trim())     return res.json({ ok: false, error: 'name required' });
-  if (!config)           return res.json({ ok: false, error: 'config required' });
-  if (!trackIds?.length) return res.json({ ok: false, error: 'trackIds required' });
-
-  const published = await publishPlaylist(db, { name: name.trim(), type: TYPES.RADIO, config, trackIds });
-  if (!published.ok) return res.json(published);
-  const { playlistId } = published;
-  setRefreshSchedule(playlistId, refresh_cron, 'save-radio');
-
-  logger.info('playlists', `radio playlist saved: "${name.trim()}" (${trackIds.length} tracks)`);
-  res.json({ ok: true, playlistId, count: trackIds.length });
 });
 
 // POST /playlists/preview-navilist — resolve tracks from rules, no ND writes

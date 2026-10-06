@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * finalize.js — shared post-processing for generated playlists (rules + radio)
+ * finalize.js — shared post-processing for generated (rules) playlists
  *
  * Takes a source's ordered candidate pool and applies, in order:
  *   1. disliked exclusion   — tracks marked disliked on Last.fm / ListenBrainz

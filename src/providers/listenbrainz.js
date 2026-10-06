@@ -137,16 +137,36 @@ async function getRecommendations(token, username, count = 25, offset = 0) {
   return request(token, `/cf/recommendation/user/${username}/recording`, { count, offset });
 }
 
-// ── Artist similarity ─────────────────────────────────────────────────────────
+// ── Artist similarity / metadata ──────────────────────────────────────────────
+
+const LABS_URL          = 'https://labs.api.listenbrainz.org';
+const SIMILAR_ALGORITHM = 'session_based_days_7500_session_300_contribution_5_threshold_10_limit_100_filter_True_skip_30';
 
 /**
- * Get similar artists for a given artist MBID.
- * Uses ListenBrainz collaborative filtering (behavioral similarity).
- * Response: { payload: { artists[], artist_mbid } }
- * Note: requires artist MBID, not name string.
+ * Similar artists by co-listening sessions (ListenBrainz Labs API, no auth).
+ * Response: [{ artist_mbid, name, score, ... }] most similar first, up to 100;
+ * [] for an unknown artist. Scores are raw co-listening counts, not 0–1.
  */
-async function getSimilarArtists(token, artistMbid, algorithm = 'session_based_days_7500_session_300_contribution_5_threshold_10_limit_100_filter_True_skip_30') {
-  return request(token, `/similarity/artist/${artistMbid}/${algorithm}`, {});
+async function getSimilarArtists(artistMbid) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT);
+  const qs = new URLSearchParams({ artist_mbids: artistMbid, algorithm: SIMILAR_ALGORITHM });
+  logger.debug('listenbrainz', `request: labs similar-artists ${artistMbid}`);
+  try {
+    const res = await fetch(`${LABS_URL}/similar-artists/json?${qs}`, { signal: controller.signal });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Artist credit of one recording (no auth).
+ * Response: { [recordingMbid]: { artist: { artists: [{ artist_mbid, name }] }, recording: {…} } }
+ */
+async function getRecordingArtists(recordingMbid) {
+  return request(null, '/metadata/recording/', { recording_mbids: recordingMbid, inc: 'artist' });
 }
 
 // ── Playlists ─────────────────────────────────────────────────────────────────
@@ -257,8 +277,9 @@ module.exports = {
   submitFeedback,
   // Recommendations
   getRecommendations,
-  // Artist similarity
+  // Artist similarity / metadata
   getSimilarArtists,
+  getRecordingArtists,
   // Playlists
   getPlaylistsCreatedFor,
   getUserPlaylists,

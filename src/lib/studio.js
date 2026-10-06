@@ -56,7 +56,7 @@ async function ensureLiveStatus(db, candidates) {
  * and for each song picks the studio copy (heuristic + cached MB) — deduping
  * multiple library copies of the same song down to one studio release — and
  * drops all-live groups. Preserves first-seen order. This is the generation-path
- * equivalent of the match-path disambiguation, so radio/rules pick the studio
+ * equivalent of the match-path disambiguation, so rules playlists pick the studio
  * album when the library holds several copies of a track.
  */
 async function filterStudioPool(db, ids) {

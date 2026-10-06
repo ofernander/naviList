@@ -19,7 +19,7 @@ Self-hosted playlist manager and generator for [Navidrome](https://www.navidrome
 
 ## Features
 - **naviList playlists** - In house rules-based generation using stats, tags, genres, artists, decades, etc... 
-- **Radio style playlists** - seed one or more artists and naviList finds similar music from your library using cached Last.fm similarity data. Adjustable depth (close / medium / wide).
+- **Similar artists (radio)** - add an Artist rule and set its Similar option (close / medium / wide) to include similar artists from your library using Last.fm similarity data. Combine with other rules, e.g. Artist = Tool + Similar + Decade = 1990s.
 - **Navidrome Smart Playlists (NSP)** - a UI wrapper for Navidrome's native `.nsp` smart playlist format.
 - **Manual playlists** - browse your library and build playlists by hand.
 - **Import playlists** - Import external playlist, support for m3u, JSPF, [exportify.net](https://exportify.net) CSV, naviList CSV, naviList JSON.
