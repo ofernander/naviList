@@ -169,6 +169,33 @@ async function getRecordingArtists(recordingMbid) {
   return request(null, '/metadata/recording/', { recording_mbids: recordingMbid, inc: 'artist' });
 }
 
+/**
+ * Artist credits of many recordings in one POST (no auth, up to 1000 MBIDs).
+ * Returns { data, remaining, resetIn } — data shaped as getRecordingArtists;
+ * remaining / resetIn from the rate-limit headers (NaN when absent).
+ */
+async function getRecordingsArtists(recordingMbids) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT);
+  logger.debug('listenbrainz', `request: POST /metadata/recording/ (${recordingMbids.length} recordings)`);
+  try {
+    const res = await fetch(`${BASE_URL}/metadata/recording/`, {
+      method:  'POST',
+      signal:  controller.signal,
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ recording_mbids: recordingMbids, inc: 'artist' }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return {
+      data:      await res.json(),
+      remaining: Number(res.headers.get('X-RateLimit-Remaining') ?? NaN),
+      resetIn:   Number(res.headers.get('X-RateLimit-Reset-In') ?? NaN),
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // ── Playlists ─────────────────────────────────────────────────────────────────
 
 /**
@@ -280,6 +307,7 @@ module.exports = {
   // Artist similarity / metadata
   getSimilarArtists,
   getRecordingArtists,
+  getRecordingsArtists,
   // Playlists
   getPlaylistsCreatedFor,
   getUserPlaylists,

@@ -29,24 +29,32 @@ function typeAndConfig(row) {
 
 // Rebuild one playlist's tracks from its type/config. Only rules playlists
 // regenerate; everything else is skipped. Republishing writes the current
-// config shape to the Navidrome comment.
+// config shape to the Navidrome comment. Returns { ok, count } or { ok: false, error }.
 async function refreshPlaylist(row, reason = 'cron-refresh') {
   const { type, config } = typeAndConfig(row);
   if (!SCHEDULED_TYPES.has(type) || !config) {
     logger.debug('refresh', `${reason}: "${row.name}" is not a regenerable playlist (type: ${type}) — skipping`);
-    return;
+    return { ok: false, error: 'Not a rules playlist' };
   }
   try {
     const trackIds = await engine.generatePlaylist(db, config);
-    if (!trackIds.length) { logger.warn('refresh', `${reason}: no tracks for "${row.name}" — skipping`); return; }
+    if (!trackIds.length) {
+      logger.warn('refresh', `${reason}: no tracks for "${row.name}" — skipping`);
+      return { ok: false, error: 'No tracks matched rules' };
+    }
 
     const result = await publishPlaylist(db, { id: row.navidrome_id, type, config, trackIds });
-    if (!result.ok) { logger.warn('refresh', `${reason}: publish failed for "${row.name}": ${result.error}`); return; }
+    if (!result.ok) {
+      logger.warn('refresh', `${reason}: publish failed for "${row.name}": ${result.error}`);
+      return result;
+    }
     db.prepare('UPDATE navilist_playlists SET last_refreshed_at = ? WHERE navidrome_id = ?')
       .run(Math.floor(Date.now() / 1000), row.navidrome_id);
     logger.info('refresh', `${reason}: ${type} "${row.name}" regenerated (${trackIds.length} tracks)`);
+    return { ok: true, count: trackIds.length };
   } catch (e) {
     logger.error('refresh', `${reason}: error refreshing "${row.name}": ${e.message}`);
+    return { ok: false, error: e.message };
   }
 }
 

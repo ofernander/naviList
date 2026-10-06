@@ -5,7 +5,7 @@ RUN apk add --no-cache python3 make g++
 
 WORKDIR /app
 COPY package*.json ./
-RUN npm install --omit=dev
+RUN npm ci --omit=dev
 
 # ── Runtime stage: lean image, no build tools ─────────────────────────────────
 FROM node:20-alpine

@@ -11,6 +11,8 @@ const mb           = require('../../providers/musicbrainz');
 const { ingestListens } = require('../ingestion');
 const { getSettings: readSettings } = require('../../db/settings');
 const refresh      = require('../refresh');
+const { fillArtistMbids } = require('../artist_mbid');
+const { fillLiveStatus }  = require('../live_fill');
 const logger       = require('../../utils/logger');
 
 // ── Shared helpers (imported from helpers.js — no circular dep) ───────────────
@@ -351,6 +353,12 @@ function runLibrarySync(reason) {
       // Missing artists that just arrived can now appear in rules playlists.
       if (result.foundArtists > 0)
         runDetached('regenerate-rules-playlists', () => refresh.regenerateRulesPlaylists('missing-artists-found'));
+      // Artist MBIDs for new artists (and retries), then live status from their live
+      // releases; single-flight, skipped while one runs.
+      if (result.ok) runDetached('artist-metadata-fill', async () => {
+        await fillArtistMbids(db);
+        await fillLiveStatus(db);
+      });
     })
     .catch(e => {
       syncState.running    = false;

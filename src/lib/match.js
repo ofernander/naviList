@@ -266,6 +266,7 @@ function fuzzyCandidates(artist, title, resolved, tokens, minScore) {
 }
 
 module.exports = {
+  normalizeForSearch,
   buildMatcher,
   buildMatcherWarmed,
   FUZZY_MIN_SCORE,

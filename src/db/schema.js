@@ -246,6 +246,19 @@ module.exports = function (db) {
   if (!trackCols.includes('mbid'))    db.exec('ALTER TABLE tracks ADD COLUMN mbid TEXT');
   if (!trackCols.includes('is_live')) db.exec('ALTER TABLE tracks ADD COLUMN is_live INTEGER');
 
+  // Artist MBID fill (lib/artist_mbid.js): where the MBID came from and when it was
+  // last looked up. Rows from before the fill keep a null source and count as resolved.
+  const artistCols = db.prepare('PRAGMA table_info(artists)').all().map(c => c.name);
+  if (!artistCols.includes('mbid_source'))     db.exec('ALTER TABLE artists ADD COLUMN mbid_source TEXT');
+  if (!artistCols.includes('mbid_checked_at')) db.exec('ALTER TABLE artists ADD COLUMN mbid_checked_at INTEGER');
+  // Live fill (lib/live_fill.js): when the artist's live releases were last scanned.
+  if (!artistCols.includes('live_checked_at')) db.exec('ALTER TABLE artists ADD COLUMN live_checked_at INTEGER');
+
+  // Navidrome sends musicBrainzId "" for untagged songs; older syncs stored it as-is.
+  // Live scans made while those looked like MBIDs matched nothing — rescan them.
+  const clearedMbids = db.prepare("UPDATE tracks SET mbid = NULL WHERE mbid = ''").run().changes;
+  if (clearedMbids) db.exec('UPDATE artists SET live_checked_at = NULL');
+
   // Index created after the ALTER above so the column exists on pre-existing DBs.
   db.exec('CREATE INDEX IF NOT EXISTS idx_tracks_is_live ON tracks(is_live)');
 

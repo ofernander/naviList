@@ -9,7 +9,7 @@ const logger = require('../utils/logger');
 const { writeMissingArtists } = require('./sync/helpers');
 const { publishPlaylist, snapshotPlaylist } = require('./publish');
 const { buildMatcher, FUZZY_MIN_SCORE }     = require('./match');
-const { setRefreshSchedule, cancelPlaylistRefresh, schedulePlaylistRefresh } = require('./refresh');
+const { setRefreshSchedule, cancelPlaylistRefresh, schedulePlaylistRefresh, refreshPlaylist } = require('./refresh');
 const { TYPES, parseComment, normalizeRules, currentTypeConfig } = require('./playlist_types');
 const { getSettings }                       = require('../db/settings');
 
@@ -56,12 +56,15 @@ router.get('/api/list', async (req, res) => {
   const createdAt = {};
   db.prepare('SELECT navidrome_id, created_at FROM navilist_playlists').all()
     .forEach(r => { createdAt[r.navidrome_id] = r.created_at; });
+  // Playlists not in the registry (manual) fall back to Navidrome's created date.
+  const ndCreated = p => (p.created ? Math.floor(Date.parse(p.created) / 1000) || null : null);
   const lbCache  = db.prepare('SELECT lb_mbid, source_patch, title FROM lb_playlist_cache').all();
   const lbByMbid = new Map(lbCache.map(r => [r.lb_mbid, r]));
 
+  // type/config from the registry (comment fallback) — the UI never parses comments.
   function enrichPlaylist(p) {
-    const { type, config } = parseComment(p.comment);
-    const out = { ...p, type };
+    const { type, config } = p.nsp_slug ? { type: 'nsp', config: null } : playlistTypeConfig(p.id, p.comment);
+    const out = { ...p, type, config };
     if (type === TYPES.LB && config?.mbid) {
       const row = lbByMbid.get(config.mbid);
       if (row) return { ...out, lb_source_patch: row.source_patch, lb_title: row.title };
@@ -93,7 +96,7 @@ router.get('/api/list', async (req, res) => {
     }));
 
   const playlists = [
-    ...taggedActive.map(p => enrichPlaylist({ ...p, active: 1, created_at: createdAt[p.id] || null })),
+    ...taggedActive.map(p => enrichPlaylist({ ...p, active: 1, created_at: createdAt[p.id] || ndCreated(p) })),
     ...inactive.map(enrichPlaylist),
     ...nspPlaylists.map(p => ({ ...p, type: 'nsp' })),
   ];
@@ -285,6 +288,14 @@ router.post('/:id/rules', async (req, res) => {
   res.json({ ok: true, count: trackIds.length });
 });
 
+// POST /playlists/:id/regenerate — rebuild a rules playlist from its stored config
+router.post('/:id/regenerate', async (req, res) => {
+  const row = db.prepare('SELECT * FROM navilist_playlists WHERE navidrome_id = ?').get(req.params.id);
+  if (!row)        return res.json({ ok: false, error: 'Playlist not found in registry' });
+  if (!row.active) return res.json({ ok: false, error: 'Activate the playlist first' });
+  res.json(await refreshPlaylist(row, 'regenerate'));
+});
+
 // POST /playlists/preview-blocks — per-block track counts for the rule builder
 // (no combining, no ND writes)
 router.post('/preview-blocks', async (req, res) => {
@@ -296,17 +307,15 @@ router.post('/preview-blocks', async (req, res) => {
 router.post('/:id/deactivate', async (req, res) => {
   const { id } = req.params;
 
-  // Ensure we have a local snapshot before deleting from ND
-  const existing = db.prepare('SELECT navidrome_id FROM navilist_playlists WHERE navidrome_id = ?').get(id);
-  if (!existing) {
-    const detail = await navidrome.getPlaylist(db, id);
-    if (detail) {
-      const tracks = Array.isArray(detail.entry) ? detail.entry
-        : (detail.entry ? [detail.entry] : []);
-      snapshotPlaylist(db, id, detail.name, detail.comment || null,
-        tracks.map(t => t.id), detail.duration || null);
-    }
-  }
+  // Snapshot the current tracks from ND before deleting — the stored list can be
+  // stale (removals, edits made in Navidrome). A known playlist keeps its
+  // registry comment/type/config; an unknown one is registered from ND's comment.
+  const detail = await navidrome.getPlaylist(db, id);
+  if (!detail) return res.json({ ok: false, error: 'Could not read the playlist from Navidrome — not deactivated' });
+  const existing = db.prepare('SELECT 1 FROM navilist_playlists WHERE navidrome_id = ?').get(id);
+  const tracks   = Array.isArray(detail.entry) ? detail.entry : (detail.entry ? [detail.entry] : []);
+  snapshotPlaylist(db, id, detail.name, existing ? null : (detail.comment || null),
+    tracks.map(t => t.id), detail.duration || null);
 
   const result = await navidrome.deletePlaylist(db, id);
   if (!result.ok) return res.json(result);

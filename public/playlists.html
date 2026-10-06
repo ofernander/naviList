@@ -482,23 +482,16 @@
       return new Date(unix * 1000).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
     }
 
-    function isSmartPlaylist(p)  { return p.comment?.startsWith('navilist:navilist') || false; }
-    function isLbPlaylist(p)     { return p.comment?.startsWith('navilist:lb')       || false; }
-    function isLfmPlaylist(p)    { return p.comment?.startsWith('navilist:lastfm')   || false; }
-    function isNspPlaylist(p)       { return p.id?.startsWith('nsp:') || p.comment?.startsWith('navilist:nsp') || false; }
-    function isExportifyPlaylist(p) {
-      return p.comment?.startsWith('navilist:import') || p.comment?.startsWith('navilist:exportify') || false;
-    }
-    function isInactive(p)          { return p.active === 0; }
-
-    function getPlaylistType(p) {
-      if (isSmartPlaylist(p))     return 'navilist';
-      if (isLfmPlaylist(p))       return 'lastfm';
-      if (isLbPlaylist(p))        return 'listenbrainz';
-      if (isNspPlaylist(p))       return 'nsp';
-      if (isExportifyPlaylist(p)) return 'exportify';
-      return 'manual';
-    }
+    // Playlist type comes from the server (registry): server type → UI type.
+    const UI_TYPES = {
+      navilist: 'navilist', nsp: 'nsp',
+      lb: 'listenbrainz', 'lb-snapshot': 'listenbrainz',
+      lastfm: 'lastfm',   'lastfm-snapshot': 'lastfm',
+      import: 'exportify', exportify: 'exportify',
+    };
+    function getPlaylistType(p) { return UI_TYPES[p.type] || 'manual'; }
+    function isNspPlaylist(p)   { return p.type === 'nsp'; }
+    function isInactive(p)      { return p.active === 0; }
 
     function badgeClass(type) {
       return 'pl-badge-' + (type || 'manual');
@@ -515,24 +508,9 @@
       }
     }
 
-    function parseRules(p) {
-      try {
-        const json = p.comment?.replace(/^navilist:navilist\s*/, '');
-        return json ? JSON.parse(json) : null;
-      } catch (e) { return null; }
-    }
-
     function getSubscriptionInfo(p) {
-      const c = p.comment || '';
-      if (/^navilist:lb \{/.test(c)) {
-        try {
-          const data = JSON.parse(c.replace('navilist:lb ', ''));
-          return { type: 'lb', id: data.mbid };
-        } catch (e) {}
-      }
-      if (/^navilist:lastfm \{/.test(c)) {
-        try { return { type: 'lfm', id: JSON.parse(c.replace('navilist:lastfm ', '')).lfm_id }; } catch (e) {}
-      }
+      if (p.type === 'lb'     && p.config?.mbid)   return { type: 'lb',  id: p.config.mbid };
+      if (p.type === 'lastfm' && p.config?.lfm_id) return { type: 'lfm', id: p.config.lfm_id };
       return null;
     }
 
@@ -681,7 +659,7 @@
           <div class="pl-card-name">${esc(getListDisplayName(p))}</div>
           <button class="pl-card-menu" title="Options">⋯</button>
         </div>
-        <div class="pl-card-desc">${esc(p.comment?.replace(/^navilist:(navilist|lb)\s*(\{.*\})?/, '').trim() || '')}</div>
+        <div class="pl-card-desc">${esc(type === 'manual' ? (p.comment || '') : '')}</div>
         <div class="pl-card-footer">
           <span class="pl-badge ${badgeClass(type)}">${badgeLabel(type)}</span>
           <span class="pl-card-meta">${esc(meta)}</span>
@@ -1032,16 +1010,11 @@
       openRuleBuilder(p.name, 'detail', p.id);
     }
 
+    // Rebuilds from the rules stored on the server.
     async function regenerate(id, btn) {
-      const p        = allPlaylists.find(pl => pl.id === id);
-      const existing = parseRules(p);   // any saved shape — the server normalizes it
-      if (!existing) { alert('No rules found. Use "Edit rules" first.'); return; }
       if (btn) { btn.disabled = true; btn.textContent = 'Regenerating...'; }
       try {
-        const res  = await fetch(`/playlists/${id}/rules`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ rules: existing })
-        });
+        const res  = await fetch(`/playlists/${id}/regenerate`, { method: 'POST' });
         const data = await res.json();
         if (data.ok) {
           await loadPlaylists();
