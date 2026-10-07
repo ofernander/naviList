@@ -43,13 +43,24 @@ function parseComment(comment) {
   return { type: m[1], config };
 }
 
+// Values of the `rating` rule term (the track's Navidrome star rating): unrated, an exact
+// 1–5, or a range over rated tracks (min = at least, max = at most). Unrated tracks only
+// match `unrated`, so "Rating is not 1 star" keeps them.
+const RATING_VALUES = {
+  unrated: 'Unrated',
+  1: '1 star', 2: '2 stars', 3: '3 stars', 4: '4 stars', 5: '5 stars',
+  min2: 'At least 2 stars', min3: 'At least 3 stars', min4: 'At least 4 stars',
+  max2: 'At most 2 stars', max3: 'At most 3 stars', max4: 'At most 4 stars',
+};
+
 // One line summarising a rules config, e.g. "naviList · Artist: Zach Bryan + similar · 50 tracks".
 function describeRules(config) {
   const blocks = (config?.blocks || []).map(b => {
     const r = b.rule || {};
     const term = String(r.term || '').replace(/_/g, ' ');
     const name = term.charAt(0).toUpperCase() + term.slice(1);
-    return `${name}: ${r.value}` + (canonicalTerm(r.term) === 'artist' && r.options?.similar ? ' + similar' : '');
+    const value = canonicalTerm(r.term) === 'rating' ? (RATING_VALUES[r.value] || r.value) : r.value;
+    return `${name}: ${value}` + (canonicalTerm(r.term) === 'artist' && r.options?.similar ? ' + similar' : '');
   });
   const shown = blocks.slice(0, 3).join(', ') + (blocks.length > 3 ? ` +${blocks.length - 3} more` : '');
   return [RULES_COMMENT_PREFIX + (shown || 'Rules playlist'), config?.limit ? `${config.limit} tracks` : null]
@@ -281,6 +292,6 @@ function currentTypeConfig(type, config) {
 
 module.exports = {
   TYPES, SCHEDULED_TYPES, CONDITION_USES, SIMILAR_DEPTHS, SIMILAR_SOURCES,
-  parseComment, buildComment, canonicalTerm, normalizeRules, shareProblem, radioConfigToRules, currentTypeConfig,
+  RATING_VALUES, parseComment, buildComment, canonicalTerm, normalizeRules, shareProblem, radioConfigToRules, currentTypeConfig,
   MIX_TIERS, POPULARITY_TIERS, popularityTier, mixWeights, mixProblem, allowsLive,
 };

@@ -1054,6 +1054,7 @@
       genre:  { label: 'Genre',  valueType: 'text', placeholder: 'e.g. jazz' },
       artist: { label: 'Artist', valueType: 'text', placeholder: 'Artist name' },
       mood:   { label: 'Mood',   valueType: 'text', placeholder: 'e.g. melancholic' },
+      rating: { label: 'Rating', valueType: 'rating-select' },    // Navidrome stars; "Rating is not 1 star" drops 1-star tracks
       // Not filters — shown as condition rows, at most one of each per block / global:
       popularity: { label: 'Popularity', conditionOnly: true },       // split by popularity tier
       versions:   { label: 'Studio / Live', conditionOnly: true },    // split studio vs live recordings
@@ -1183,7 +1184,15 @@
     };
 
     function newBlock()     { return { rule: { term: 'artist', value: '', options: {} }, conditions: [] }; }
-    function newCondition(term) { return { term, value: term === 'stats' ? 'top_played' : '', options: {}, use: 'require' }; }
+    // Mirrors RATING_VALUES in lib/playlist_types.js (the server also validates).
+    const RATING_OPTIONS = [
+      ['unrated', 'Unrated'], ['1', '1 star'], ['2', '2 stars'], ['3', '3 stars'], ['4', '4 stars'], ['5', '5 stars'],
+      ['min2', 'At least 2 stars'], ['min3', 'At least 3 stars'], ['min4', 'At least 4 stars'],
+      ['max2', 'At most 2 stars'], ['max3', 'At most 3 stars'], ['max4', 'At most 4 stars'],
+    ];
+    // What a term's value starts as when it is picked (the rest start blank).
+    const DEFAULT_VALUE = { stats: 'top_played', rating: '1' };
+    function newCondition(term) { return { term, value: DEFAULT_VALUE[term] ?? '', options: {}, use: 'require' }; }
     const hasValue = v => !(v === undefined || v === null || v === '' || (Array.isArray(v) && !v.length));
 
     // Block shares are strict percentages of the playlist: all blank = even;
@@ -1266,7 +1275,7 @@
       });
       sel.addEventListener('change', () => {
         rule.term = sel.value;
-        rule.value = sel.value === 'stats' ? 'top_played' : '';
+        rule.value = DEFAULT_VALUE[sel.value] ?? '';
         rule.options = {};
         onChange();
       });
@@ -1618,6 +1627,17 @@
 
         wrap.appendChild(sel); wrap.appendChild(windowSel); wrap.appendChild(periodSel); wrap.appendChild(sourceSel);
         container.appendChild(wrap);
+      } else if (def.valueType === 'rating-select') {
+        const sel = document.createElement('select');
+        sel.setAttribute('aria-label', 'Rating');
+        RATING_OPTIONS.forEach(([value, label]) => {
+          const opt = document.createElement('option');
+          opt.value = value; opt.textContent = label;
+          if (value === String(rule.value)) opt.selected = true;
+          sel.appendChild(opt);
+        });
+        sel.addEventListener('change', () => { rule.value = sel.value; scheduleRuleCountPreview(); });
+        container.appendChild(sel);
       } else {
         const input = document.createElement('input');
         input.type = 'text'; input.placeholder = def.placeholder || ''; input.value = rule.value || '';

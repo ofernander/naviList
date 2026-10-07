@@ -22,11 +22,11 @@ const logger = require('../utils/logger');
 const { cleanPool, orderByArtist, mixByPopularity, splitVersions, mixVersions, combineBlocks } = require('./finalize');
 const { similarForArtist } = require('./similar');
 const { CONDITION_USES, SIMILAR_DEPTHS, SIMILAR_SOURCES, canonicalTerm, normalizeRules, shareProblem,
-        MIX_TIERS, mixProblem, mixWeights } = require('./playlist_types');
+        MIX_TIERS, mixProblem, mixWeights, RATING_VALUES } = require('./playlist_types');
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const SUPPORTED_TERMS = ['artist', 'genre', 'stats', 'decade', 'mood'];
+const SUPPORTED_TERMS = ['artist', 'genre', 'stats', 'decade', 'mood', 'rating'];
 const SUPPORTED_STATS = ['top_played', 'recently_played', 'not_recently_played', 'unplayed', 'starred', 'highly_rated', 'loved', 'disliked', 'top_artists'];
 // Stats values whose result is a meaningful best-first ranking.
 const RANKED_STATS    = ['top_played', 'recently_played', 'top_artists', 'highly_rated'];
@@ -42,6 +42,7 @@ function ruleErrors(rule, where, { condition = false } = {}) {
   if (!rule || typeof rule !== 'object') return [`${where}: missing`];
   if (!SUPPORTED_TERMS.includes(canonicalTerm(rule.term))) errors.push(`${where}: unknown term "${rule.term}"`);
   if (!hasValue(rule.value)) errors.push(`${where}: value is required`);
+  else if (canonicalTerm(rule.term) === 'rating' && !Object.hasOwn(RATING_VALUES, String(rule.value))) errors.push(`${where}: rating must be one of ${Object.keys(RATING_VALUES).join(' | ')}`);
   if (condition && !CONDITION_USES.includes(rule.use)) errors.push(`${where}: use must be one of ${CONDITION_USES.join(' | ')}`);
   const o = rule.options || {};
   if (o.similar !== undefined && !SIMILAR_DEPTHS[o.similar]) errors.push(`${where}: similar must be one of ${Object.keys(SIMILAR_DEPTHS).join(' | ')}`);
@@ -93,6 +94,7 @@ async function resolveRule(db, rule) {
     case 'genre':   return resolveGenre(db, rule);
     case 'artist':  return resolveArtist(db, rule);
     case 'mood':    return resolveMood(db, rule);
+    case 'rating':  return resolveRating(db, rule);
     default:
       logger.warn('pl_engine', `unknown term: ${rule.term}`);
       return [];
@@ -447,6 +449,22 @@ async function resolveArtist(db, rule) {
   `).all(...artistIds);
 
   return rows.map(r => r.id);
+}
+
+/**
+ * rating — the track's star rating in Navidrome (the rating of the Navidrome user
+ * naviList signs in as). Values: playlist_types.RATING_VALUES. Unrated tracks (null or 0)
+ * match only `unrated`; ranges cover rated tracks only. Ratings are read at library sync.
+ */
+function resolveRating(db, rule) {
+  const v = String(rule.value);
+  let where, args = [];
+  if (v === 'unrated')            where = 'user_rating IS NULL OR user_rating = 0';
+  else if (/^[1-5]$/.test(v))     { where = 'user_rating = ?';             args = [Number(v)]; }
+  else if (/^min[2-4]$/.test(v))  { where = 'user_rating >= ?';            args = [Number(v.slice(3))]; }
+  else if (/^max[2-4]$/.test(v))  { where = 'user_rating BETWEEN 1 AND ?'; args = [Number(v.slice(3))]; }
+  else { logger.warn('pl_engine', `unknown rating value: ${rule.value}`); return []; }
+  return db.prepare(`SELECT id FROM tracks WHERE ${where}`).all(...args).map(r => r.id);
 }
 
 /**
