@@ -39,19 +39,6 @@ function mergeCachedTracks(playlist, cached) {
   });
 }
 
-// Post-save MB studio refinement — runs detached so preview/save stay fast, then
-// swaps any wrong duplicate picks in the saved playlist and warms the cache.
-function scheduleStudioRefine(playlistId, trackIds, comment) {
-  runDetached(`studio-refine-${playlistId}`, async () => {
-    const refined = await refineStudioPicks(db, trackIds);
-    if (refined.length && refined.some((id, i) => id !== trackIds[i])) {
-      await navidrome.replacePlaylistTracks(db, playlistId, refined);
-      snapshotPlaylist(db, playlistId, null, comment, refined, null);
-      logger.info('playlists', `studio-refine: ${playlistId} updated after MB tie-break`);
-    }
-  });
-}
-
 // ── Routes ────────────────────────────────────────────────────────────────────
 
 router.get('/', (req, res) => {
