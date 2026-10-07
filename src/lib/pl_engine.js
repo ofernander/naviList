@@ -20,7 +20,7 @@
 
 const logger = require('../utils/logger');
 const { cleanPool, orderByArtist, mixByPopularity, splitVersions, mixVersions, combineBlocks } = require('./finalize');
-const { effectiveSource, ensureSimilarArtists, getSimilarArtists } = require('./similar');
+const { similarForArtist } = require('./similar');
 const { CONDITION_USES, SIMILAR_DEPTHS, SIMILAR_SOURCES, canonicalTerm, normalizeRules, shareProblem,
         MIX_TIERS, mixProblem, mixWeights } = require('./playlist_types');
 
@@ -406,9 +406,10 @@ function resolveGenre(db, rule) {
  * artist — tracks by the named artist. With options.similar (close | medium |
  * wide) the rule also takes that artist's 5 / 15 / 40 most similar artists that
  * are in the library — the "radio" option — from options.similar_source
- * (lastfm | listenbrainz; default Last.fm when a key is configured, else
- * ListenBrainz). Without it the rule is strict to the named artist. Similar
- * artists are fetched once per artist and source, then cached (lib/similar.js).
+ * (listenbrainz | lastfm; default ListenBrainz, which falls back to Last.fm
+ * when it has nothing and a key is set). Without it the rule is strict to the
+ * named artist. Similar artists are fetched once per artist and source, then
+ * cached (lib/similar.js).
  */
 async function resolveArtist(db, rule) {
   const name   = rule.value;
@@ -429,11 +430,10 @@ async function resolveArtist(db, rule) {
   const artistIds = new Set(artistRows.map(r => r.artist_id));
 
   if (depth !== undefined) {
-    const source = effectiveSource(db, rule.options?.similar_source);
     const seeds  = [...artistIds];
-    await ensureSimilarArtists(db, seeds.map(artistId => ({ artistId, name })), source);
     for (const artistId of seeds) {
-      const owned = [...new Set(getSimilarArtists(db, artistId, source).map(r => r.artistId))]
+      const similar = await similarForArtist(db, artistId, name, rule.options?.similar_source);
+      const owned = [...new Set(similar.map(r => r.artistId))]
         .filter(id => !seeds.includes(id));
       owned.slice(0, depth).forEach(id => artistIds.add(id));
     }

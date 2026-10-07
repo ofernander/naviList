@@ -145,4 +145,25 @@ function getSimilarArtists(db, artistId, source) {
   `).all(artistId, source);
 }
 
-module.exports = { SOURCES, effectiveSource, ensureSimilarArtists, getSimilarArtists };
+/**
+ * Library artists similar to one seed, most similar first: [{ artistId, score }].
+ * Uses the rule's source; when that is ListenBrainz and it gave nothing usable
+ * (error, no data, or nobody in the library) and a Last.fm key is set, Last.fm
+ * is tried instead. ListenBrainz's similar-artists endpoint is a Labs API with
+ * no stability promise, so a failure must not silently shrink the playlist.
+ * Each source's results stay in their own cache rows — scores never mix.
+ */
+async function similarForArtist(db, artistId, name, requested) {
+  const source = effectiveSource(db, requested);
+  await ensureSimilarArtists(db, [{ artistId, name }], source);
+  let rows = getSimilarArtists(db, artistId, source);
+
+  if (!rows.length && source === SOURCES.LISTENBRAINZ && getSettings(db).lastfm_api_key) {
+    logger.info('similar', `"${name}" — nothing usable from ListenBrainz, trying Last.fm`);
+    await ensureSimilarArtists(db, [{ artistId, name }], SOURCES.LASTFM);
+    rows = getSimilarArtists(db, artistId, SOURCES.LASTFM);
+  }
+  return rows;
+}
+
+module.exports = { SOURCES, effectiveSource, ensureSimilarArtists, getSimilarArtists, similarForArtist };
