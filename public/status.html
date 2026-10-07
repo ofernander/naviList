@@ -51,6 +51,7 @@
           <div class="svc-jobs">
             <div class="svc-job"><span class="svc-job-label">Library</span><span id="naviLibMeta">—</span></div>
             <div class="svc-job"><span class="svc-job-label">Last sync</span><span id="naviSyncMeta">—</span></div>
+            <div class="svc-job"><span class="svc-job-label">Popularity</span><span id="naviPopMeta">—</span></div>
           </div>
         </div>
 
@@ -288,6 +289,18 @@
       } catch (e) { return '—'; }
     }
 
+    // "812 of 979 artists rated · 30 no data · 137 pending", or why it's off.
+    // ListenBrainz needs its token for popularity; Last.fm (API key) fills in.
+    function formatPopularity(p) {
+      if (!p) return '—';
+      if (!p.listenbrainz && !p.lastfm) return 'Off — needs a ListenBrainz token or a Last.fm API key';
+      const parts = [`${p.rated.toLocaleString()} of ${p.total.toLocaleString()} artists rated`];
+      if (p.none)    parts.push(`${p.none.toLocaleString()} no data`);
+      if (p.pending) parts.push(`${p.pending.toLocaleString()} pending`);
+      if (!p.listenbrainz) parts.push('Last.fm only — add a ListenBrainz token for better coverage');
+      return parts.join(' · ');
+    }
+
     async function loadAllStatus() {
       try {
         const [histRes, countsRes] = await Promise.all([
@@ -337,6 +350,8 @@
           : 'Never imported';
         document.getElementById('malojaTopArtistsMeta').textContent = `${countsRes.topArtists || 0} artist-period rows`;
         document.getElementById('malojaTopTracksMeta').textContent  = `${countsRes.topTracks  || 0} track-period rows`;
+
+        document.getElementById('naviPopMeta').textContent = formatPopularity(countsRes.popularity);
 
         document.getElementById('lidarrPending').textContent  = countsRes.missingPending || 0;
         document.getElementById('lidarrSent').textContent     = countsRes.missingSent    || 0;

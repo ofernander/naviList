@@ -152,6 +152,59 @@ function shareProblem(blocks) {
     : `Block shares add up to ${total}%, leaving nothing for the ${blanks === 1 ? 'block' : `${blanks} blocks`} without a share — keep the total under 100% or clear the shares.`;
 }
 
+// ── Splits (popularity, versions) ─────────────────────────────────────────────
+//
+// Optional on a block or on the whole config (the default for every block; a
+// block's own wins), each a { tier: % } of the block:
+//   popularity { hit, album, deep } — tracks.pop_score (lib/popularity.js):
+//              Hit ≥ 50, Album track 15–49.9, Deep cut < 15 or unrated
+//   versions   { studio, live }     — studio vs live recordings (studio.js);
+//              absent = studio only, as before
+// Same rules as block shares — all tiers set = total 100%; some set = under 100%
+// and the blank ones split the rest — and at least one tier above 0%. A tier at
+// 0% is never used.
+const MIX_TIERS = { popularity: ['hit', 'album', 'deep'], versions: ['studio', 'live'] };
+const MIX_NAMES = { popularity: 'Popularity', versions: 'Studio / Live' };
+const POPULARITY_TIERS = MIX_TIERS.popularity;
+
+function popularityTier(score) {
+  if (score == null) return 'deep';
+  return score >= 50 ? 'hit' : score >= 15 ? 'album' : 'deep';
+}
+
+// Each tier's % with blanks filled in. Assumes mixProblem(mix, key) is null.
+function mixWeights(mix, key) {
+  const tiers = MIX_TIERS[key];
+  const set   = tiers.filter(t => mix[t] != null);
+  const spare = (100 - set.reduce((n, t) => n + mix[t], 0)) / ((tiers.length - set.length) || 1);
+  return Object.fromEntries(tiers.map(t => [t, mix[t] != null ? mix[t] : spare]));
+}
+
+// null when fine (or absent), else a message for the user. (Mirrored in
+// public/playlists.html for the live status.)
+function mixProblem(mix, key) {
+  if (mix == null) return null;
+  const tiers = MIX_TIERS[key], name = MIX_NAMES[key];
+  if (typeof mix !== 'object' || Array.isArray(mix)) return `${name} must be percentages per tier.`;
+  if (Object.keys(mix).some(k => !tiers.includes(k))) return `${name} has an unknown tier.`;
+  const vals = tiers.map(t => mix[t]).filter(v => v != null);
+  if (vals.some(v => !(typeof v === 'number' && v >= 0 && v <= 100))) return `${name} percentages must be 0–100.`;
+  if (!vals.length) return `${name}: set at least one percentage.`;
+  const total  = round1(vals.reduce((n, v) => n + v, 0));
+  const blanks = tiers.length - vals.length;
+  if (!blanks && Math.abs(total - 100) > SHARE_TOLERANCE) return `${name} adds up to ${total}% — it needs to total 100%.`;
+  if (blanks && total >= 100 - SHARE_TOLERANCE) return `${name} adds up to ${total}%, leaving nothing for the blank ${blanks === 1 ? 'tier' : 'tiers'} — keep it under 100% or fill in every tier.`;
+  if (!Object.values(mixWeights(mix, key)).some(w => w > 0)) return `${name}: at least one tier must be above 0%.`;
+  return null;
+}
+
+// Whether any block of a rules config takes live recordings (so the post-save
+// studio swap must leave live picks alone).
+function allowsLive(config) {
+  const live = m => !!m && !mixProblem(m, 'versions') && mixWeights(m, 'versions').live > 0;
+  return !!config && (live(config.versions) || (config.blocks || []).some(b => live(b.versions ?? config.versions)));
+}
+
 const LEGACY_CONFIG_KEYS = ['rules', 'max_per_artist', 'mode', 'shuffle'];
 
 // Any rules config (v1 or v2) as v2 with current term names. Malformed input is
@@ -210,4 +263,5 @@ function currentTypeConfig(type, config) {
 module.exports = {
   TYPES, SCHEDULED_TYPES, CONDITION_USES, SIMILAR_DEPTHS, SIMILAR_SOURCES,
   parseComment, buildComment, canonicalTerm, normalizeRules, shareProblem, radioConfigToRules, currentTypeConfig,
+  MIX_TIERS, POPULARITY_TIERS, popularityTier, mixWeights, mixProblem, allowsLive,
 };

@@ -59,18 +59,29 @@ async function ensureLiveStatus(db, candidates) {
  * equivalent of the match-path disambiguation, so rules playlists pick the studio
  * album when the library holds several copies of a track.
  */
-async function filterStudioPool(db, ids) {
-  if (!ids || !ids.length) return ids;
+// Same song = same artist + title (case-insensitive).
+function songKey(t) {
+  return `${(t.artist||'').toLowerCase().trim()}|||${(t.title||'').toLowerCase().trim()}`;
+}
+
+// Group a pool's tracks by song, in first-seen order.
+function groupBySong(db, ids) {
   const get = db.prepare('SELECT id, artist, title, album, duration, mbid, is_live FROM tracks WHERE id = ?');
   const groups = new Map();   // key → candidate[]
-  const order  = [];
   for (const id of ids) {
     const t = get.get(id);
     if (!t) continue;
-    const k = `${(t.artist||'').toLowerCase().trim()}|||${(t.title||'').toLowerCase().trim()}`;
-    if (!groups.has(k)) { groups.set(k, []); order.push(k); }
+    const k = songKey(t);
+    if (!groups.has(k)) groups.set(k, []);
     groups.get(k).push(t);
   }
+  return groups;
+}
+
+async function filterStudioPool(db, ids) {
+  if (!ids || !ids.length) return ids;
+  const groups = groupBySong(db, ids);
+  const order  = [...groups.keys()];
   // Fast path: cached is_live + heuristic only, NO fetch — keeps preview/save
   // snappy. The authoritative by-MBID lookup runs post-save in refineStudioPicks.
   const out = [];
@@ -85,19 +96,37 @@ async function filterStudioPool(db, ids) {
 }
 
 /**
+ * Split a pool for a studio / live mix: per song, its studio pick (as
+ * filterStudioPool) and its live copy, when it has them. Same fast path (cached
+ * is_live + heuristic). → { studio: ids[], live: ids[] }, first-seen order.
+ */
+function splitStudioLive(db, ids) {
+  const studio = [], live = [];
+  for (const cands of groupBySong(db, ids || []).values()) {
+    const studioCands = cands.filter(c => !isLiveTrack(c));
+    if (studioCands.length) studio.push(studioCands.length === 1 ? studioCands[0].id : pickStudioCandidate(db, studioCands));
+    const liveCopy = cands.find(c => isLiveTrack(c));
+    if (liveCopy) live.push(liveCopy.id);
+  }
+  return { studio, live };
+}
+
+/**
  * Post-save pass over a saved playlist's track ids: for any track with other
  * library copies of the same song, look up MB live status by recording id (if not
  * already known) and swap to the studio copy. Bounded to the playlist's tracks;
  * caches to tracks.is_live. Run detached after save so preview/save stay fast.
+ * keepLive (a playlist whose Studio / Live split takes live): a live pick was
+ * chosen on purpose and is left alone.
  */
-async function refineStudioPicks(db, trackIds) {
+async function refineStudioPicks(db, trackIds, { keepLive = false } = {}) {
   if (!trackIds || !trackIds.length) return trackIds;
   const getT = db.prepare('SELECT id, artist, title, album, duration, mbid, is_live FROM tracks WHERE id = ?');
   const sibs = db.prepare('SELECT id, artist, title, album, duration, mbid, is_live FROM tracks WHERE LOWER(artist) = LOWER(?) AND LOWER(title) = LOWER(?)');
   const out = [];
   for (const id of trackIds) {
     const t = getT.get(id);
-    if (!t) { out.push(id); continue; }
+    if (!t || (keepLive && isLiveTrack(t))) { out.push(id); continue; }
     const cands = sibs.all(t.artist, t.title);
     if (cands.length <= 1) { out.push(id); continue; }
     await ensureLiveStatus(db, cands);
@@ -147,6 +176,8 @@ function resolveCandidateMap(db, map, opts = {}) {
 }
 
 module.exports = {
+  songKey,
+  splitStudioLive,
   isLiveTrack,
   ensureLiveStatus,
   pickStudioCandidate,

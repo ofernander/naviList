@@ -245,6 +245,16 @@ module.exports = function (db) {
   const trackCols = db.prepare('PRAGMA table_info(tracks)').all().map(c => c.name);
   if (!trackCols.includes('mbid'))    db.exec('ALTER TABLE tracks ADD COLUMN mbid TEXT');
   if (!trackCols.includes('is_live')) db.exec('ALTER TABLE tracks ADD COLUMN is_live INTEGER');
+  // Popularity within the artist (lib/popularity.js). pop_source NULL = not fetched yet.
+  if (!trackCols.includes('pop_score'))      db.exec('ALTER TABLE tracks ADD COLUMN pop_score REAL');
+  // Scores were briefly based on listeners (pre-release): rename the column and
+  // clear the scores once so every artist is re-rated by plays.
+  if (trackCols.includes('pop_listeners')) {
+    db.exec('ALTER TABLE tracks RENAME COLUMN pop_listeners TO pop_plays');
+    db.exec('UPDATE tracks SET pop_score = NULL, pop_plays = NULL, pop_source = NULL, pop_fetched_at = NULL');
+  } else if (!trackCols.includes('pop_plays')) db.exec('ALTER TABLE tracks ADD COLUMN pop_plays INTEGER');
+  if (!trackCols.includes('pop_source'))     db.exec('ALTER TABLE tracks ADD COLUMN pop_source TEXT');
+  if (!trackCols.includes('pop_fetched_at')) db.exec('ALTER TABLE tracks ADD COLUMN pop_fetched_at INTEGER');
 
   // Artist MBID fill (lib/artist_mbid.js): where the MBID came from and when it was
   // last looked up. Rows from before the fill keep a null source and count as resolved.

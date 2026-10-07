@@ -1032,8 +1032,12 @@ select:focus {
 
 /* Conditions: indented under the block start */
 .rb-block-conds { display: flex; flex-direction: column; gap: 0.4rem; margin-left: 1.25rem; }
-.rb-rule.rb-cond { grid-template-columns: 1.6rem 130px 1fr 90px 2rem; padding: 0.45rem 0.75rem; }
+/* joiner | type | is / is not (or a special row's verb) | value | ✕ — reads as a sentence */
+.rb-rule.rb-cond { grid-template-columns: 1.6rem 130px 90px 1fr 2rem; padding: 0.45rem 0.75rem; }
 .rb-cond-joiner { font-size: 0.75rem; color: var(--text-dim); text-align: right; }
+/* An "or" row sits tight against the row it pairs with, so a group reads as one unit */
+.rb-rule.rb-cond.is-or { margin-top: -0.3rem; }
+.rb-rules-list > .rb-rule.rb-cond.is-or { margin-top: -0.45rem; }
 
 .rb-inline-field {
   display: flex; flex-direction: row; align-items: center; gap: 0.3rem;
@@ -1042,6 +1046,14 @@ select:focus {
 }
 .rb-rule .rb-inline-field input[type="number"],
 .rb-block-opts .rb-inline-field input[type="number"] { width: 64px; flex-shrink: 0; }
+
+/* Special condition rows (Popularity, Studio / Live, Similar Artist): fields in the value column */
+.rb-mix-fields { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem 0.75rem; min-width: 0; }
+.rb-rule .rb-mix-fields input[type="number"] { width: 58px; flex-shrink: 0; }
+.rb-rule .rb-mix-fields select { width: auto; }
+.rb-mix-status { flex-basis: 100%; font-size: 0.75rem; color: var(--text-dim); }
+.rb-mix-status.is-bad { color: var(--danger); }
+.rb-mix-use { font-size: 0.8rem; color: var(--text-dim); text-align: center; }
 
 .rb-add-cond {
   align-self: flex-start;

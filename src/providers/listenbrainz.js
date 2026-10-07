@@ -196,6 +196,38 @@ async function getRecordingsArtists(recordingMbids) {
   }
 }
 
+/**
+ * Every recording of an artist, most popular first (LB listening stats).
+ * Needs the user's token — LB refuses unauthenticated requests for most artists.
+ * Returns { rows, remaining, resetIn }: rows [] when LB has nothing (404);
+ * each row has recording_mbid, recording_name, total_listen_count (plays), total_user_count.
+ * Throws with err.status set on any other HTTP error, or when the body isn't JSON
+ * (e.g. an HTML error page).
+ */
+async function getArtistTopRecordings(token, artistMbid) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT);
+  logger.debug('listenbrainz', `request: popularity/top-recordings-for-artist ${artistMbid}`);
+  try {
+    const res = await fetch(`${BASE_URL}/popularity/top-recordings-for-artist/${artistMbid}`, {
+      signal:  controller.signal,
+      headers: { Authorization: `Token ${token}` },
+    });
+    const remaining = Number(res.headers.get('X-RateLimit-Remaining') ?? NaN);
+    const resetIn   = Number(res.headers.get('X-RateLimit-Reset-In') ?? NaN);
+    if (res.status === 404) return { rows: [], remaining, resetIn };
+    if (!res.ok) throw Object.assign(new Error(`ListenBrainz HTTP ${res.status}`), { status: res.status });
+    let rows;
+    try { rows = JSON.parse(await res.text()); }
+    catch (e) {
+      throw Object.assign(new Error(`ListenBrainz HTTP ${res.status}, not JSON (${res.headers.get('content-type') || 'no content-type'})`), { status: res.status });
+    }
+    return { rows: Array.isArray(rows) ? rows : [], remaining, resetIn };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // ── Playlists ─────────────────────────────────────────────────────────────────
 
 /**
@@ -308,6 +340,7 @@ module.exports = {
   getSimilarArtists,
   getRecordingArtists,
   getRecordingsArtists,
+  getArtistTopRecordings,
   // Playlists
   getPlaylistsCreatedFor,
   getUserPlaylists,

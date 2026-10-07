@@ -1088,6 +1088,10 @@
       genre:  { label: 'Genre',  valueType: 'text', placeholder: 'e.g. jazz' },
       artist: { label: 'Artist', valueType: 'text', placeholder: 'Artist name' },
       mood:   { label: 'Mood',   valueType: 'text', placeholder: 'e.g. melancholic' },
+      // Not filters — shown as condition rows, at most one of each per block / global:
+      popularity: { label: 'Popularity', conditionOnly: true },       // split by popularity tier
+      versions:   { label: 'Studio / Live', conditionOnly: true },    // split studio vs live recordings
+      similar:    { label: 'Similar Artist', conditionOnly: true },   // Artist blocks only: add similar artists
     };
 
     const STATS_VALUES = [
@@ -1170,7 +1174,7 @@
         try {
           const d = await (await fetch(`/playlists/api/${editingId}/rules`)).json();
           if (d.ok) {
-            rbConfig = { blocks: d.rules.blocks || [], conditions: d.rules.conditions || [] };
+            rbConfig = { blocks: d.rules.blocks || [], conditions: d.rules.conditions || [], popularity: d.rules.popularity, versions: d.rules.versions };
             if (!rbConfig.blocks.length) rbConfig.blocks = [newBlock()];
             document.getElementById('rbLimit').value = d.rules.limit ?? 25;
           }
@@ -1183,15 +1187,28 @@
       setTimeout(() => document.getElementById('rulesNameInput').focus(), 50);
     }
 
-    // Artist block option: also include the artist's most similar artists (the
-    // "radio" option) — Close / Medium / Wide = 5 / 15 / 40 artists you own —
-    // from ListenBrainz (default, no key needed) or Last.fm (needs an API key).
+    // Similar Artist (Artist blocks only, added as a condition): also include the
+    // artist's most similar artists — Close / Medium / Wide = 5 / 15 / 40 artists you
+    // own — from ListenBrainz (default, no key needed) or Last.fm (needs an API key).
     // Seed share = how much of the block the artist itself gets (blank = even).
-    const SIMILAR_OPTIONS = { '': 'Similar: Off', close: 'Similar: Close', medium: 'Similar: Medium', wide: 'Similar: Wide' };
+    // Stored on the block's start rule (rule.options.similar …), as before.
+    const SIMILAR_OPTIONS = { close: 'Close (5 artists)', medium: 'Medium (15 artists)', wide: 'Wide (40 artists)' };
+    const SIMILAR_DEFAULT = 'medium';
     const SIMILAR_SOURCE_OPTIONS = { listenbrainz: 'via ListenBrainz', lastfm: 'via Last.fm' };
     const SIMILAR_DEFAULT_SOURCE = 'listenbrainz';
-    // Conditions narrow a block: Only matching tracks, or Not them.
-    const CONDITION_USES = { require: 'Only', exclude: 'Not' };
+    // Conditions narrow a block and read as a sentence: "Decade is 1990s",
+    // "Artist is not Taylor Swift" (saved as use: require / exclude).
+    const CONDITION_USES = { require: 'is', exclude: 'is not' };
+
+    // Split conditions: the % of the block taken from each tier. Optional — added from
+    // "+ Add condition" — and pre-filled with a preset the user can change. Stored as
+    // their own field on the block / config (owner[key]); a block's own wins.
+    //   popularity — tracks.pop_score: Hit ≥ 50, Album track 15–49.9, Deep cut < 15 or unrated
+    //   versions   — studio vs live recordings (live = MB-confirmed or looks live)
+    const MIXES = {
+      popularity: { tiers: { hit: 'Hit', album: 'Album track', deep: 'Deep cut' }, preset: { hit: 25, album: 75, deep: 0 } },
+      versions:   { tiers: { studio: 'Studio', live: 'Live' },                    preset: { studio: 100, live: 0 } },
+    };
 
     function newBlock()     { return { rule: { term: 'artist', value: '', options: {} }, conditions: [] }; }
     function newCondition() { return { term: 'decade', value: '', options: {}, use: 'require' }; }
@@ -1211,9 +1228,43 @@
         : `Block shares add up to ${total}%, leaving nothing for the ${blanks === 1 ? 'block' : `${blanks} blocks`} without a share — keep the total under 100% or clear the shares.`;
     }
 
+    // Mirrors mixWeights() / mixProblem() in lib/playlist_types.js (the server also
+    // refuses): same rules as block shares, plus at least one tier above 0%.
+    function mixWeights(mix, key) {
+      const tiers = Object.keys(MIXES[key].tiers);
+      const set   = tiers.filter(t => mix[t] != null);
+      const spare = (100 - set.reduce((n, t) => n + mix[t], 0)) / ((tiers.length - set.length) || 1);
+      return Object.fromEntries(tiers.map(t => [t, mix[t] != null ? mix[t] : spare]));
+    }
+    function mixProblem(mix, key) {
+      if (!mix) return null;
+      const name   = TERMS[key].label;
+      const tiers  = Object.keys(MIXES[key].tiers);
+      const vals   = tiers.map(t => mix[t]).filter(v => v != null);
+      if (!vals.length) return `${name}: set at least one percentage.`;
+      const total  = Math.round(vals.reduce((n, v) => n + v, 0) * 10) / 10;
+      const blanks = tiers.length - vals.length;
+      if (!blanks && Math.abs(total - 100) > 0.5) return `${name} adds up to ${total}% — it needs to total 100%.`;
+      if (blanks && total >= 99.5) return `${name} adds up to ${total}%, leaving nothing for the blank ${blanks === 1 ? 'tier' : 'tiers'} — keep it under 100% or fill in every tier.`;
+      if (!Object.values(mixWeights(mix, key)).some(w => w > 0)) return `${name}: at least one tier must be above 0%.`;
+      return null;
+    }
+    // First split problem in a rules payload, for the Preview / Save refusal.
+    function payloadMixProblem(rules) {
+      for (const key of Object.keys(MIXES)) {
+        const shared = mixProblem(rules[key], key);
+        if (shared) return `Every block: ${shared}`;
+        for (const [i, b] of rules.blocks.entries()) {
+          const p = mixProblem(b[key], key);
+          if (p) return `Block ${i + 1}: ${p}`;
+        }
+      }
+      return null;
+    }
+
     function renderBuilder() {
       renderBlocks();
-      renderConditionList(document.getElementById('rbSharedConditions'), rbConfig.conditions, { shared: true });
+      renderConditionList(document.getElementById('rbSharedConditions'), rbConfig.conditions, { shared: true, owner: rbConfig });
       scheduleRuleCountPreview();
     }
 
@@ -1224,10 +1275,13 @@
     }
 
     // Term dropdown; changing the term resets the rule's value and options.
-    function buildTermSelect(rule, onChange) {
+    // Sorted by label. Condition-only terms are offered in condition rows only, and
+    // only those in `allow` (one of each per block / global).
+    function buildTermSelect(rule, onChange, { condition = false, allow = [] } = {}) {
       const sel = document.createElement('select');
       sel.setAttribute('aria-label', 'Rule type');
-      Object.entries(TERMS).forEach(([key, def]) => {
+      Object.entries(TERMS).sort((a, b) => a[1].label.localeCompare(b[1].label)).forEach(([key, def]) => {
+        if (def.conditionOnly && !(condition && (allow.includes(key) || rule.term === key))) return;
         const opt = document.createElement('option');
         opt.value = key; opt.textContent = def.label;
         if (key === rule.term) opt.selected = true;
@@ -1283,40 +1337,171 @@
       );
       card.appendChild(head);
 
-      if (block.rule.term === 'artist') card.appendChild(buildSimilarOptions(block.rule));
-
       const conds = document.createElement('div');
       conds.className = 'rb-block-conds';
-      renderConditionList(conds, block.conditions);
+      renderConditionList(conds, block.conditions, { owner: block });
       const addCond = document.createElement('button');
       addCond.className = 'rb-add-cond'; addCond.textContent = '+ Add condition';
-      addCond.addEventListener('click', () => { block.conditions.push(newCondition()); renderConditionList(conds, block.conditions); });
+      addCond.addEventListener('click', () => { block.conditions.push(newCondition()); renderConditionList(conds, block.conditions, { owner: block }); });
       card.append(conds, addCond);
       return card;
     }
 
-    // Similar options for an Artist block: depth, source, seed share.
-    function buildSimilarOptions(rule) {
-      const row = document.createElement('div');
-      row.className = 'rb-block-opts';
-      const o = rule.options || (rule.options = {});
+    // Condition rows for a block (or the shared section). A condition repeating
+    // the previous one's type with Only is labelled "or" — either matches.
+    // Shared conditions: Artist can only be Not — "Only artist X" for every
+    // block would reduce the playlist to one artist.
+    // `owner` (the block, or the whole config for the global section) holds the
+    // special rows — Similar Artist, Popularity, Studio / Live — shown after the
+    // normal conditions.
+    function renderConditionList(container, list, { shared = false, owner } = {}) {
+      const rerender = () => renderConditionList(container, list, { shared, owner });
+      container.innerHTML = '';
+      // Group rows the way the engine combines them — by type, in order of first
+      // appearance, "is" before "is not" — so the joiners read true. Order doesn't
+      // change the result.
+      const firstSeen = new Map();
+      list.forEach((c, i) => { if (!firstSeen.has(c.term)) firstSeen.set(c.term, i); });
+      list.sort((a, b) => firstSeen.get(a.term) - firstSeen.get(b.term) || (a.use === 'exclude') - (b.use === 'exclude'));
+      list.forEach((cond, j) => {
+        const notOnly = shared && cond.term === 'artist';
+        if (notOnly) cond.use = 'exclude';
+        const row = document.createElement('div');
+        row.className = 'rb-rule rb-cond';
 
-      const simSel = document.createElement('select');
-      simSel.setAttribute('aria-label', 'Similar artists');
-      simSel.title = 'Also include similar artists from your library';
+        // Joiners: "or" between "is" rows of one type (either matches), "and" between
+        // groups and between "is not" rows (all hold).
+        const prev = list[j - 1];
+        const isOr = prev && prev.term === cond.term && prev.use === 'require' && cond.use === 'require';
+        const joiner = document.createElement('span');
+        joiner.className = 'rb-cond-joiner';
+        joiner.textContent = !prev ? '' : isOr ? 'or' : 'and';
+        if (isOr) row.classList.add('is-or');
+
+        const valueWrap = document.createElement('div');
+        valueWrap.style.minWidth = '0';
+        renderValueInput(valueWrap, cond);
+
+        const useSel = document.createElement('select');
+        useSel.className = `rb-use is-${cond.use}`;
+        useSel.setAttribute('aria-label', 'is or is not');
+        Object.entries(CONDITION_USES).forEach(([value, label]) => {
+          if (notOnly && value !== 'exclude') return;
+          const opt = document.createElement('option'); opt.value = value; opt.textContent = label;
+          if (value === cond.use) opt.selected = true;
+          useSel.appendChild(opt);
+        });
+        if (notOnly) useSel.title = 'An artist for every block can only be "is not" — "is" would leave one artist';
+        useSel.addEventListener('change', () => { cond.use = useSel.value; rerender(); scheduleRuleCountPreview(); });
+
+        row.append(
+          joiner,
+          buildTermSelect(cond, () => {
+            // Picking a special turns this row into it, pre-filled.
+            if (TERMS[cond.term].conditionOnly) { list.splice(j, 1); addSpecial(owner, cond.term); }
+            rerender(); scheduleRuleCountPreview();
+          }, { condition: true, allow: specialsAvailable(owner) }),
+          useSel, valueWrap,
+          removeButton('Remove condition', () => { list.splice(j, 1); rerender(); scheduleRuleCountPreview(); })
+        );
+        container.appendChild(row);
+      });
+      if (owner?.rule?.options?.similar) container.appendChild(buildSimilarRow(owner, list, rerender));
+      for (const key of Object.keys(MIXES))
+        if (owner?.[key]) container.appendChild(buildMixRow(owner, key, list, rerender));
+    }
+
+    // Specials the owner can still add: one of each; Similar Artist only on an Artist block.
+    function specialsAvailable(owner) {
+      if (!owner) return [];
+      return [
+        ...Object.keys(MIXES).filter(key => !owner[key]),
+        ...(owner.rule?.term === 'artist' && !owner.rule.options?.similar ? ['similar'] : []),
+      ];
+    }
+    function addSpecial(owner, key) {
+      if (MIXES[key]) { owner[key] = { ...MIXES[key].preset }; return; }
+      const o = owner.rule.options || (owner.rule.options = {});
+      o.similar = SIMILAR_DEFAULT; o.similar_source = o.similar_source || SIMILAR_DEFAULT_SOURCE;
+    }
+    function removeSpecial(owner, key) {
+      if (MIXES[key]) { delete owner[key]; return; }
+      const o = owner.rule.options || {};
+      delete o.similar; delete o.similar_source; delete o.seed_share;
+    }
+
+    // Shared shell for a special row: its type select (changing it turns the row back
+    // into a normal condition), a fixed verb where normal rows have is / is not,
+    // the value cell, ✕.
+    function specialRow(owner, key, list, rerender, valueCell, useLabel, useTitle) {
+      const row = document.createElement('div');
+      row.className = 'rb-rule rb-cond';
+      // "with": special rows don't filter, they shape what the conditions allow.
+      const joiner = document.createElement('span'); joiner.className = 'rb-cond-joiner'; joiner.textContent = 'with';
+      const asRule = { term: key, value: '', options: {} };
+      const termSel = buildTermSelect(asRule, () => {
+        removeSpecial(owner, key);
+        if (TERMS[asRule.term].conditionOnly) addSpecial(owner, asRule.term);
+        else list.push({ term: asRule.term, value: asRule.value, options: {}, use: 'require' });
+        rerender(); scheduleRuleCountPreview();
+      }, { condition: true, allow: specialsAvailable(owner) });
+      const use = document.createElement('span');
+      use.className = 'rb-mix-use'; use.textContent = useLabel; use.title = useTitle;
+      row.append(joiner, termSel, use, valueCell,
+        removeButton(`Remove ${TERMS[key].label}`, () => { removeSpecial(owner, key); rerender(); scheduleRuleCountPreview(); }));
+      return row;
+    }
+
+    // A split row (Popularity, Studio / Live): a % per tier (blank = split the rest).
+    function buildMixRow(owner, key, list, rerender) {
+      const mix = owner[key];
+      const fields = document.createElement('div');
+      fields.className = 'rb-mix-fields';
+      const status = document.createElement('span');
+      status.className = 'rb-mix-status';
+      const paint = () => {
+        const problem = mixProblem(mix, key);
+        status.classList.toggle('is-bad', !!problem);
+        if (problem) { status.textContent = problem; return; }
+        const w = mixWeights(mix, key);
+        status.textContent = Object.entries(MIXES[key].tiers).filter(([t]) => w[t] > 0)
+          .map(([t, label]) => `${label} ${Math.round(w[t] * 10) / 10}%`).join(' · ');
+      };
+      Object.entries(MIXES[key].tiers).forEach(([tier, label]) => {
+        const field = document.createElement('label');
+        field.className = 'rb-inline-field';
+        const input = document.createElement('input');
+        input.type = 'number'; input.min = '0'; input.max = '100'; input.placeholder = '—';
+        input.setAttribute('aria-label', `${label} %`);
+        input.value = mix[tier] ?? '';
+        input.addEventListener('input', () => {
+          const v = parseFloat(input.value);
+          mix[tier] = Number.isFinite(v) ? Math.max(0, Math.min(100, v)) : null;
+          paint(); scheduleRuleCountPreview();
+        });
+        field.append(document.createTextNode(label), input, document.createTextNode('%'));
+        fields.appendChild(field);
+      });
+      fields.appendChild(status);
+      paint();
+      return specialRow(owner, key, list, rerender, fields, 'split',
+        'Sets the mix of the tracks this section allows — it does not filter them');
+    }
+
+    // Similar Artist row (Artist blocks): depth, source, seed share.
+    function buildSimilarRow(block, list, rerender) {
+      const o = block.rule.options;
+      const fields = document.createElement('div');
+      fields.className = 'rb-mix-fields';
+
+      const depthSel = document.createElement('select');
+      depthSel.setAttribute('aria-label', 'How many similar artists');
       Object.entries(SIMILAR_OPTIONS).forEach(([value, label]) => {
         const opt = document.createElement('option'); opt.value = value; opt.textContent = label;
-        if (value === (o.similar || '')) opt.selected = true;
-        simSel.appendChild(opt);
+        if (value === o.similar) opt.selected = true;
+        depthSel.appendChild(opt);
       });
-      simSel.addEventListener('change', () => {
-        if (simSel.value) { o.similar = simSel.value; o.similar_source = o.similar_source || SIMILAR_DEFAULT_SOURCE; }
-        else { delete o.similar; delete o.similar_source; delete o.seed_share; }
-        row.replaceWith(buildSimilarOptions(rule));
-        scheduleRuleCountPreview();
-      });
-      row.appendChild(simSel);
-      if (!o.similar) return row;
+      depthSel.addEventListener('change', () => { o.similar = depthSel.value; scheduleRuleCountPreview(); });
 
       const srcSel = document.createElement('select');
       srcSel.setAttribute('aria-label', 'Similar artists source');
@@ -1339,52 +1524,9 @@
       });
       seedWrap.append(document.createTextNode('seed'), seedInput, document.createTextNode('%'));
 
-      row.append(srcSel, seedWrap);
-      return row;
-    }
-
-    // Condition rows for a block (or the shared section). A condition repeating
-    // the previous one's type with Only is labelled "or" — either matches.
-    // Shared conditions: Artist can only be Not — "Only artist X" for every
-    // block would reduce the playlist to one artist.
-    function renderConditionList(container, list, { shared = false } = {}) {
-      const rerender = () => renderConditionList(container, list, { shared });
-      container.innerHTML = '';
-      list.forEach((cond, j) => {
-        const notOnly = shared && cond.term === 'artist';
-        if (notOnly) cond.use = 'exclude';
-        const row = document.createElement('div');
-        row.className = 'rb-rule rb-cond';
-
-        const prev = list[j - 1];
-        const joiner = document.createElement('span');
-        joiner.className = 'rb-cond-joiner';
-        joiner.textContent = prev && prev.term === cond.term && prev.use === 'require' && cond.use === 'require' ? 'or' : '';
-
-        const valueWrap = document.createElement('div');
-        valueWrap.style.minWidth = '0';
-        renderValueInput(valueWrap, cond);
-
-        const useSel = document.createElement('select');
-        useSel.className = `rb-use is-${cond.use}`;
-        useSel.setAttribute('aria-label', 'Only or Not');
-        Object.entries(CONDITION_USES).forEach(([value, label]) => {
-          if (notOnly && value !== 'exclude') return;
-          const opt = document.createElement('option'); opt.value = value; opt.textContent = label;
-          if (value === cond.use) opt.selected = true;
-          useSel.appendChild(opt);
-        });
-        if (notOnly) useSel.title = 'An artist applied to every block can only be excluded';
-        useSel.addEventListener('change', () => { cond.use = useSel.value; rerender(); scheduleRuleCountPreview(); });
-
-        row.append(
-          joiner,
-          buildTermSelect(cond, () => { rerender(); scheduleRuleCountPreview(); }),
-          valueWrap, useSel,
-          removeButton('Remove condition', () => { list.splice(j, 1); rerender(); scheduleRuleCountPreview(); })
-        );
-        container.appendChild(row);
-      });
+      fields.append(depthSel, srcSel, seedWrap);
+      return specialRow(block, 'similar', list, rerender, fields, 'adds',
+        'Adds the artist\'s most similar artists from your library to this block');
     }
 
     function renderValueInput(container, rule) {
@@ -1535,6 +1677,7 @@
         if (!hasValue(b.rule.value)) return;
         const out = { rule: clean(b.rule), conditions: conds(b.conditions) };
         if (typeof b.share === 'number') out.share = b.share;
+        for (const key of Object.keys(MIXES)) if (b[key]) out[key] = { ...b[key] };
         blocks.push(out); blockIndex.push(i);
       });
       if (blocks.length === 1) delete blocks[0].share;   // a single block is the whole playlist
@@ -1544,6 +1687,7 @@
           limit:      parseInt(document.getElementById('rbLimit').value) || 50,
           blocks,
           conditions: conds(rbConfig.conditions),
+          ...Object.fromEntries(Object.keys(MIXES).filter(key => rbConfig[key]).map(key => [key, { ...rbConfig[key] }])),
         },
         blockIndex,
       };
@@ -1560,6 +1704,8 @@
       if (!rules.blocks.length){ status.textContent = 'Add at least one block'; status.className = 'rb-status status-err'; return; }
       const shareErr = shareProblem(rules.blocks);
       if (shareErr)           { status.textContent = shareErr; status.className = 'rb-status status-err'; return; }
+      const popErr = payloadMixProblem(rules);
+      if (popErr)             { status.textContent = popErr; status.className = 'rb-status status-err'; return; }
 
       previewBtn.disabled = true; previewBtn.textContent = 'Previewing...'; status.textContent = '';
 
@@ -1616,6 +1762,8 @@
       if (!rules.blocks.length) { status.textContent = 'Add at least one block'; status.className = 'rb-status status-err'; return; }
       const shareErr = shareProblem(rules.blocks);
       if (shareErr)            { status.textContent = shareErr; status.className = 'rb-status status-err'; return; }
+      const popErr = payloadMixProblem(rules);
+      if (popErr)              { status.textContent = popErr; status.className = 'rb-status status-err'; return; }
       saveBtn.disabled = true; saveBtn.textContent = 'Saving...'; status.textContent = ''; status.className = 'rb-status';
       try {
         const res  = await fetch(`/playlists/${rbEditingPlaylistId}/rules`, {
@@ -1649,7 +1797,7 @@
     document.getElementById('rbAddBlock').addEventListener('click', () => { rbConfig.blocks.push(newBlock()); renderBlocks(); });
     document.getElementById('rbAddShared').addEventListener('click', () => {
       rbConfig.conditions.push(newCondition());
-      renderConditionList(document.getElementById('rbSharedConditions'), rbConfig.conditions, { shared: true });
+      renderConditionList(document.getElementById('rbSharedConditions'), rbConfig.conditions, { shared: true, owner: rbConfig });
     });
 
     // ── New playlist modal ─────────────────────────────────────────────────

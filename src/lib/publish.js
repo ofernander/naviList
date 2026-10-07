@@ -13,7 +13,7 @@ const navidrome = require('../providers/navidrome');
 const logger    = require('../utils/logger');
 const { runDetached } = require('./sync/helpers');
 const { refineStudioPicks } = require('./studio');
-const { parseComment, buildComment } = require('./playlist_types');
+const { parseComment, buildComment, allowsLive } = require('./playlist_types');
 
 // ── Registry snapshot ─────────────────────────────────────────────────────────
 
@@ -60,10 +60,11 @@ function sumDuration(db, trackIds) {
 // ── Post-save studio tie-break ────────────────────────────────────────────────
 
 // Runs detached so preview/save stay fast, then swaps any wrong duplicate picks
-// in the saved playlist and warms the is_live cache.
-function scheduleStudioRefine(db, playlistId, trackIds, comment) {
+// in the saved playlist and warms the is_live cache. keepLive: the playlist's
+// Studio / Live split takes live, so live picks stay.
+function scheduleStudioRefine(db, playlistId, trackIds, comment, { keepLive = false } = {}) {
   runDetached(`studio-refine-${playlistId}`, async () => {
-    const refined = await refineStudioPicks(db, trackIds);
+    const refined = await refineStudioPicks(db, trackIds, { keepLive });
     if (refined.length && refined.some((id, i) => id !== trackIds[i])) {
       await navidrome.replacePlaylistTracks(db, playlistId, refined);
       snapshotPlaylist(db, playlistId, null, comment, refined, null);
@@ -110,7 +111,7 @@ async function publishPlaylist(db, { id = null, name, type = null, config = null
   if (Object.keys(meta).length) await navidrome.updatePlaylist(db, playlistId, meta);
 
   snapshotPlaylist(db, playlistId, name ?? null, comment, trackIds, sumDuration(db, trackIds));
-  if (type) scheduleStudioRefine(db, playlistId, trackIds, comment);
+  if (type) scheduleStudioRefine(db, playlistId, trackIds, comment, { keepLive: allowsLive(config) });
 
   return { ok: true, playlistId, created: !id };
 }

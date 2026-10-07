@@ -8,7 +8,8 @@
  *
  * A rules playlist is a set of blocks (config format: lib/playlist_types.js):
  * each block is a starting rule narrowed by its own conditions plus the shared
- * ones; the playlist combines the blocks by share.
+ * ones, optionally split by studio / live and by popularity; the playlist
+ * combines the blocks by share.
  *
  * Exports:
  *   generatePlaylist(db, config) → Promise<string[]>   — full resolution to track ID list
@@ -18,9 +19,10 @@
  */
 
 const logger = require('../utils/logger');
-const { cleanPool, orderByArtist, combineBlocks } = require('./finalize');
+const { cleanPool, orderByArtist, mixByPopularity, splitVersions, mixVersions, combineBlocks } = require('./finalize');
 const { effectiveSource, ensureSimilarArtists, getSimilarArtists } = require('./similar');
-const { CONDITION_USES, SIMILAR_DEPTHS, SIMILAR_SOURCES, canonicalTerm, normalizeRules, shareProblem } = require('./playlist_types');
+const { CONDITION_USES, SIMILAR_DEPTHS, SIMILAR_SOURCES, canonicalTerm, normalizeRules, shareProblem,
+        MIX_TIERS, mixProblem, mixWeights } = require('./playlist_types');
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -62,7 +64,15 @@ function validateRules(config, { checkShares = true } = {}) {
     errors.push(...ruleErrors(b.rule, `block ${i + 1}`));
     if (b.share !== undefined && !(typeof b.share === 'number' && b.share > 0 && b.share <= 100)) errors.push(`block ${i + 1}: share must be 1–100`);
     (b.conditions || []).forEach((c, j) => errors.push(...ruleErrors(c, `block ${i + 1} condition ${j + 1}`, { condition: true })));
+    for (const key of Object.keys(MIX_TIERS)) {
+      const problem = mixProblem(b[key], key);
+      if (problem) errors.push(`block ${i + 1}: ${problem}`);
+    }
   });
+  for (const key of Object.keys(MIX_TIERS)) {
+    const problem = mixProblem(config[key], key);
+    if (problem) errors.push(`every block: ${problem}`);
+  }
   (config.conditions || []).forEach((c, j) => {
     errors.push(...ruleErrors(c, `shared condition ${j + 1}`, { condition: true }));
     // "Only artist X" on every block would reduce the playlist to one artist.
@@ -138,14 +148,14 @@ async function generatePlaylist(db, config) {
   for (const [i, block] of config.blocks.entries()) {
     let pool = await resolveBlock(db, block, config.conditions);
     if (!isRanked(block.rule)) fisherYates(pool);
-    pool = await cleanPool(db, pool, 'pl_engine');
 
     const o = block.rule.options || {};
     const seedShare = canonicalTerm(block.rule.term) === 'artist' && o.similar ? o.seed_share : undefined;
     const seedArtistIds = seedShare === undefined ? [] : db.prepare(
       'SELECT DISTINCT artist_id FROM tracks WHERE LOWER(artist) = LOWER(?)'
     ).all(block.rule.value).map(r => r.artist_id);
-    lists.push(orderByArtist(db, pool, { seedArtistIds, seedShare }));
+    const order = ids => orderByArtist(db, ids, { seedArtistIds, seedShare });
+    lists.push(await orderBlock(db, block, config, pool, order));
     logger.debug('pl_engine', `block ${i + 1} [${block.rule.term}:${block.rule.value}] → ${lists[i].length} tracks`);
   }
 
@@ -167,10 +177,31 @@ async function previewRules(db, config) {
   if (!validation.ok) return { ok: false, errors: validation.errors };
   const blocks = [];
   for (const block of config.blocks) {
-    const ids = await resolveBlock(db, block, config.conditions);
+    let ids = await resolveBlock(db, block, config.conditions);
+    // Splits never use tiers at 0%, so those tracks don't count.
+    const versions = block.versions ?? config.versions;
+    const popular  = block.popularity ?? config.popularity;
+    const byPop    = list => popular ? mixByPopularity(db, list, mixWeights(popular, 'popularity')) : list;
+    if (versions && mixWeights(versions, 'versions').live > 0) ids = mixVersions(db, splitVersions(db, ids), mixWeights(versions, 'versions'), byPop);
+    else ids = byPop(ids);
     blocks.push({ count: ids.length, sample: ids.slice(0, 5) });
   }
   return { ok: true, blocks };
+}
+
+/**
+ * A block's pool, cleaned and in playlist order. Splits apply when set (a
+ * block's own wins over the playlist's): Studio / Live first, so its ratio is
+ * exact, then Popularity within each side. Without a Studio / Live split that
+ * takes live, the pool is studio only, as always.
+ */
+async function orderBlock(db, block, config, pool, order) {
+  const popular  = block.popularity ?? config.popularity;
+  const byPop    = ids => popular ? mixByPopularity(db, ids, mixWeights(popular, 'popularity'), order) : order(ids);
+  const versions = block.versions ?? config.versions;
+  const vw       = versions && mixWeights(versions, 'versions');
+  if (vw && vw.live > 0) return mixVersions(db, splitVersions(db, pool, 'pl_engine'), vw, byPop);
+  return byPop(await cleanPool(db, pool, 'pl_engine'));
 }
 
 // ── Term resolvers ────────────────────────────────────────────────────────────
