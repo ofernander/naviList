@@ -5,14 +5,14 @@ const db = require('../db/index');
 const navidrome = require('../providers/navidrome');
 const lidarr = require('../providers/lidarr');
 const { getSyncState } = require('./sync');
+const { getSettings } = require('../db/settings');
 
 // GET /status/api — return full status data as JSON
 router.get('/api', async (req, res) => {
   const ping        = await navidrome.ping(db);
-  const settings2   = {};
-  db.prepare('SELECT key, value FROM settings').all().forEach(r => { settings2[r.key] = r.value; });
-  const lidarrPing  = (settings2.lidarr_url && settings2.lidarr_api_key)
-    ? await lidarr.ping(settings2)
+  const settings    = getSettings(db);
+  const lidarrPing  = (settings.lidarr_url && settings.lidarr_api_key)
+    ? await lidarr.ping(settings)
     : { ok: false };
   const trackCount  = db.prepare('SELECT COUNT(*) as c FROM tracks').get().c;
   const albumCount  = db.prepare('SELECT COUNT(DISTINCT album_id) as c FROM tracks').get().c;
@@ -26,9 +26,6 @@ router.get('/api', async (req, res) => {
   const sourceMap = {};
   playsBySource.forEach(r => { sourceMap[r.source] = r.c; });
   const syncState = getSyncState();
-  const settings  = {};
-  db.prepare('SELECT key, value FROM settings').all()
-    .forEach(r => { settings[r.key] = r.value; });
 
   // Service connection status
   const services = {
@@ -62,7 +59,23 @@ router.get('/api/counts', (req, res) => {
   const lbPlaylists  = db.prepare('SELECT COUNT(*) as c FROM lb_playlist_cache').get().c;
   const lfmPlaylists = db.prepare('SELECT COUNT(*) as c FROM lfm_playlists').get().c;
   const malojaHistory = db.prepare("SELECT * FROM sync_state WHERE source = 'maloja'").get() || null;
-  res.json({ ok: true, loved, disliked, topArtists, topTracks, artistTagsLastfm, similarArtists, missingPending, missingSent, missingFound, missingIgnored, lidarrAutoAdd, lbPlaylists, lfmPlaylists, malojaHistory });
+
+  // Popularity (lib/popularity.js), per library artist: rated (a source listed it),
+  // no data (fetched, no source had it), pending (has tracks not fetched yet).
+  const pop = db.prepare(`
+    SELECT COUNT(*) AS total,
+           SUM(pending > 0)               AS pending,
+           SUM(pending = 0 AND rated > 0)  AS rated,
+           SUM(pending = 0 AND rated = 0)  AS none
+    FROM (SELECT SUM(pop_source IS NULL) AS pending, SUM(pop_source IN ('lb', 'lastfm')) AS rated
+          FROM tracks WHERE artist_id IS NOT NULL GROUP BY artist_id)
+  `).get();
+  const settings   = getSettings(db);
+  const popularity = {
+    total: pop.total || 0, rated: pop.rated || 0, none: pop.none || 0, pending: pop.pending || 0,
+    listenbrainz: !!settings.listenbrainz_token, lastfm: !!settings.lastfm_api_key,
+  };
+  res.json({ ok: true, loved, disliked, topArtists, topTracks, artistTagsLastfm, similarArtists, missingPending, missingSent, missingFound, missingIgnored, lidarrAutoAdd, lbPlaylists, lfmPlaylists, malojaHistory, popularity });
 });
 
 router.get('/api/lidarr-recent', (req, res) => {

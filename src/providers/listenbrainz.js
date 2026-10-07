@@ -137,16 +137,122 @@ async function getRecommendations(token, username, count = 25, offset = 0) {
   return request(token, `/cf/recommendation/user/${username}/recording`, { count, offset });
 }
 
-// ── Artist similarity ─────────────────────────────────────────────────────────
+// ── Artist similarity / metadata ──────────────────────────────────────────────
+
+const LABS_URL          = 'https://labs.api.listenbrainz.org';
+const SIMILAR_ALGORITHM = 'session_based_days_7500_session_300_contribution_5_threshold_10_limit_100_filter_True_skip_30';
 
 /**
- * Get similar artists for a given artist MBID.
- * Uses ListenBrainz collaborative filtering (behavioral similarity).
- * Response: { payload: { artists[], artist_mbid } }
- * Note: requires artist MBID, not name string.
+ * Similar artists by co-listening sessions (ListenBrainz Labs API, no auth).
+ * Response: [{ artist_mbid, name, score, ... }] most similar first, up to 100;
+ * [] for an unknown artist. Scores are raw co-listening counts, not 0–1.
  */
-async function getSimilarArtists(token, artistMbid, algorithm = 'session_based_days_7500_session_300_contribution_5_threshold_10_limit_100_filter_True_skip_30') {
-  return request(token, `/similarity/artist/${artistMbid}/${algorithm}`, {});
+async function getSimilarArtists(artistMbid) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT);
+  const qs = new URLSearchParams({ artist_mbids: artistMbid, algorithm: SIMILAR_ALGORITHM });
+  logger.debug('listenbrainz', `request: labs similar-artists ${artistMbid}`);
+  try {
+    const res = await fetch(`${LABS_URL}/similar-artists/json?${qs}`, { signal: controller.signal });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Artist credit of one recording (no auth).
+ * Response: { [recordingMbid]: { artist: { artists: [{ artist_mbid, name }] }, recording: {…} } }
+ */
+async function getRecordingArtists(recordingMbid) {
+  return request(null, '/metadata/recording/', { recording_mbids: recordingMbid, inc: 'artist' });
+}
+
+/**
+ * Artist credits of many recordings in one POST (no auth, up to 1000 MBIDs).
+ * Returns { data, remaining, resetIn } — data shaped as getRecordingArtists;
+ * remaining / resetIn from the rate-limit headers (NaN when absent).
+ */
+async function getRecordingsArtists(recordingMbids) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT);
+  logger.debug('listenbrainz', `request: POST /metadata/recording/ (${recordingMbids.length} recordings)`);
+  try {
+    const res = await fetch(`${BASE_URL}/metadata/recording/`, {
+      method:  'POST',
+      signal:  controller.signal,
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ recording_mbids: recordingMbids, inc: 'artist' }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return {
+      data:      await res.json(),
+      remaining: Number(res.headers.get('X-RateLimit-Remaining') ?? NaN),
+      resetIn:   Number(res.headers.get('X-RateLimit-Reset-In') ?? NaN),
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Every recording of an artist, most popular first (LB listening stats).
+ * Needs the user's token — LB refuses unauthenticated requests for most artists.
+ * Returns { rows, remaining, resetIn }: rows [] when LB has nothing (404);
+ * each row has recording_mbid, recording_name, total_listen_count (plays), total_user_count.
+ * Throws with err.status set on any other HTTP error, or when the body isn't JSON
+ * (e.g. an HTML error page).
+ */
+async function getArtistTopRecordings(token, artistMbid) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT);
+  logger.debug('listenbrainz', `request: popularity/top-recordings-for-artist ${artistMbid}`);
+  try {
+    const res = await fetch(`${BASE_URL}/popularity/top-recordings-for-artist/${artistMbid}`, {
+      signal:  controller.signal,
+      headers: { Authorization: `Token ${token}` },
+    });
+    const remaining = Number(res.headers.get('X-RateLimit-Remaining') ?? NaN);
+    const resetIn   = Number(res.headers.get('X-RateLimit-Reset-In') ?? NaN);
+    if (res.status === 404) return { rows: [], remaining, resetIn };
+    if (!res.ok) throw Object.assign(new Error(`ListenBrainz HTTP ${res.status}`), { status: res.status });
+    let rows;
+    try { rows = JSON.parse(await res.text()); }
+    catch (e) {
+      throw Object.assign(new Error(`ListenBrainz HTTP ${res.status}, not JSON (${res.headers.get('content-type') || 'no content-type'})`), { status: res.status });
+    }
+    return { rows: Array.isArray(rows) ? rows : [], remaining, resetIn };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// ── Playlists ─────────────────────────────────────────────────────────────────
+
+/**
+ * Playlists generated for a user (daily jams, weekly exploration…), newest first.
+ * Response: { playlists: [{ playlist: JSPF }], count, offset }
+ */
+async function getPlaylistsCreatedFor(token, username) {
+  return request(token, `/user/${username}/playlists/createdfor`, {});
+}
+
+/**
+ * The user's own playlists.
+ * Response: { playlists: [{ playlist: JSPF }], count, offset }
+ */
+async function getUserPlaylists(token, username) {
+  return request(token, `/user/${username}/playlists`, {});
+}
+
+/**
+ * One playlist with its tracks.
+ * Response: { playlist: JSPF } — playlist.track[] each has title, creator,
+ * identifier (recording URL) and the MusicBrainz track extension (artists[]).
+ */
+async function getPlaylist(token, mbid) {
+  return request(token, `/playlist/${mbid}`, {});
 }
 
 // ── User info ─────────────────────────────────────────────────────────────────
@@ -230,8 +336,15 @@ module.exports = {
   submitFeedback,
   // Recommendations
   getRecommendations,
-  // Artist similarity
+  // Artist similarity / metadata
   getSimilarArtists,
+  getRecordingArtists,
+  getRecordingsArtists,
+  getArtistTopRecordings,
+  // Playlists
+  getPlaylistsCreatedFor,
+  getUserPlaylists,
+  getPlaylist,
   // User info
   validateToken,
   // Ingestion adapter

@@ -9,22 +9,16 @@ const listenbrainz = require('../../providers/listenbrainz');
 const lidarr       = require('../../providers/lidarr');
 const mb           = require('../../providers/musicbrainz');
 const { ingestListens } = require('../ingestion');
+const { getSettings: readSettings } = require('../../db/settings');
+const refresh      = require('../refresh');
+const { fillArtistMbids } = require('../artist_mbid');
+const { fillPopularity }  = require('../popularity');
+const { fillLiveStatus }  = require('../live_fill');
 const logger       = require('../../utils/logger');
 
 // ── Shared helpers (imported from helpers.js — no circular dep) ───────────────
 
-const {
-  sleep,
-  buildMatchCacheLocal,
-  buildMatchCacheLocalWarmed,
-  matchLocal,
-  resolveArtistWithAliases,
-  buildNaviTitle,
-  buildLfmTitle,
-  buildLfmSnapshotTitle,
-  runDetached,
-  writeMissingArtists,
-} = require('./helpers');
+const { sleep, runDetached } = require('./helpers');
 
 // ── Sync state ────────────────────────────────────────────────────────────────
 
@@ -60,12 +54,7 @@ function setSyncStateInDb(source, fields) {
   `).run({ source, ...fields });
 }
 
-function getSettings() {
-  const rows = db.prepare('SELECT key, value FROM settings').all();
-  const s = {};
-  rows.forEach(r => { s[r.key] = r.value; });
-  return s;
-}
+function getSettings() { return readSettings(db); }
 
 // ── Missing artists (needs getSettings + lidarr, stays in index) ──────────────
 
@@ -298,135 +287,6 @@ router.post('/top-tracks/listenbrainz', (req, res) => {
   res.json({ ok: true, message: 'ListenBrainz top tracks sync started' });
 });
 
-router.get('/lb-playlists/:mbid/tracks', (req, res) => {
-  const { mbid } = req.params;
-  const rows = db.prepare('SELECT * FROM lb_playlist_tracks WHERE lb_mbid = ? ORDER BY position').all(mbid);
-  if (!rows.length) return res.json({ ok: false, error: 'No cached tracks for this playlist. Run Sync All from Services first.' });
-  const tracks  = rows.map(r => ({ artist: r.artist, title: r.title, matched: !!r.matched }));
-  const matched = tracks.filter(t => t.matched).length;
-  res.json({ ok: true, total: tracks.length, matched, tracks });
-});
-
-router.get('/lb-playlists/cached', (req, res) => {
-  const playlists = db.prepare('SELECT * FROM lb_playlist_cache ORDER BY playlist_type, title').all();
-  const tracks    = db.prepare('SELECT * FROM lb_playlist_tracks ORDER BY position').all();
-  const subs      = db.prepare('SELECT * FROM lb_subscriptions').all();
-  const subByMbid = new Map(subs.map(s => [s.lb_mbid, s]));
-  const trackMap  = new Map();
-  for (const t of tracks) {
-    if (!trackMap.has(t.lb_mbid)) trackMap.set(t.lb_mbid, []);
-    trackMap.get(t.lb_mbid).push({ artist: t.artist, title: t.title, matched: !!t.matched });
-  }
-  res.json({ ok: true, playlists: playlists.map(p => {
-    const sub = subByMbid.get(p.lb_mbid);
-    return { ...p, enabled: sub ? 1 : 0, navidrome_id: sub?.navidrome_id || null, tracks: trackMap.get(p.lb_mbid) || [] };
-  })});
-});
-
-router.get('/lb-playlists', async (req, res) => {
-  const s = getSettings();
-  try {
-    const playlists = await lbSync.fetchAndCacheLbPlaylists(db, s);
-    res.json({ ok: true, playlists });
-  } catch (e) {
-    logger.error('sync', `lb-playlists list failed: ${e.message}`);
-    res.json({ ok: false, error: e.message });
-  }
-});
-
-router.post('/lb-playlists', async (req, res) => {
-  const s = getSettings();
-  try {
-    await lbSync.fetchAndCacheLbPlaylists(db, s);
-    res.json({ ok: true, message: 'LB playlists synced' });
-  } catch (e) {
-    logger.error('sync', `lb-playlists POST failed: ${e.message}`);
-    res.json({ ok: false, error: e.message });
-  }
-});
-
-router.post('/lb-playlists/:mbid/snapshot', async (req, res) => {
-  const { mbid } = req.params;
-  const { name }  = req.body;
-  if (!name?.trim()) return res.json({ ok: false, error: 'name required' });
-
-  const rows = db.prepare('SELECT * FROM lb_playlist_tracks WHERE lb_mbid = ? AND matched = 1 ORDER BY position').all(mbid);
-  if (!rows.length) return res.json({ ok: false, error: 'No matched tracks cached for this playlist' });
-
-  const cache    = await buildMatchCacheLocalWarmed(db, rows);
-  const trackIds = rows.map(r => matchLocal(r.artist, r.title, cache)).filter(Boolean);
-  if (!trackIds.length) return res.json({ ok: false, error: 'Could not resolve any track IDs' });
-
-  try {
-    const result = await navidrome.createPlaylist(db, name.trim(), trackIds);
-    if (!result.ok) return res.json({ ok: false, error: result.error });
-    await navidrome.updatePlaylist(db, result.playlist.id, {
-      comment: `navilist:lb-snapshot ${JSON.stringify({ source: 'listenbrainz', mbid })}`
-    });
-    logger.info('sync', `lb-snapshot: created "${name.trim()}" with ${trackIds.length} tracks from ${mbid}`);
-    res.json({ ok: true, playlist_id: result.playlist.id, count: trackIds.length });
-  } catch (e) {
-    logger.error('sync', `lb-snapshot failed: ${e.message}`);
-    res.json({ ok: false, error: e.message });
-  }
-});
-
-router.post('/lb-playlists/:mbid/import', async (req, res) => {
-  const { mbid } = req.params;
-  const cached = db.prepare('SELECT * FROM lb_playlist_cache WHERE lb_mbid = ?').get(mbid);
-  if (!cached) return res.json({ ok: false, error: 'Playlist not found — run Sync All from Services first' });
-
-  const alreadySub = db.prepare('SELECT id FROM lb_subscriptions WHERE lb_mbid = ?').get(mbid);
-  if (alreadySub) return res.json({ ok: false, error: 'Already subscribed' });
-
-  const now = Math.floor(Date.now() / 1000);
-  db.prepare('INSERT INTO lb_subscriptions (lb_mbid, source_patch, navidrome_id, created_at) VALUES (?, ?, NULL, ?)')
-    .run(mbid, cached.source_patch || null, now);
-
-  try {
-    await lbSync.syncLbPlaylists(db, getSettings());
-    const sub = db.prepare('SELECT * FROM lb_subscriptions WHERE lb_mbid = ?').get(mbid);
-    res.json({ ok: true, navidrome_id: sub?.navidrome_id || null });
-  } catch (e) {
-    logger.error('sync', `lb-import failed for ${mbid}: ${e.message}`);
-    res.json({ ok: false, error: e.message });
-  }
-});
-
-router.post('/lb-playlists/:mbid/unsubscribe', async (req, res) => {
-  const { mbid } = req.params;
-  const sub = db.prepare('SELECT * FROM lb_subscriptions WHERE lb_mbid = ?').get(mbid);
-  if (!sub) return res.json({ ok: false, error: 'Not subscribed' });
-
-  try {
-    if (sub.navidrome_id) await navidrome.deletePlaylist(db, sub.navidrome_id);
-    db.prepare('DELETE FROM lb_subscriptions WHERE id = ?').run(sub.id);
-    logger.info('sync', `lb-unsubscribe: removed subscription for ${mbid}`);
-    res.json({ ok: true });
-  } catch (e) {
-    logger.error('sync', `lb-unsubscribe failed: ${e.message}`);
-    res.json({ ok: false, error: e.message });
-  }
-});
-
-router.post('/lfm-playlists/:lfm_id/unsubscribe', async (req, res) => {
-  const { lfm_id } = req.params;
-  const row = db.prepare('SELECT * FROM lfm_playlists WHERE lfm_id = ?').get(lfm_id);
-  if (!row) return res.json({ ok: false, error: 'Playlist not found' });
-
-  try {
-    if (row.navidrome_id) {
-      await navidrome.deletePlaylist(db, row.navidrome_id);
-    }
-    db.prepare('UPDATE lfm_playlists SET navidrome_id = NULL WHERE lfm_id = ?').run(lfm_id);
-    logger.info('sync', `lfm-unsubscribe: "${row.title}" removed from ND`);
-    res.json({ ok: true });
-  } catch (e) {
-    logger.error('sync', `lfm-unsubscribe failed for ${lfm_id}: ${e.message}`);
-    res.json({ ok: false, error: e.message });
-  }
-});
-
 router.post('/history/maloja', (req, res) => {
   const s = getSettings();
   if (!s.maloja_url || !s.maloja_api_key)
@@ -453,80 +313,6 @@ router.post('/top-tracks/maloja', (req, res) => {
   res.json({ ok: true, message: 'Maloja top tracks sync started' });
 });
 
-router.post('/playlists/listenbrainz', (req, res) => {
-  const s = getSettings();
-  if (!s.listenbrainz_token || !s.listenbrainz_username)
-    return res.json({ ok: false, error: 'ListenBrainz credentials required' });
-  runDetached('playlists/listenbrainz', () => lbSync.syncLbPlaylists(db, s));
-  res.json({ ok: true, message: 'ListenBrainz playlist import started' });
-});
-
-// ── Routes — Last.fm playlists ───────────────────────────────────────────────────
-
-router.get('/lfm-playlists/cached', (req, res) => {
-  const playlists = db.prepare('SELECT * FROM lfm_playlists ORDER BY title').all();
-  const tracks    = db.prepare('SELECT * FROM lfm_playlist_tracks ORDER BY position').all();
-  const trackMap  = new Map();
-  for (const t of tracks) {
-    if (!trackMap.has(t.lfm_id)) trackMap.set(t.lfm_id, []);
-    trackMap.get(t.lfm_id).push({ artist: t.artist, title: t.title, matched: !!t.matched });
-  }
-  res.json({ ok: true, playlists: playlists.map(p => ({ ...p, tracks: trackMap.get(p.lfm_id) || [] })) });
-});
-
-router.post('/lfm-playlists/:lfm_id/import', async (req, res) => {
-  const { lfm_id } = req.params;
-  const existing   = db.prepare('SELECT * FROM lfm_playlists WHERE lfm_id = ?').get(lfm_id);
-  if (!existing) return res.json({ ok: false, error: 'Playlist not found — run Sync All from Services first' });
-
-  db.prepare('UPDATE lfm_playlists SET enabled = 1 WHERE lfm_id = ?').run(lfm_id);
-  try {
-    await lfmSync.syncLfmPlaylists(db, getSettings());
-    const row = db.prepare('SELECT * FROM lfm_playlists WHERE lfm_id = ?').get(lfm_id);
-    res.json({ ok: true, navidrome_id: row?.navidrome_id || null });
-  } catch (e) {
-    logger.error('sync', `lfm-import failed for ${lfm_id}: ${e.message}`);
-    res.json({ ok: false, error: e.message });
-  }
-});
-
-router.post('/lfm-playlists/:lfm_id/snapshot', async (req, res) => {
-  const { lfm_id } = req.params;
-  const { name }   = req.body;
-  if (!name?.trim()) return res.json({ ok: false, error: 'name required' });
-
-  const cachedRows = db.prepare('SELECT * FROM lfm_playlist_tracks WHERE lfm_id = ? AND matched = 1 ORDER BY position').all(lfm_id);
-  if (!cachedRows.length) return res.json({ ok: false, error: 'No matched tracks cached for this playlist' });
-
-  const cache      = await buildMatchCacheLocalWarmed(db, cachedRows);
-  const trackIds = cachedRows.map(r => matchLocal(r.artist, r.title, cache)).filter(Boolean);
-  if (!trackIds.length) return res.json({ ok: false, error: 'Could not resolve any track IDs' });
-
-  try {
-    const result = await navidrome.createPlaylist(db, name.trim(), trackIds);
-    if (!result.ok) return res.json({ ok: false, error: result.error });
-    await navidrome.updatePlaylist(db, result.playlist.id, {
-      comment: `navilist:lastfm-snapshot ${JSON.stringify({ source: 'lastfm', lfm_id })}`
-    });
-    logger.info('sync', `lfm-snapshot: created "${name.trim()}" with ${trackIds.length} tracks from ${lfm_id}`);
-    res.json({ ok: true, playlist_id: result.playlist.id, count: trackIds.length });
-  } catch (e) {
-    logger.error('sync', `lfm-snapshot failed for ${lfm_id}: ${e.message}`);
-    res.json({ ok: false, error: e.message });
-  }
-});
-
-router.post('/lfm-playlists', async (req, res) => {
-  const s = getSettings();
-  try {
-    await lfmSync.syncLfmPlaylists(db, s);
-    res.json({ ok: true, message: 'Last.fm playlists synced' });
-  } catch (e) {
-    logger.error('sync', `lfm-playlists POST failed: ${e.message}`);
-    res.json({ ok: false, error: e.message });
-  }
-});
-
 router.post('/process-missing-artists', async (req, res) => {
   res.json({ ok: true, message: 'Processing started' });
   await processMissingArtists(true);
@@ -549,79 +335,6 @@ router.get('/status', (req, res) => {
   });
 });
 
-// ── naviList / Radio playlist cron refresh ──────────────────────────────────
-
-const cron           = require('node-cron');
-const scheduledTasks = new Map(); // navidrome_id → cron.ScheduledTask
-
-async function refreshPlaylist(pl) {
-  const engine    = require('../pl_engine');
-  const navidrome = require('../../providers/navidrome');
-  const now       = Math.floor(Date.now() / 1000);
-  const comment   = pl.comment || '';
-
-  try {
-    if (comment.startsWith('navilist:navilist ')) {
-      const rules    = JSON.parse(comment.replace('navilist:navilist ', ''));
-      const trackIds = await engine.generatePlaylist(db, rules);
-      if (!trackIds.length) { logger.warn('sync', `cron-refresh: no tracks for "${pl.name}" — skipping`); return; }
-      const result = await navidrome.replacePlaylistTracks(db, pl.navidrome_id, trackIds);
-      if (!result.ok) { logger.warn('sync', `cron-refresh: replacePlaylistTracks failed for "${pl.name}": ${result.error}`); return; }
-      db.prepare('UPDATE navilist_playlists SET last_refreshed_at = ?, track_count = ? WHERE navidrome_id = ?')
-        .run(now, trackIds.length, pl.navidrome_id);
-      logger.info('sync', `cron-refresh: "${pl.name}" regenerated (${trackIds.length} tracks)`);
-
-    } else if (comment.startsWith('navilist:radio ')) {
-      const config   = JSON.parse(comment.replace('navilist:radio ', ''));
-      const trackIds = await engine.resolveRadio(db, { artistIds: config.artistIds, depth: config.depth, includeSeed: config.include_seed });
-      if (!trackIds.length) { logger.warn('sync', `cron-refresh: no tracks for radio "${pl.name}" — skipping`); return; }
-      engine.fisherYates(trackIds);
-      const limited = trackIds.slice(0, config.track_count || 50);
-      const result  = await navidrome.replacePlaylistTracks(db, pl.navidrome_id, limited);
-      if (!result.ok) { logger.warn('sync', `cron-refresh: replacePlaylistTracks failed for radio "${pl.name}": ${result.error}`); return; }
-      db.prepare('UPDATE navilist_playlists SET last_refreshed_at = ?, track_count = ? WHERE navidrome_id = ?')
-        .run(now, limited.length, pl.navidrome_id);
-      logger.info('sync', `cron-refresh: radio "${pl.name}" regenerated (${limited.length} tracks)`);
-
-    } else {
-      logger.debug('sync', `cron-refresh: "${pl.name}" has unrecognised comment type — skipping`);
-    }
-  } catch (e) {
-    logger.error('sync', `cron-refresh: error refreshing "${pl.name}": ${e.message}`);
-  }
-}
-
-function schedulePlaylistRefresh(navidromeId, cronExpr) {
-  // Cancel any existing task for this playlist first
-  cancelPlaylistRefresh(navidromeId);
-
-  const task = cron.schedule(cronExpr, () => {
-    const pl = db.prepare('SELECT * FROM navilist_playlists WHERE navidrome_id = ? AND active = 1').get(navidromeId);
-    if (!pl) { cancelPlaylistRefresh(navidromeId); return; }
-    runDetached(`cron-refresh-${navidromeId}`, () => refreshPlaylist(pl));
-  });
-  scheduledTasks.set(navidromeId, task);
-  logger.info('sync', `cron-refresh: scheduled "${navidromeId}" with expression: ${cronExpr}`);
-}
-
-function cancelPlaylistRefresh(navidromeId) {
-  if (scheduledTasks.has(navidromeId)) {
-    scheduledTasks.get(navidromeId).stop();
-    scheduledTasks.delete(navidromeId);
-    logger.info('sync', `cron-refresh: cancelled schedule for "${navidromeId}"`);
-  }
-}
-
-function loadScheduledPlaylists() {
-  const rows = db.prepare(
-    'SELECT navidrome_id, name, refresh_cron FROM navilist_playlists WHERE refresh_cron IS NOT NULL AND active = 1'
-  ).all();
-  for (const row of rows) {
-    schedulePlaylistRefresh(row.navidrome_id, row.refresh_cron);
-  }
-  logger.info('sync', `cron-refresh: loaded ${rows.length} scheduled playlist(s) from DB`);
-}
-
 // ── Library sync runner ────────────────────────────────────────────────────────
 
 function runLibrarySync(reason) {
@@ -638,6 +351,16 @@ function runLibrarySync(reason) {
       syncState.running    = false;
       syncState.lastResult = result;
       logger.info('sync', `library sync finished (${reason}) — ok: ${result.ok}`);
+      // Missing artists that just arrived can now appear in rules playlists.
+      if (result.foundArtists > 0)
+        runDetached('regenerate-rules-playlists', () => refresh.regenerateRulesPlaylists('missing-artists-found'));
+      // Artist MBIDs for new artists (and retries), then track popularity, then live
+      // status from their live releases (slowest last); single-flight, skipped while one runs.
+      if (result.ok) runDetached('artist-metadata-fill', async () => {
+        await fillArtistMbids(db);
+        await fillPopularity(db);
+        await fillLiveStatus(db);
+      });
     })
     .catch(e => {
       syncState.running    = false;
@@ -715,8 +438,12 @@ function startAutoRefresh() {
     runExternalServiceSyncs();
   }, 30 * 60 * 1000);
 
-  // ── 6. On startup: load cron schedules for all naviList / Radio playlists ─────
-  loadScheduledPlaylists();
+  // ── 6. On startup: load cron schedules for naviList playlists, and rewrite any
+  //       playlist comment still in an older rules format, and bring back any
+  //       playlist deactivated before that feature was removed ─────────────────
+  refresh.loadScheduledPlaylists();
+  runDetached('migrate-legacy-comments', () => refresh.migrateLegacyComments());
+  runDetached('restore-deactivated', () => refresh.restoreDeactivatedPlaylists());
 
   logger.info('sync', 'auto-refresh scheduled: library poll every 5m, full sync every 6h, services every 30m, playlist refresh via cron');
 }
@@ -726,17 +453,5 @@ function startAutoRefresh() {
 module.exports = {
   router,
   getSyncState,
-  getTagSyncState: () => tagSyncState,
   startAutoRefresh,
-  schedulePlaylistRefresh,
-  cancelPlaylistRefresh,
-  sleep,
-  buildMatchCacheLocal,
-  matchLocal,
-  resolveArtistWithAliases,
-  buildNaviTitle,
-  buildLfmTitle,
-  buildLfmSnapshotTitle,
-  writeMissingArtists,
-  processMissingArtists
 };

@@ -1,7 +1,7 @@
 {
   "name": "navilist",
-  "version": "0.3.0",
-  "description": "Semi-smart playlist generator for Navidrome",
+  "version": "1.0.0",
+  "description": "Playlist manager & generator for Navidrome",
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",

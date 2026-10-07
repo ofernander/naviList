@@ -135,6 +135,23 @@ async function getRecordingIsLive(mbid) {
   return data ? isLiveRecording(data) : false;
 }
 
+/**
+ * One page of an artist's live releases (release-group type Live, credited to
+ * the artist), with their recordings. MB caps a page at ~500 tracks.
+ * Returns { recordingIds, next } — next is the offset of the following page, or
+ * null when this was the last one.
+ */
+async function getLiveRecordingsPage(artistMbid, offset = 0) {
+  const data = await request('/release', { artist: artistMbid, type: 'live', inc: 'recordings', limit: 100, offset });
+  const releases = data?.releases || [];
+  const recordingIds = [];
+  for (const rel of releases)
+    for (const medium of rel.media || [])
+      for (const t of medium.tracks || []) if (t.recording?.id) recordingIds.push(t.recording.id);
+  const seen = offset + releases.length;
+  return { recordingIds, next: releases.length && seen < (data?.['release-count'] || 0) ? seen : null };
+}
+
 // ── Exports ───────────────────────────────────────────────────────────────────
 
-module.exports = { findArtistMbid, getArtistTagsByMbid, getArtistTags, getArtistAliases, getRecordingIsLive };
+module.exports = { findArtistMbid, getArtistTagsByMbid, getArtistTags, getArtistAliases, getRecordingIsLive, getLiveRecordingsPage };

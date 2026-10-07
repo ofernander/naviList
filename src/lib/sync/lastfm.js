@@ -9,7 +9,9 @@
 
 const lastfm = require('../../providers/lastfm');
 const logger = require('../../utils/logger');
-const { sleep, buildMatchCacheLocal, buildMatchCacheLocalWarmed, matchLocal, writeMissingArtists, buildLfmTitle } = require('./helpers');
+const { sleep, writeMissingArtists, buildLfmTitle } = require('./helpers');
+const { buildMatcher, buildMatcherWarmed } = require('../match');
+const { TYPES } = require('../playlist_types');
 
 const LFM_PERIODS = ['7day', '1month', '3month', '6month', '12month', 'overall'];
 
@@ -24,7 +26,7 @@ async function syncLovedLastfm(db, settings) {
   if (!tracks) return { ok: false, error: 'No loved tracks returned' };
   const arr = Array.isArray(tracks) ? tracks : [tracks];
 
-  const cache     = buildMatchCacheLocal(db);
+  const matcher   = buildMatcher(db);
   const fetchedAt = Math.floor(Date.now() / 1000);
   const upsert    = db.prepare(`
     INSERT INTO loved_tracks (track_id, source, score, loved_at)
@@ -35,7 +37,7 @@ async function syncLovedLastfm(db, settings) {
   let matched = 0, unmatched = 0;
   const rows = [];
   for (const t of arr) {
-    const id = matchLocal(t.artist?.name || '', t.name || '', cache);
+    const id = matcher.match({ artist: t.artist?.name || '', title: t.name || '', mbid: t.mbid || null });
     if (!id) { unmatched++; continue; }
     rows.push({ track_id: id, loved_at: parseInt(t.date?.uts) || fetchedAt });
     matched++;
@@ -88,8 +90,8 @@ async function syncTopTracksLastfm(db, settings) {
   const { lastfm_api_key: apiKey, lastfm_username: username } = settings;
   if (!apiKey || !username) return { ok: false, error: 'Last.fm credentials required' };
 
-  const cache  = buildMatchCacheLocal(db);
-  const upsert = db.prepare(`
+  const matcher = buildMatcher(db);
+  const upsert  = db.prepare(`
     INSERT INTO user_top_tracks (track_id, source, period, rank, play_count, fetched_at)
     VALUES (@track_id, 'lastfm', @period, @rank, @play_count, @fetched_at)
     ON CONFLICT(track_id, source, period) DO UPDATE SET
@@ -105,7 +107,7 @@ async function syncTopTracksLastfm(db, settings) {
     const arr  = Array.isArray(tracks) ? tracks : [tracks];
     const rows = [];
     arr.forEach((t, i) => {
-      const id = matchLocal(t.artist?.name || '', t.name || '', cache);
+      const id = matcher.match({ artist: t.artist?.name || '', title: t.name || '', mbid: t.mbid || null });
       if (!id) return;
       rows.push({ track_id: id, period, rank: i + 1, play_count: parseInt(t.playcount) || null, fetched_at: fetchedAt });
     });
@@ -163,73 +165,6 @@ async function syncArtistTagsLastfm(db, settings) {
   return { ok: true, fetched, failed, total: todo.length };
 }
 
-// ── Similar artists ───────────────────────────────────────────────────────────
-
-async function syncSimilarArtistsLastfm(db, settings) {
-  const { lastfm_api_key: apiKey } = settings;
-  if (!apiKey) return { ok: false, error: 'Last.fm API key not configured' };
-
-  const artists = db.prepare('SELECT DISTINCT artist_id, artist FROM tracks WHERE artist_id IS NOT NULL AND artist IS NOT NULL').all();
-  const cached  = new Set(db.prepare('SELECT DISTINCT artist_id FROM artist_similar').all().map(r => r.artist_id));
-  const todo    = artists.filter(a => !cached.has(a.artist_id));
-
-  logger.info('sync', `similar-artists/lastfm: ${todo.length} artists to fetch (${cached.size} already cached)`);
-  if (!todo.length) return { ok: true, fetched: 0, failed: 0, total: 0 };
-
-  const upsert = db.prepare(`
-    INSERT INTO artist_similar (artist_id, similar_name, similar_artist_id, score, source, fetched_at)
-    VALUES (@artistId, @similarName, @similarArtistId, @score, 'lastfm', @fetchedAt)
-    ON CONFLICT(artist_id, similar_name) DO UPDATE SET
-      similar_artist_id = excluded.similar_artist_id,
-      score             = excluded.score,
-      fetched_at        = excluded.fetched_at
-  `);
-  const resolveArtistId = db.prepare('SELECT DISTINCT artist_id FROM tracks WHERE LOWER(artist) = LOWER(?) LIMIT 1');
-  const insertSentinel  = db.prepare(`
-    INSERT OR IGNORE INTO artist_similar (artist_id, similar_name, similar_artist_id, score, source, fetched_at)
-    VALUES (?, '__none__', NULL, NULL, 'lastfm', ?)
-  `);
-
-  let fetched = 0, failed = 0;
-  const fetchedAt = Math.floor(Date.now() / 1000);
-
-  for (const { artist_id, artist } of todo) {
-    try {
-      const data    = await lastfm.getSimilarArtists(apiKey, { name: artist }, 100);
-      const similar = data?.similarartists?.artist;
-      if (!Array.isArray(similar) || !similar.length) {
-        insertSentinel.run(artist_id, fetchedAt);
-        fetched++;
-        await sleep(1000);
-        continue;
-      }
-      const rows = similar.map(s => ({
-        artistId:        artist_id,
-        similarName:     s.name,
-        similarArtistId: resolveArtistId.get(s.name)?.artist_id ?? null,
-        score:           parseFloat(s.match) || 0,
-        fetchedAt
-      }));
-      db.transaction(rs => { for (const r of rs) upsert.run(r); })(rows);
-      const missing = rows.filter(r => r.similarArtistId === null).map(r => r.similarName);
-      if (missing.length) writeMissingArtists(db, missing, 'lastfm_similar');
-      fetched++;
-      logger.info('sync', `similar-artists/lastfm: "${artist}" → ${similar.length} results`);
-    } catch (e) {
-      if (e.message.includes('400')) {
-        insertSentinel.run(artist_id, fetchedAt);
-        logger.warn('sync', `similar-artists/lastfm: "${artist}" 400 — ${e.message} — sentinelled`);
-      } else {
-        failed++;
-        logger.warn('sync', `similar-artists/lastfm failed for "${artist}": ${e.message}`);
-      }
-    }
-    await sleep(1000);
-  }
-  logger.info('sync', `similar-artists/lastfm: ${fetched} fetched, ${failed} failed`);
-  return { ok: true, fetched, failed, total: todo.length };
-}
-
 // ── Last.fm playlists ─────────────────────────────────────────────────────────
 
 async function syncLfmPlaylists(db, settings) {
@@ -247,6 +182,7 @@ async function syncLfmPlaylists(db, settings) {
   ];
 
   const nav          = require('../../providers/navidrome');
+  const { publishPlaylist } = require('../publish');
   const upsertPl     = db.prepare(`
     INSERT INTO lfm_playlists (lfm_id, title)
     VALUES (@lfm_id, @title)
@@ -254,10 +190,11 @@ async function syncLfmPlaylists(db, settings) {
   `);
   const deleteTracks = db.prepare('DELETE FROM lfm_playlist_tracks WHERE lfm_id = ?');
   const insertTrack  = db.prepare(`
-    INSERT INTO lfm_playlist_tracks (lfm_id, position, artist, title, matched)
-    VALUES (@lfm_id, @position, @artist, @title, @matched)
+    INSERT INTO lfm_playlist_tracks (lfm_id, position, artist, title, matched, track_id)
+    VALUES (@lfm_id, @position, @artist, @title, @matched, @track_id)
   `);
   const updateNd    = db.prepare('UPDATE lfm_playlists SET navidrome_id = ?, last_imported_at = ? WHERE lfm_id = ?');
+  const isPaused    = db.prepare('SELECT 1 FROM navilist_playlists WHERE navidrome_id = ? AND active = 0');
   const unsubscribe = db.prepare('UPDATE lfm_playlists SET enabled = 0, navidrome_id = NULL WHERE lfm_id = ?');
 
   let total = 0;
@@ -270,13 +207,16 @@ async function syncLfmPlaylists(db, settings) {
       const data = await pl.fetch();
       const raw  = data?.weeklytrackchart?.track || data?.toptracks?.track || [];
       const arr  = Array.isArray(raw) ? raw : (raw ? [raw] : []);
-      const items = arr.map(t => ({ artist: t.artist?.['#text'] || t.artist?.name || (typeof t.artist === 'string' ? t.artist : '') || '', title: t.name || '' }));
-      const cache = await buildMatchCacheLocalWarmed(db, items);
-      const rows = arr.map((t, i) => {
-        const artist = t.artist?.['#text'] || t.artist?.name || (typeof t.artist === 'string' ? t.artist : '') || '';
-        const name   = t.name || '';
-        return { lfm_id, position: i, artist, title: name, matched: matchLocal(artist, name, cache) ? 1 : 0 };
-      });
+      const items = arr.map(t => ({
+        artist:     t.artist?.['#text'] || t.artist?.name || (typeof t.artist === 'string' ? t.artist : '') || '',
+        title:      t.name || '',
+        mbid:       t.mbid || null,
+        artistMbid: t.artist?.mbid || null,
+      }));
+      const matcher = await buildMatcherWarmed(db, items);
+      const ids     = [];
+      for (const it of items) ids.push(await matcher.matchWithAliases(it));
+      const rows = items.map((it, i) => ({ lfm_id, position: i, artist: it.artist, title: it.title, matched: ids[i] ? 1 : 0, track_id: ids[i] || null }));
 
       db.transaction(() => {
         deleteTracks.run(lfm_id);
@@ -290,10 +230,13 @@ async function syncLfmPlaylists(db, settings) {
 
       // Push to ND for subscribed playlists
       const sub = db.prepare('SELECT * FROM lfm_playlists WHERE lfm_id = ?').get(lfm_id);
-      if (sub?.enabled) {
-        const trackIds = rows.filter(r => r.matched).map(r => matchLocal(r.artist, r.title, cache)).filter(Boolean);
+      // A playlist still awaiting restore (refresh.restoreDeactivatedPlaylists) is skipped.
+      const paused = sub?.navidrome_id && isPaused.get(sub.navidrome_id);
+      if (paused) logger.debug('sync', `lfm-playlists: "${title}" waiting to be restored in Navidrome — not pushed`);
+      if (sub?.enabled && !paused) {
+        const trackIds = ids.filter(Boolean);
         if (trackIds.length) {
-          const comment = `navilist:lastfm ${JSON.stringify({ source: 'lastfm', lfm_id })}`;
+          const config  = { source: 'lastfm', lfm_id };
           const now     = Math.floor(Date.now() / 1000);
           if (sub.navidrome_id) {
             const ndExists = await nav.getPlaylist(db, sub.navidrome_id);
@@ -301,16 +244,16 @@ async function syncLfmPlaylists(db, settings) {
               logger.info('sync', `lfm-playlists: "${title}" ND playlist gone — unsubscribing`);
               unsubscribe.run(lfm_id);
             } else {
-              await nav.replacePlaylistTracks(db, sub.navidrome_id, trackIds);
-              await nav.updatePlaylist(db, sub.navidrome_id, { comment });
-              updateNd.run(sub.navidrome_id, now, lfm_id);
-              logger.info('sync', `lfm-playlists: refreshed "${title}" (${trackIds.length} tracks)`);
+              const result = await publishPlaylist(db, { id: sub.navidrome_id, type: TYPES.LASTFM, config, trackIds });
+              if (result.ok) {
+                updateNd.run(sub.navidrome_id, now, lfm_id);
+                logger.info('sync', `lfm-playlists: refreshed "${title}" (${trackIds.length} tracks)`);
+              }
             }
           } else {
-            const result = await nav.createPlaylist(db, title, trackIds);
+            const result = await publishPlaylist(db, { name: title, type: TYPES.LASTFM, config, trackIds });
             if (result.ok) {
-              await nav.updatePlaylist(db, result.playlist.id, { comment });
-              updateNd.run(result.playlist.id, now, lfm_id);
+              updateNd.run(result.playlistId, now, lfm_id);
               logger.info('sync', `lfm-playlists: created "${title}" (${trackIds.length} tracks)`);
             }
           }
@@ -333,6 +276,5 @@ module.exports = {
   syncTopArtistsLastfm,
   syncTopTracksLastfm,
   syncArtistTagsLastfm,
-  syncSimilarArtistsLastfm,
   syncLfmPlaylists,
 };

@@ -2,15 +2,10 @@ const crypto = require('crypto');
 const path   = require('path');
 const fs     = require('fs');
 const logger = require('../utils/logger');
+const { getSettings } = require('../db/settings');
+const { parseComment } = require('../lib/playlist_types');
 
 const PAGE_SIZE = 500;
-
-function getSettings(db) {
-  const rows = db.prepare('SELECT key, value FROM settings').all();
-  const s = {};
-  rows.forEach(r => { s[r.key] = r.value; });
-  return s;
-}
 
 function md5(str) {
   return crypto.createHash('md5').update(str).digest('hex');
@@ -68,6 +63,21 @@ async function getMusicFolders(db) {
     return res?.musicFolders?.musicFolder || [];
   } catch (e) {
     logger.error('navidrome', `getMusicFolders failed: ${e.message}`);
+    return [];
+  }
+}
+
+// Every artist Navidrome indexes: [{ id, name, musicBrainzId? }]. The MBID is an
+// OpenSubsonic field. Which artists are listed (album artists only, or all)
+// depends on the Navidrome version/config.
+async function getArtists(db) {
+  try {
+    const res = await request(db, 'getArtists');
+    const index = res?.artists?.index;
+    const groups = Array.isArray(index) ? index : (index ? [index] : []);
+    return groups.flatMap(g => Array.isArray(g.artist) ? g.artist : (g.artist ? [g.artist] : []));
+  } catch (e) {
+    logger.error('navidrome', `getArtists failed: ${e.message}`);
     return [];
   }
 }
@@ -248,54 +258,43 @@ async function deletePlaylist(db, id) {
   }
 }
 
-// ── Local playlist registry sync ──────────────────────────────────────────────
+// ── Local playlist registry ───────────────────────────────────────────────────
 
-async function syncPlaylistsToLocal(db) {
+// After a library sync: register naviList-tagged Navidrome playlists the registry
+// doesn't know (e.g. after a DB reset — type/config come from the comment), and
+// refresh name / track count of known ones. Never writes comment/type/config —
+// publish.js owns those — and never fetches track lists.
+async function adoptTaggedPlaylists(db) {
   const playlists = await getPlaylists(db);
-  if (!playlists.length) return { ok: true, synced: 0 };
+  if (!playlists.length) return { ok: true, adopted: 0 };
 
-  const now = Math.floor(Date.now() / 1000);
-  const upsertPl = db.prepare(`
-    INSERT INTO navilist_playlists (navidrome_id, name, comment, active, track_count, duration, created_at)
-    VALUES (@navidrome_id, @name, @comment, 1, @track_count, @duration, @created_at)
-    ON CONFLICT(navidrome_id) DO UPDATE SET
-      name        = excluded.name,
-      comment     = excluded.comment,
-      track_count = excluded.track_count,
-      duration    = excluded.duration,
-      active      = 1
+  const now    = Math.floor(Date.now() / 1000);
+  const known  = db.prepare('SELECT 1 FROM navilist_playlists WHERE navidrome_id = ?');
+  const insert = db.prepare(`
+    INSERT INTO navilist_playlists (navidrome_id, name, comment, type, config, active, track_count, duration, created_at)
+    VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)
   `);
-  const deleteTracks = db.prepare('DELETE FROM navilist_playlist_tracks WHERE playlist_id = ?');
-  const insertTrack  = db.prepare(`
-    INSERT OR IGNORE INTO navilist_playlist_tracks (playlist_id, track_id, position)
-    VALUES (?, ?, ?)
-  `);
+  const update = db.prepare('UPDATE navilist_playlists SET name = ?, track_count = ?, duration = ? WHERE navidrome_id = ?');
 
-  let synced = 0;
-  for (const p of playlists) {
-    const detail = await getPlaylist(db, p.id);
-    await new Promise(r => setTimeout(r, 100));
-    if (!detail) continue;
-    const tracks = Array.isArray(detail.entry) ? detail.entry : (detail.entry ? [detail.entry] : []);
+  let adopted = 0;
+  db.transaction(() => {
+    for (const p of playlists) {
+      if (known.get(p.id)) {
+        update.run(p.name, p.songCount ?? 0, p.duration || null, p.id);
+        continue;
+      }
+      const { type, config } = parseComment(p.comment);
+      if (!type) continue;   // manual playlist — not ours to register
+      const created = p.created ? Math.floor(Date.parse(p.created) / 1000) || now : now;
+      insert.run(p.id, p.name, p.comment, type, config ? JSON.stringify(config) : null,
+        p.songCount ?? 0, p.duration || null, created);
+      adopted++;
+      logger.info('navidrome', `registry: adopted ${type} playlist "${p.name}" from its Navidrome comment`);
+    }
+  })();
 
-    db.transaction(() => {
-      upsertPl.run({
-        navidrome_id: p.id,
-        name:         p.name,
-        comment:      p.comment || null,
-        track_count:  tracks.length,
-        duration:     p.duration || null,
-        created_at:   now
-      });
-      deleteTracks.run(p.id);
-      tracks.forEach((t, i) => insertTrack.run(p.id, t.id, i));
-    })();
-    synced++;
-    logger.debug('navidrome', `synced playlist "${p.name}" to local (${tracks.length} tracks)`);
-  }
-
-  logger.info('navidrome', `playlist sync: ${synced} playlists stored locally`);
-  return { ok: true, synced };
+  logger.info('navidrome', `playlist registry: ${playlists.length} Navidrome playlists checked, ${adopted} adopted`);
+  return { ok: true, adopted };
 }
 
 // ── Native API auth ──────────────────────────────────────────────────────────
@@ -397,7 +396,7 @@ async function syncFolderPage(db, folderId, offset, upsertMany, seenIds, syncedA
       starred:    s.starred     ? 1 : 0,
       userRating: s.userRating  ?? null,
       bitRate:    s.bitRate     ?? null,
-      mbid:       s.musicBrainzId ?? null,   // OpenSubsonic recording MBID (may be absent)
+      mbid:       s.musicBrainzId || null,   // OpenSubsonic recording MBID ('' or absent → null)
       syncedAt
     })));
   }
@@ -414,6 +413,7 @@ async function syncLibrary(db) {
   let inserted = 0;
   let updated = 0;
   let removed = 0;
+  let foundArtists = 0;
   const seenIds      = new Set();
   const newArtistIds = new Map(); // artistId → artistName, only for artists not yet imaged
   const syncedAt     = Math.floor(Date.now() / 1000);
@@ -526,37 +526,24 @@ async function syncLibrary(db) {
         }
       }
 
-      if (foundCount > 0) {
-        logger.info('navidrome', `${foundCount} missing artist(s) found — triggering smart playlist regeneration`);
-        const engine   = require('../lib/pl_engine');
-        const playlists = await getPlaylists(db);
-        for (const p of playlists) {
-          if (!p.comment?.startsWith('navilist:navilist')) continue;
-          try {
-            const rules    = JSON.parse(p.comment.replace(/^navilist:navilist\s*/, ''));
-            const trackIds = await engine.generatePlaylist(db, rules);
-            if (trackIds.length) await replacePlaylistTracks(db, p.id, trackIds);
-            logger.info('navidrome', `regenerated smart playlist "${p.name}" (${trackIds.length} tracks)`);
-          } catch (e) {
-            logger.warn('navidrome', `failed to regenerate "${p.name}": ${e.message}`);
-          }
-        }
-      }
+      // The caller (sync runner) regenerates rules playlists when artists turn up.
+      foundArtists = foundCount;
+      if (foundCount > 0) logger.info('navidrome', `${foundCount} missing artist(s) found`);
     } catch (e) {
       logger.warn('navidrome', `close-the-loop check failed: ${e.message}`);
     }
   }
 
-  await syncPlaylistsToLocal(db);
+  await adoptTaggedPlaylists(db);
 
-  return { ok: true, total, inserted, updated, removed };
+  return { ok: true, total, inserted, updated, removed, foundArtists };
 }
 
 module.exports = {
-  request, ping, getMusicFolders,
+  request, ping, getMusicFolders, getArtists,
   getPlaylists, getPlaylist, createPlaylist,
   updatePlaylist, addTracksToPlaylist, removeTracksFromPlaylist, deletePlaylist,
-  replacePlaylistTracks, syncLibrary, syncPlaylistsToLocal,
+  replacePlaylistTracks, syncLibrary, adoptTaggedPlaylists,
   getNativeToken, getNdTrackCount,
-  getSettings, buildParams
+  buildParams
 };

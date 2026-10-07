@@ -8,26 +8,25 @@
   <link rel="stylesheet" href="/css/main.css" />
   <script>document.documentElement.setAttribute("data-theme", localStorage.getItem("navilist_theme") || "auto");</script>
   <style>
-    .rb-req-toggle {
-      padding: 0.2rem 0.55rem;
-      border-radius: 4px;
-      border: 1px solid var(--border);
+    .rb-use {
       font-size: 0.76rem;
       font-weight: 500;
       cursor: pointer;
-      white-space: nowrap;
-      flex-shrink: 0;
-      transition: background 0.1s, color 0.1s;
     }
-    .rb-req-toggle.is-required {
+    .rb-use.is-require {
       background: var(--surface-3);
       color: var(--text-2);
       border-color: var(--border-strong);
     }
-    .rb-req-toggle.is-preferred {
+    .rb-use.is-prefer {
       background: var(--info-tint);
       color: var(--info-text);
       border-color: var(--info-border);
+    }
+    .rb-use.is-exclude {
+      background: var(--danger-tint);
+      color: var(--danger);
+      border-color: var(--danger-border);
     }
     .import-review .imp-row {
       display: flex; align-items: center; gap: 0.75rem;
@@ -99,10 +98,8 @@
       <select id="filterSelect" class="pl-filter-select">
         <option value="all">All</option>
         <option value="navilist">naviList</option>
-        <option value="radio">Radio</option>
         <option value="listenbrainz">ListenBrainz</option>
         <option value="manual">Manual</option>
-        <option value="deactivated">Deactivated</option>
         <option value="exportify">Exportify</option>
       </select>
       <div class="pl-view-toggle">
@@ -125,8 +122,6 @@
     </div>
     <div id="plSelectionBar" style="display:none" class="pl-selection-bar-multi">
       <span id="selCount" class="pl-sel-count"></span>
-      <button class="btn btn-secondary btn-sm" id="selActivateBtn">Activate</button>
-      <button class="btn btn-secondary btn-sm" id="selDeactivateBtn">Deactivate</button>
       <button class="btn btn-danger btn-sm" id="selDeleteBtn">Delete</button>
       <button class="btn btn-secondary btn-sm" id="selClearBtn">Clear</button>
     </div>
@@ -169,33 +164,46 @@
           <input type="number" id="rbLimit" min="1" max="500" value="25" />
           <span style="font-size:0.82rem; color:#aaa;">tracks</span>
         </div>
-        <div class="rb-global-field">
-          <input type="number" id="rbMaxPerArtist" min="1" max="50" value="5" />
-          <span style="font-size:0.82rem; color:#aaa;">maximum tracks per artist</span>
-        </div>
       </div>
     </div>
 
     <div class="rb-section">
-      <div class="rb-section-label">Rules</div>
-      <div class="rb-rules-list" id="rbRulesList"></div>
-      <button class="rb-add-rule" id="rbAddRule">+ Add rule</button>
+      <div class="rb-section-label">Global Conditions</div>
+      <div class="rb-rules-list" id="rbSharedConditions"></div>
+      <div id="rbAddShared"></div>
+    </div>
+
+    <div class="rb-section">
+      <div class="rb-section-label">Rule Blocks</div>
+      <div class="rb-section-hint">Each block is a starting point narrowed by its own conditions. The playlist mixes the blocks.</div>
+      <div class="rb-blocks" id="rbBlocks"></div>
+      <button class="rb-add-rule" id="rbAddBlock">+ Add block</button>
     </div>
 
     <div class="rb-section" style="margin-top:1rem;">
       <div class="rb-section-label">Auto-refresh</div>
       <div class="rb-globals">
-        <div class="rb-global-field" style="flex-direction:column; align-items:flex-start; gap:0.4rem;">
-          <label for="rbRefreshCron">Cron schedule</label>
-          <input type="text" id="rbRefreshCron" placeholder="e.g. 0 6 * * *" style="width:160px; font-family:monospace;" />
-          <div style="font-size:0.78rem; color:#aaa; line-height:1.7;">
-            <code>* * * * *</code> every minute &nbsp;·&nbsp;
-            <code>0 * * * *</code> hourly &nbsp;·&nbsp;
-            <code>0 6 * * *</code> daily 6am &nbsp;·&nbsp;
-            <code>0 6 * * 1</code> Mon 6am &nbsp;·&nbsp;
-            <code>0 6 1 * *</code> 1st of month &nbsp;·&nbsp;
-            leave blank to disable
+        <div class="rb-refresh">
+          <div class="rb-refresh-row">
+            <select id="rbRefreshFreq" aria-label="Refresh frequency">
+              <option value="off">Don't refresh</option>
+              <option value="hourly">Every hour</option>
+              <option value="daily">Every day</option>
+              <option value="weekly">Every week</option>
+              <option value="monthly">Every month</option>
+              <option value="custom">Custom (cron)</option>
+            </select>
+            <span class="rb-refresh-part" data-for="hourly">at minute
+              <select id="rbRefreshMinute" aria-label="Minute"></select></span>
+            <span class="rb-refresh-part" data-for="weekly">on
+              <select id="rbRefreshWeekday" aria-label="Day of the week"></select></span>
+            <span class="rb-refresh-part" data-for="monthly">on day
+              <select id="rbRefreshMonthday" aria-label="Day of the month"></select></span>
+            <span class="rb-refresh-part" data-for="daily weekly monthly">at
+              <input type="time" id="rbRefreshTime" value="06:00" aria-label="Time" /></span>
+            <input type="text" id="rbRefreshCron" class="rb-refresh-part" data-for="custom" placeholder="e.g. 0 6 * * *" aria-label="Cron expression" />
           </div>
+          <div class="rb-refresh-summary" id="rbRefreshSummary"></div>
         </div>
       </div>
     </div>
@@ -203,7 +211,6 @@
     <div class="rb-actions">
       <button class="btn btn-secondary" id="rulesCancelBtn">Cancel</button>
       <button class="btn" id="rulesPreviewBtn">Preview →</button>
-      <button class="btn" id="rulesSaveBtn" style="display:none">Save &amp; Generate</button>
       <span class="rb-status" id="rbStatus"></span>
     </div>
 
@@ -217,87 +224,6 @@
         <button class="btn btn-secondary" id="rbPreviewCancelBtn">Discard</button>
         <button class="btn" id="rbSaveBtn">Save Playlist</button>
         <span class="rb-status" id="rbSaveStatus"></span>
-      </div>
-    </div>
-  </main>
-
-  <!-- ── Radio builder view ─────────────────────────────────────────────── -->
-  <main id="viewRadio" style="display:none">
-    <button class="pl-detail-back" id="radioBackBtn">← Back</button>
-    <div class="pl-detail-header">
-      <div>
-        <input type="text" id="radioNameInput" class="pl-builder-name-input" placeholder="Station name..." />
-        <div class="pl-detail-meta">Seed artists — naviList finds similar music from your library via Last.fm</div>
-      </div>
-    </div>
-    <hr style="border:none; border-top: 0.5px solid #eeeee8; margin-bottom: 1.5rem;" />
-
-    <div class="rb-section">
-      <div class="rb-section-label">Seed artists</div>
-      <div class="radio-seeds" id="radioSeedChips"></div>
-      <div class="radio-seed-input-row">
-        <input type="text" id="radioSeedInput" placeholder="Artist name..." list="radioArtistList" autocomplete="off" />
-        <datalist id="radioArtistList"></datalist>
-        <button class="btn btn-secondary btn-sm" id="radioAddSeedBtn">+ Add</button>
-      </div>
-    </div>
-
-    <div class="rb-section" style="margin-top:1.5rem;">
-      <div class="rb-section-label">Settings</div>
-      <div class="rb-globals">
-        <div class="rb-global-field">
-          <label>Depth</label>
-          <div class="radio-depth-options">
-            <label class="radio-depth-option"><input type="radio" name="radioDepth" value="0.5" /> Close</label>
-            <label class="radio-depth-option"><input type="radio" name="radioDepth" value="0.25" checked /> Medium</label>
-            <label class="radio-depth-option"><input type="radio" name="radioDepth" value="0.1" /> Wide</label>
-          </div>
-        </div>
-        <div class="rb-global-field">
-          <label for="radioTrackCount">Tracks</label>
-          <input type="number" id="radioTrackCount" min="10" max="200" value="50" style="width:70px;" />
-        </div>
-        <label class="rb-toggle">
-          <input type="checkbox" id="radioIncludeSeed" checked />
-          Include seed artists
-        </label>
-      </div>
-    </div>
-
-    <div class="rb-section" style="margin-top:1rem;">
-      <div class="rb-section-label">Auto-refresh</div>
-      <div class="rb-globals">
-        <div class="rb-global-field" style="flex-direction:column; align-items:flex-start; gap:0.4rem;">
-          <label for="radioRefreshCron">Cron schedule</label>
-          <input type="text" id="radioRefreshCron" placeholder="e.g. 0 6 * * *" style="width:160px; font-family:monospace;" />
-          <div style="font-size:0.78rem; color:#aaa; line-height:1.7;">
-            <code>* * * * *</code> every minute &nbsp;·&nbsp;
-            <code>0 * * * *</code> hourly &nbsp;·&nbsp;
-            <code>0 6 * * *</code> daily 6am &nbsp;·&nbsp;
-            <code>0 6 * * 1</code> Mon 6am &nbsp;·&nbsp;
-            <code>0 6 1 * *</code> 1st of month &nbsp;·&nbsp;
-            leave blank to disable
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <div class="rb-actions" style="margin-top:1.5rem;">
-      <button class="btn btn-secondary" id="radioCancelBtn">Cancel</button>
-      <button class="btn" id="radioPreviewBtn">Preview →</button>
-      <span class="rb-status" id="radioStatus"></span>
-    </div>
-
-    <div id="radioPreviewPanel" style="display:none; margin-top:1.5rem;">
-      <hr style="border:none; border-top: 0.5px solid #eeeee8; margin-bottom:1rem;" />
-      <div class="rb-section-label" style="margin-bottom:0.75rem;">
-        Preview <span id="radioPreviewCount" style="font-weight:400; color:#aaa;"></span>
-      </div>
-      <div class="rb-preview-tracks" id="radioPreviewTracks"></div>
-      <div class="rb-actions" style="margin-top:1rem;">
-        <button class="btn btn-secondary" id="radioPreviewCancelBtn">Discard</button>
-        <button class="btn" id="radioSaveBtn">Save Playlist</button>
-        <span class="rb-status" id="radioSaveStatus"></span>
       </div>
     </div>
   </main>
@@ -440,17 +366,13 @@
       <h3>New playlist</h3>
       <p class="modal-sub">Choose how you want to build it</p>
       <div class="pl-type-grid" style="grid-template-columns:1fr 1fr 1fr; gap:0.75rem;">
-        <div class="pl-type-option selected" data-type="navilist" id="typeSmart">
+        <div class="pl-type-option pl-type-hero selected" data-type="navilist" id="typeSmart">
           <div class="pl-type-title">naviList</div>
-          <div class="pl-type-desc">Rules-based playlist generation</div>
+          <div class="pl-type-desc">Rules-based playlist</div>
         </div>
         <div class="pl-type-option" data-type="nsp" id="typeNsp">
           <div class="pl-type-title">Navidrome Smart Playlist</div>
           <div class="pl-type-desc">Navidrome smart playlist wrapper</div>
-        </div>
-        <div class="pl-type-option" data-type="radio" id="typeRadio">
-          <div class="pl-type-title">Radio</div>
-          <div class="pl-type-desc">Similar artist playlist generation provided by Last.fm</div>
         </div>
         <div class="pl-type-option" data-type="listenbrainz" id="typeLb">
           <div class="pl-type-title">ListenBrainz</div>
@@ -535,15 +457,11 @@
     // Rule builder state
     let rbPlaylistName      = '';
     let rbReturnTo          = 'list';
-    let rbRules             = [];
+    let rbConfig            = { blocks: [], conditions: [] };   // rules config being edited (v2 blocks)
     let rbMode              = 'create';
     let rbEditingPlaylistId = null;
     let rbPreviewTracks     = [];
 
-    // Radio builder state
-    let radioSeeds          = [];
-    let radioPreviewTracks  = [];
-    let radioPreviewConfig  = null;
 
     // Exportify state
     let exportifyMatchedTracks = [];
@@ -570,25 +488,15 @@
       return new Date(unix * 1000).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
     }
 
-    function isSmartPlaylist(p)  { return p.comment?.startsWith('navilist:navilist') || false; }
-    function isLbPlaylist(p)     { return p.comment?.startsWith('navilist:lb')       || false; }
-    function isLfmPlaylist(p)    { return p.comment?.startsWith('navilist:lastfm')   || false; }
-    function isRadioPlaylist(p)  { return p.comment?.startsWith('navilist:radio')    || false; }
-    function isNspPlaylist(p)       { return p.id?.startsWith('nsp:') || p.comment?.startsWith('navilist:nsp') || false; }
-    function isExportifyPlaylist(p) {
-      return p.comment?.startsWith('navilist:import') || p.comment?.startsWith('navilist:exportify') || false;
-    }
-    function isInactive(p)          { return p.active === 0; }
-
-    function getPlaylistType(p) {
-      if (isSmartPlaylist(p))     return 'navilist';
-      if (isLfmPlaylist(p))       return 'lastfm';
-      if (isLbPlaylist(p))        return 'listenbrainz';
-      if (isRadioPlaylist(p))     return 'radio';
-      if (isNspPlaylist(p))       return 'nsp';
-      if (isExportifyPlaylist(p)) return 'exportify';
-      return 'manual';
-    }
+    // Playlist type comes from the server (registry): server type → UI type.
+    const UI_TYPES = {
+      navilist: 'navilist', nsp: 'nsp',
+      lb: 'listenbrainz', 'lb-snapshot': 'listenbrainz',
+      lastfm: 'lastfm',   'lastfm-snapshot': 'lastfm',
+      import: 'exportify', exportify: 'exportify',
+    };
+    function getPlaylistType(p) { return UI_TYPES[p.type] || 'manual'; }
+    function isNspPlaylist(p)   { return p.type === 'nsp'; }
 
     function badgeClass(type) {
       return 'pl-badge-' + (type || 'manual');
@@ -600,30 +508,14 @@
         case 'nsp':          return 'Navidrome';
         case 'exportify':    return 'Import';
         case 'listenbrainz': return 'ListenBrainz';
-        case 'radio':        return 'Radio';
         case 'lastfm':       return 'Last.fm';
         default:             return 'Manual';
       }
     }
 
-    function parseRules(p) {
-      try {
-        const json = p.comment?.replace(/^navilist:navilist\s*/, '');
-        return json ? JSON.parse(json) : null;
-      } catch (e) { return null; }
-    }
-
     function getSubscriptionInfo(p) {
-      const c = p.comment || '';
-      if (/^navilist:lb \{/.test(c)) {
-        try {
-          const data = JSON.parse(c.replace('navilist:lb ', ''));
-          return { type: 'lb', id: data.mbid };
-        } catch (e) {}
-      }
-      if (/^navilist:lastfm \{/.test(c)) {
-        try { return { type: 'lfm', id: JSON.parse(c.replace('navilist:lastfm ', '')).lfm_id }; } catch (e) {}
-      }
+      if (p.type === 'lb'     && p.config?.mbid)   return { type: 'lb',  id: p.config.mbid };
+      if (p.type === 'lastfm' && p.config?.lfm_id) return { type: 'lfm', id: p.config.lfm_id };
       return null;
     }
 
@@ -664,7 +556,7 @@
 
     // ── Views ──────────────────────────────────────────────────────────────
     function hideAllViews() {
-      ['viewList','viewDetail','viewRules','viewLb','viewRadio','viewLfm','viewNsp','viewExportify'].forEach(id => {
+      ['viewList','viewDetail','viewRules','viewLb','viewLfm','viewNsp','viewExportify'].forEach(id => {
         document.getElementById(id).style.display = 'none';
       });
     }
@@ -672,7 +564,6 @@
     function showListView()   { hideAllViews(); document.getElementById('viewList').style.display   = ''; }
     function showDetailView() { hideAllViews(); document.getElementById('viewDetail').style.display = ''; }
     function showRulesView()  { hideAllViews(); document.getElementById('viewRules').style.display  = ''; }
-    function showRadioView()  { hideAllViews(); document.getElementById('viewRadio').style.display  = ''; }
     function showNspView()   { hideAllViews(); document.getElementById('viewNsp').style.display   = ''; }
     function showExportifyView() { hideAllViews(); document.getElementById('viewExportify').style.display = ''; }
     function showManualView() { window.location.href = '/library?mode=manual'; }
@@ -709,16 +600,7 @@
       const filtered = allPlaylists.filter(p => {
         const matchSearch = !q || p.name.toLowerCase().includes(q);
         const type     = getPlaylistType(p);
-        const inactive = isInactive(p);
-        const matchFilter =
-          (activeFilter === 'deactivated' && inactive) ||
-          (activeFilter === 'all' && !inactive) ||
-          (!inactive && (
-            activeFilter === type ||
-            (activeFilter === 'navilist' && type === 'navilist') ||
-            (activeFilter === 'radio'    && type === 'radio')    ||
-            (activeFilter === 'manual'   && type === 'manual')
-          ));
+        const matchFilter = activeFilter === 'all' || activeFilter === type;
         return matchSearch && matchFilter;
       });
 
@@ -774,7 +656,7 @@
           <div class="pl-card-name">${esc(getListDisplayName(p))}</div>
           <button class="pl-card-menu" title="Options">⋯</button>
         </div>
-        <div class="pl-card-desc">${esc(p.comment?.replace(/^navilist:(navilist|lb|radio)\s*(\{.*\})?/, '').trim() || '')}</div>
+        <div class="pl-card-desc">${esc(type === 'manual' ? (p.comment || '') : '')}</div>
         <div class="pl-card-footer">
           <span class="pl-badge ${badgeClass(type)}">${badgeLabel(type)}</span>
           <span class="pl-card-meta">${esc(meta)}</span>
@@ -790,7 +672,6 @@
       const row  = document.createElement('div');
       row.className  = 'pl-list-row';
       row.dataset.id = p.id;
-      if (isInactive(p)) row.classList.add('is-inactive');
 
       const header = document.createElement('div');
       header.className = 'pl-list-row-header';
@@ -870,7 +751,7 @@
       if (type === 'navilist') {
         const editBtn = document.createElement('button');
         editBtn.className = 'btn btn-secondary btn-sm'; editBtn.textContent = 'Edit rules';
-        editBtn.addEventListener('click', () => editRules(p));
+        editBtn.addEventListener('click', () => editRules(p, 'detail'));
         actions.appendChild(editBtn);
 
         const regenBtn = document.createElement('button');
@@ -888,18 +769,6 @@
       renameBtn.className = 'btn btn-secondary btn-sm'; renameBtn.textContent = 'Rename';
       renameBtn.addEventListener('click', () => renamePlaylist(p));
       actions.appendChild(renameBtn);
-
-      if (isInactive(p)) {
-        const activateBtn = document.createElement('button');
-        activateBtn.className = 'btn btn-secondary btn-sm'; activateBtn.textContent = '▶ Activate';
-        activateBtn.addEventListener('click', () => activatePlaylist(p, activateBtn));
-        actions.appendChild(activateBtn);
-      } else {
-        const deactivateBtn = document.createElement('button');
-        deactivateBtn.className = 'btn btn-secondary btn-sm'; deactivateBtn.textContent = 'Deactivate';
-        deactivateBtn.addEventListener('click', () => deactivatePlaylist(p, deactivateBtn));
-        actions.appendChild(deactivateBtn);
-      }
 
       const deleteBtn = document.createElement('button');
       deleteBtn.className = 'btn btn-danger btn-sm'; deleteBtn.textContent = 'Delete';
@@ -1002,9 +871,6 @@
         { label: 'Open',   action: () => openDetail(p) },
         { label: 'Export', action: () => openExportModal(p) },
         { label: 'Rename', action: () => renamePlaylist(p) },
-        ...(isInactive(p)
-          ? [{ label: '▶ Activate', action: () => activatePlaylist(p, { disabled: false, textContent: '' }) }]
-          : [{ label: 'Deactivate', action: () => deactivatePlaylist(p, { disabled: false, textContent: '' }) }]),
         { label: 'Delete', action: () => deletePlaylist(p), danger: true },
       ];
 
@@ -1041,7 +907,7 @@
       if (type === 'navilist') {
         const editBtn = document.createElement('button');
         editBtn.className = 'btn btn-secondary btn-sm'; editBtn.textContent = 'Edit rules';
-        editBtn.addEventListener('click', () => editRules(p));
+        editBtn.addEventListener('click', () => editRules(p, 'list'));
         actions.appendChild(editBtn);
 
         const regenBtn = document.createElement('button');
@@ -1121,26 +987,26 @@
     }
 
     // ── Playlist actions ───────────────────────────────────────────────────
-    function editRules(p) {
-      const existing = parseRules(p);
-      openRuleBuilder(p.name, existing, 'detail', p.id);
+    // Same builder as creating; `from` ('list' | 'detail') is where Save / Cancel return to.
+    function editRules(p, from) {
+      openRuleBuilder(p.name, from, p.id);
     }
 
+    // Rebuilds from the rules stored on the server, in place: the list stays the list,
+    // an open playlist refreshes where it is.
     async function regenerate(id, btn) {
-      const p        = allPlaylists.find(pl => pl.id === id);
-      const existing = parseRules(p);
-      if (!existing?.rules?.length) { alert('No rules found. Use "Edit rules" first.'); return; }
+      const p = allPlaylists.find(pl => pl.id === id);
+      if (!confirm(`Regenerate "${p?.name || 'this playlist'}"?\n\nIt is rebuilt from its rules, so it can add new tracks and replace ones currently on it — including any you added or kept by hand.`)) return;
       if (btn) { btn.disabled = true; btn.textContent = 'Regenerating...'; }
       try {
-        const res  = await fetch(`/playlists/${id}/rules`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ rules: existing })
-        });
+        const res  = await fetch(`/playlists/${id}/regenerate`, { method: 'POST' });
         const data = await res.json();
         if (data.ok) {
+          const onDetail = document.getElementById('viewDetail').style.display !== 'none';
           await loadPlaylists();
           const updated = allPlaylists.find(pl => pl.id === id);
-          if (updated) openDetail(updated);
+          if (onDetail && updated) openDetail(updated);
+          else if (btn) { btn.disabled = false; btn.textContent = 'Regenerate'; }
         } else {
           alert(`Regenerate failed: ${data.error}`);
           if (btn) { btn.disabled = false; btn.textContent = 'Regenerate'; }
@@ -1164,27 +1030,6 @@
       if (data.ok) { await loadPlaylists(); showListView(); }
     }
 
-    async function deactivatePlaylist(p, btn) {
-      if (!confirm(`Remove "${p.name}" from Navidrome? It will stay in naviList and can be reactivated.`)) return;
-      btn.disabled = true; btn.textContent = 'Deactivating...';
-      try {
-        const res  = await fetch(`/playlists/${p.id}/deactivate`, { method: 'POST' });
-        const data = await res.json();
-        if (data.ok) { await loadPlaylists(); }
-        else { btn.disabled = false; btn.textContent = 'Deactivate'; alert(`✗ ${data.error}`); }
-      } catch (e) { btn.disabled = false; btn.textContent = 'Deactivate'; }
-    }
-
-    async function activatePlaylist(p, btn) {
-      btn.disabled = true; btn.textContent = 'Activating...';
-      try {
-        const res  = await fetch(`/playlists/${p.id}/activate`, { method: 'POST' });
-        const data = await res.json();
-        if (data.ok) { await loadPlaylists(); }
-        else { btn.disabled = false; btn.textContent = '▶ Activate'; alert(`✗ ${data.error}`); }
-      } catch (e) { btn.disabled = false; btn.textContent = '▶ Activate'; }
-    }
-
     async function doDelete(p) {
       if (isNspPlaylist(p)) {
         const slug = p.nsp_slug || (p.id?.startsWith('nsp:') ? p.id.slice(4) : p.name.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, ''));
@@ -1206,9 +1051,13 @@
     const TERMS = {
       stats:  { label: 'Stats',  valueType: 'stats-select' },
       decade: { label: 'Decade', valueType: 'text', placeholder: 'e.g. 1990s' },
-      tag:    { label: 'Tag',    valueType: 'text', placeholder: 'e.g. jazz' },
+      genre:  { label: 'Genre',  valueType: 'text', placeholder: 'e.g. jazz' },
       artist: { label: 'Artist', valueType: 'text', placeholder: 'Artist name' },
       mood:   { label: 'Mood',   valueType: 'text', placeholder: 'e.g. melancholic' },
+      // Not filters — shown as condition rows, at most one of each per block / global:
+      popularity: { label: 'Popularity', conditionOnly: true },       // split by popularity tier
+      versions:   { label: 'Studio / Live', conditionOnly: true },    // split studio vs live recordings
+      similar:    { label: 'Similar Artist', conditionOnly: true },   // Artist blocks only: add similar artists
     };
 
     const STATS_VALUES = [
@@ -1262,115 +1111,433 @@
     async function loadArtists() { try { const d = await (await fetch('/playlists/api/artists')).json(); artistList = d.artists || []; } catch (e) {} }
     async function loadAlbums()  { try { const d = await (await fetch('/playlists/api/albums')).json();  albumList  = d.albums  || []; } catch (e) {} }
 
-    function openRuleBuilder(playlistName, existingRules, returnTo, editingId = null) {
+    // Open the rule builder: a new playlist starts with one Artist block; an
+    // existing one loads its config from the server, already in the current
+    // (v2 block) shape whatever format it was saved in.
+    // Leave the builder: back to where an edit was opened from (the list, or the playlist's page).
+    function returnFromBuilder() {
+      if (rbReturnTo === 'detail' && rbEditingPlaylistId) { const p = allPlaylists.find(pl => pl.id === rbEditingPlaylistId); if (p) { openDetail(p); return; } }
+      showListView();
+    }
+
+    async function openRuleBuilder(playlistName, returnTo, editingId = null) {
       loadGenres(); loadArtists();
       rbPlaylistName      = playlistName;
       rbReturnTo          = returnTo;
       rbMode              = editingId ? 'edit' : 'create';
       rbEditingPlaylistId = editingId || null;
       rbPreviewTracks     = [];
-
-      if (existingRules?.rules?.length) {
-        document.getElementById('rbLimit').value         = existingRules.limit          ?? 25;
-        document.getElementById('rbMaxPerArtist').value = existingRules.max_per_artist ?? 5;
-        rbRules = existingRules.rules.map(r => ({ ...r, required: r.required !== false }));
-      } else {
-        document.getElementById('rbLimit').value         = 25;
-        document.getElementById('rbMaxPerArtist').value = 5;
-        rbRules = [defaultRule()];
-      }
+      rbConfig            = { blocks: [newBlock()], conditions: [], versions: { ...MIXES.versions.preset } };   // new playlists start Studio-only, as they always behaved
+      document.getElementById('rbLimit').value = 25;
+      setRefreshFromCron('');
 
       document.getElementById('rulesNameInput').value       = playlistName;
       document.getElementById('rbStatus').textContent       = '';
       document.getElementById('rbPreviewPanel').style.display = 'none';
 
-      document.getElementById('rulesPreviewBtn').style.display = rbMode === 'create' ? '' : 'none';
-      document.getElementById('rulesSaveBtn').style.display    = rbMode === 'edit'   ? '' : 'none';
-      document.getElementById('rulesSaveBtn').disabled    = false;
-      document.getElementById('rulesSaveBtn').textContent = 'Save & Generate';
+      const saveBtn = document.getElementById('rbSaveBtn');
+      saveBtn.disabled = false; saveBtn.textContent = 'Save Playlist';
 
-      renderRuleRows();
+      if (editingId) {
+        document.getElementById('rbBlocks').innerHTML = '<div class="rb-section-hint">Loading rules…</div>';
+        document.getElementById('rbSharedConditions').innerHTML = '';
+        showRulesView();
+        try {
+          const d = await (await fetch(`/playlists/api/${editingId}/rules`)).json();
+          if (d.ok) {
+            rbConfig = { blocks: d.rules.blocks || [], conditions: d.rules.conditions || [], popularity: d.rules.popularity, versions: d.rules.versions };
+            if (!rbConfig.blocks.length) rbConfig.blocks = [newBlock()];
+            document.getElementById('rbLimit').value = d.rules.limit ?? 25;
+            setRefreshFromCron(d.refresh_cron);
+          }
+        } catch (e) {}
+        renderBuilder();
+        return;
+      }
+      renderBuilder();
       showRulesView();
-      if (rbMode === 'create') setTimeout(() => document.getElementById('rulesNameInput').focus(), 50);
+      setTimeout(() => document.getElementById('rulesNameInput').focus(), 50);
     }
 
-    function defaultRule() { return { term: 'decade', value: '', weight: 1, mode: 'easy', options: {}, required: true }; }
+    // Similar Artist (Artist blocks only, added as a condition): also include the
+    // artist's most similar artists — Close / Medium / Wide = 5 / 15 / 40 artists you
+    // own — from ListenBrainz (default, no key needed) or Last.fm (needs an API key).
+    // Seed share = how much of the block the artist itself gets (blank = even).
+    // Stored on the block's start rule (rule.options.similar …), as before.
+    const SIMILAR_OPTIONS = { close: 'Close (5 artists)', medium: 'Medium (15 artists)', wide: 'Wide (40 artists)' };
+    const SIMILAR_DEFAULT = 'medium';
+    const SIMILAR_SOURCE_OPTIONS = { listenbrainz: 'via ListenBrainz', lastfm: 'via Last.fm' };
+    const SIMILAR_DEFAULT_SOURCE = 'listenbrainz';
+    // Conditions narrow a block and read as a sentence: "Decade is 1990s",
+    // "Artist is not Taylor Swift" (saved as use: require / exclude).
+    const CONDITION_USES = { require: 'is', exclude: 'is not' };
 
-    function renderRuleRows() {
-      const list = document.getElementById('rbRulesList');
-      list.innerHTML = '';
-      rbRules.forEach((rule, i) => list.appendChild(buildRuleRow(rule, i)));
+    // Split conditions: the % of the block taken from each tier. Optional — added from
+    // "+ Add condition" — and pre-filled with a preset the user can change. Stored as
+    // their own field on the block / config (owner[key]); a block's own wins.
+    //   popularity — tracks.pop_score: Hit ≥ 50, Album track 15–49.9, Deep cut < 15 or unrated
+    //   versions   — studio vs live recordings (live = MB-confirmed or looks live)
+    const MIXES = {
+      popularity: { tiers: { hit: 'Hit', album: 'Album track', deep: 'Deep cut' }, preset: { hit: 25, album: 75, deep: 0 } },
+      versions:   { tiers: { studio: 'Studio', live: 'Live' },                    preset: { studio: 100, live: 0 } },
+    };
+
+    function newBlock()     { return { rule: { term: 'artist', value: '', options: {} }, conditions: [] }; }
+    function newCondition(term) { return { term, value: term === 'stats' ? 'top_played' : '', options: {}, use: 'require' }; }
+    const hasValue = v => !(v === undefined || v === null || v === '' || (Array.isArray(v) && !v.length));
+
+    // Block shares are strict percentages of the playlist: all blank = even;
+    // set shares total 100%, or stay under 100% so blank blocks split the rest.
+    // Mirrors shareProblem() in lib/playlist_types.js (the server also refuses).
+    function shareProblem(blocks) {
+      if (blocks.length < 2) return null;
+      const set = blocks.map(b => b.share).filter(s => typeof s === 'number');
+      if (!set.length) return null;
+      const total  = Math.round(set.reduce((n, s) => n + s, 0) * 10) / 10;
+      const blanks = blocks.length - set.length;
+      if (!blanks) return Math.abs(total - 100) <= 0.5 ? null : `Block shares add up to ${total}% — they need to total 100%.`;
+      return total < 99.5 ? null
+        : `Block shares add up to ${total}%, leaving nothing for the ${blanks === 1 ? 'block' : `${blanks} blocks`} without a share — keep the total under 100% or clear the shares.`;
     }
 
-    function buildRuleRow(rule, index) {
-      const row = document.createElement('div');
-      row.className = 'rb-rule'; row.dataset.index = index;
+    // Mirrors mixWeights() / mixProblem() in lib/playlist_types.js (the server also
+    // refuses): same rules as block shares, plus at least one tier above 0%.
+    function mixWeights(mix, key) {
+      const tiers = Object.keys(MIXES[key].tiers);
+      const set   = tiers.filter(t => mix[t] != null);
+      const spare = (100 - set.reduce((n, t) => n + mix[t], 0)) / ((tiers.length - set.length) || 1);
+      return Object.fromEntries(tiers.map(t => [t, mix[t] != null ? mix[t] : spare]));
+    }
+    function mixProblem(mix, key) {
+      if (!mix) return null;
+      const name   = TERMS[key].label;
+      const tiers  = Object.keys(MIXES[key].tiers);
+      const vals   = tiers.map(t => mix[t]).filter(v => v != null);
+      if (!vals.length) return `${name}: set at least one percentage.`;
+      const total  = Math.round(vals.reduce((n, v) => n + v, 0) * 10) / 10;
+      const blanks = tiers.length - vals.length;
+      if (!blanks && Math.abs(total - 100) > 0.5) return `${name} adds up to ${total}% — it needs to total 100%.`;
+      if (blanks && total >= 99.5) return `${name} adds up to ${total}%, leaving nothing for the blank ${blanks === 1 ? 'tier' : 'tiers'} — keep it under 100% or fill in every tier.`;
+      if (!Object.values(mixWeights(mix, key)).some(w => w > 0)) return `${name}: at least one tier must be above 0%.`;
+      return null;
+    }
+    // First split problem in a rules payload, for the Preview / Save refusal.
+    function payloadMixProblem(rules) {
+      for (const key of Object.keys(MIXES)) {
+        const shared = mixProblem(rules[key], key);
+        if (shared) return `Every block: ${shared}`;
+        for (const [i, b] of rules.blocks.entries()) {
+          const p = mixProblem(b[key], key);
+          if (p) return `Block ${i + 1}: ${p}`;
+        }
+      }
+      return null;
+    }
 
-      const termSel = document.createElement('select');
-      termSel.setAttribute('aria-label', 'Term');
-      Object.entries(TERMS).forEach(([key, def]) => {
+    function renderBuilder() {
+      renderBlocks();
+      const shared = document.getElementById('rbSharedConditions');
+      const sharedRerender = () => renderConditionList(shared, rbConfig.conditions, { shared: true, owner: rbConfig });
+      sharedRerender();
+      const addShared = document.getElementById('rbAddShared');
+      addShared.innerHTML = '';
+      addShared.appendChild(buildAddCondition(() => rbConfig, () => rbConfig.conditions, sharedRerender, 'rb-add-rule'));
+      scheduleRuleCountPreview();
+    }
+
+    function renderBlocks() {
+      const wrap = document.getElementById('rbBlocks');
+      wrap.innerHTML = '';
+      rbConfig.blocks.forEach((block, i) => wrap.appendChild(buildBlockCard(block, i)));
+    }
+
+    // Term dropdown; changing the term resets the rule's value and options.
+    // Sorted by label. Condition-only terms are offered in condition rows only, and
+    // only those in `allow` (one of each per block / global).
+    function buildTermSelect(rule, onChange, { condition = false, allow = [] } = {}) {
+      const sel = document.createElement('select');
+      sel.setAttribute('aria-label', 'Rule type');
+      Object.entries(TERMS).sort((a, b) => a[1].label.localeCompare(b[1].label)).forEach(([key, def]) => {
+        if (def.conditionOnly && !(condition && (allow.includes(key) || rule.term === key))) return;
         const opt = document.createElement('option');
         opt.value = key; opt.textContent = def.label;
         if (key === rule.term) opt.selected = true;
-        termSel.appendChild(opt);
+        sel.appendChild(opt);
       });
+      sel.addEventListener('change', () => {
+        rule.term = sel.value;
+        rule.value = sel.value === 'stats' ? 'top_played' : '';
+        rule.options = {};
+        onChange();
+      });
+      return sel;
+    }
 
+    function removeButton(title, onClick) {
+      const btn = document.createElement('button');
+      btn.className = 'rb-rule-remove'; btn.textContent = '✕'; btn.title = title;
+      btn.addEventListener('click', onClick);
+      return btn;
+    }
+
+    function buildBlockCard(block, index) {
+      const card = document.createElement('div');
+      card.className = 'rb-block';
+
+      // Head: what the block starts from
+      const head = document.createElement('div');
+      head.className = 'rb-rule rb-block-head';
       const valueWrap = document.createElement('div');
       valueWrap.style.minWidth = '0';
-      renderValueInput(valueWrap, rule);
+      renderValueInput(valueWrap, block.rule);
 
-      // Required / Preferred toggle
-      const reqToggle = document.createElement('button');
-      reqToggle.className   = `rb-req-toggle ${rule.required !== false ? 'is-required' : 'is-preferred'}`;
-      reqToggle.textContent = rule.required !== false ? 'Required' : 'Preferred';
-      reqToggle.title       = 'Toggle Required / Preferred';
-      reqToggle.addEventListener('click', () => {
-        rbRules[index].required = rbRules[index].required === false ? true : false;
-        renderRuleRows();
+      const shareWrap = document.createElement('label');
+      shareWrap.className = 'rb-inline-field';
+      shareWrap.title = 'Share of the playlist (blank = split evenly with the other blocks)';
+      const shareInput = document.createElement('input');
+      shareInput.type = 'number'; shareInput.min = '1'; shareInput.max = '100'; shareInput.placeholder = 'even';
+      shareInput.value = block.share ?? '';
+      shareInput.addEventListener('input', () => {
+        const v = parseFloat(shareInput.value);
+        if (v > 0) block.share = Math.min(100, v); else delete block.share;
       });
+      shareWrap.append(shareInput, document.createTextNode('% share'));
+      shareWrap.style.visibility = rbConfig.blocks.length > 1 ? '' : 'hidden';
 
-      const weightWrap = document.createElement('div');
-      weightWrap.className    = 'rb-weight-wrap';
-      weightWrap.style.display = rule.required !== false ? 'none' : '';
-      const weightLabel = document.createElement('span'); weightLabel.textContent = 'Weight';
-      const weightInput = document.createElement('input');
-      weightInput.type  = 'number'; weightInput.min = '1'; weightInput.max = '10'; weightInput.style.width = '60px';
-      weightInput.value = rule.weight ?? 1; weightInput.setAttribute('aria-label', 'Weight');
-      weightWrap.appendChild(weightLabel); weightWrap.appendChild(weightInput);
+      const count = document.createElement('span');
+      count.className = 'rb-preview-count';
 
-      const modeSel = document.createElement('select');
-      modeSel.setAttribute('aria-label', 'Mode');
-      modeSel.style.cssText = 'width:90px; flex-shrink:0;';
-      ['easy', 'medium', 'hard'].forEach(m => {
-        const opt = document.createElement('option');
-        opt.value = m; opt.textContent = m.charAt(0).toUpperCase() + m.slice(1);
-        if (m === (rule.mode || 'easy')) opt.selected = true;
-        modeSel.appendChild(opt);
+      head.append(
+        buildTermSelect(block.rule, () => { renderBlocks(); scheduleRuleCountPreview(); }),
+        valueWrap, shareWrap, count,
+        removeButton('Remove block', () => { rbConfig.blocks.splice(index, 1); renderBlocks(); scheduleRuleCountPreview(); })
+      );
+      card.appendChild(head);
+
+      const conds = document.createElement('div');
+      conds.className = 'rb-block-conds';
+      renderConditionList(conds, block.conditions, { owner: block });
+      const addCond = buildAddCondition(() => block, () => block.conditions,
+        () => renderConditionList(conds, block.conditions, { owner: block }), 'rb-add-cond');
+      card.append(conds, addCond);
+      return card;
+    }
+
+    // Condition rows for a block (or the shared section). A condition repeating
+    // the previous one's type with Only is labelled "or" — either matches.
+    // Shared conditions: Artist can only be Not — "Only artist X" for every
+    // block would reduce the playlist to one artist.
+    // `owner` (the block, or the whole config for the global section) holds the
+    // special rows — Similar Artist, Popularity, Studio / Live — shown after the
+    // normal conditions.
+    function renderConditionList(container, list, { shared = false, owner } = {}) {
+      const rerender = () => renderConditionList(container, list, { shared, owner });
+      container.innerHTML = '';
+      // Group rows the way the engine combines them — by type, in order of first
+      // appearance, "is" before "is not" — so the joiners read true. Order doesn't
+      // change the result.
+      const firstSeen = new Map();
+      list.forEach((c, i) => { if (!firstSeen.has(c.term)) firstSeen.set(c.term, i); });
+      list.sort((a, b) => firstSeen.get(a.term) - firstSeen.get(b.term) || (a.use === 'exclude') - (b.use === 'exclude'));
+      list.forEach((cond, j) => {
+        const notOnly = shared && cond.term === 'artist';
+        if (notOnly) cond.use = 'exclude';
+        const row = document.createElement('div');
+        row.className = 'rb-rule rb-cond';
+
+        // Joiners: "or" between "is" rows of one type (either matches), "and" between
+        // groups and between "is not" rows (all hold).
+        const prev = list[j - 1];
+        const isOr = prev && prev.term === cond.term && prev.use === 'require' && cond.use === 'require';
+        const joiner = document.createElement('span');
+        joiner.className = 'rb-cond-joiner';
+        joiner.textContent = !prev ? '' : isOr ? 'or' : 'and';
+        if (isOr) row.classList.add('is-or');
+
+        const valueWrap = document.createElement('div');
+        valueWrap.style.minWidth = '0';
+        renderValueInput(valueWrap, cond);
+
+        const useSel = document.createElement('select');
+        useSel.className = `rb-use is-${cond.use}`;
+        useSel.setAttribute('aria-label', 'is or is not');
+        Object.entries(CONDITION_USES).forEach(([value, label]) => {
+          if (notOnly && value !== 'exclude') return;
+          const opt = document.createElement('option'); opt.value = value; opt.textContent = label;
+          if (value === cond.use) opt.selected = true;
+          useSel.appendChild(opt);
+        });
+        if (notOnly) useSel.title = 'An artist for every block can only be "is not" — "is" would leave one artist';
+        useSel.addEventListener('change', () => { cond.use = useSel.value; rerender(); scheduleRuleCountPreview(); });
+
+        row.append(
+          joiner,
+          buildTermSelect(cond, () => {
+            // Picking a special turns this row into it, pre-filled.
+            if (TERMS[cond.term].conditionOnly) { list.splice(j, 1); addSpecial(owner, cond.term); }
+            rerender(); scheduleRuleCountPreview();
+          }, { condition: true, allow: specialsAvailable(owner) }),
+          useSel, valueWrap,
+          removeButton('Remove condition', () => { list.splice(j, 1); rerender(); scheduleRuleCountPreview(); })
+        );
+        container.appendChild(row);
       });
-      modeSel.style.display = rule.required !== false ? '' : 'none';
+      if (owner?.rule?.options?.similar) container.appendChild(buildSimilarRow(owner, list, rerender));
+      for (const key of Object.keys(MIXES))
+        if (owner?.[key]) container.appendChild(buildMixRow(owner, key, list, rerender));
+    }
 
-      const removeBtn = document.createElement('button');
-      removeBtn.className = 'rb-rule-remove'; removeBtn.textContent = '✕'; removeBtn.title = 'Remove rule';
-
-      termSel.addEventListener('change', () => {
-        rbRules[index].term = termSel.value;
-        rbRules[index].value = termSel.value === 'stats' ? 'top_played' : '';
-        rbRules[index].options = {};
-        renderValueInput(valueWrap, rbRules[index]);
+    // Specials the owner can still add: one of each; Similar Artist only on an Artist block.
+    function specialsAvailable(owner) {
+      if (!owner) return [];
+      return [
+        ...Object.keys(MIXES).filter(key => !owner[key]),
+        ...(owner.rule?.term === 'artist' && !owner.rule.options?.similar ? ['similar'] : []),
+      ];
+    }
+    function addSpecial(owner, key) {
+      if (MIXES[key]) { owner[key] = { ...MIXES[key].preset }; return; }
+      const o = owner.rule.options || (owner.rule.options = {});
+      o.similar = SIMILAR_DEFAULT; o.similar_source = o.similar_source || SIMILAR_DEFAULT_SOURCE;
+    }
+    // "+ Add condition" dropdown: pick the type up front, so no default row to change.
+    // Offers the normal terms plus the specials the owner can still add; options are
+    // refreshed on focus because adding a special removes it from the list.
+    function buildAddCondition(getOwner, getList, rerender, className) {
+      const sel = document.createElement('select');
+      sel.className = className;
+      sel.setAttribute('aria-label', 'Add condition');
+      const fill = () => {
+        const owner = getOwner();
+        const allow = specialsAvailable(owner);
+        sel.innerHTML = '';
+        const ph = document.createElement('option');
+        ph.value = ''; ph.textContent = '+ Add condition'; ph.hidden = true; ph.selected = true;
+        sel.appendChild(ph);
+        Object.entries(TERMS).sort((a, b) => a[1].label.localeCompare(b[1].label)).forEach(([key, def]) => {
+          if (def.conditionOnly && !allow.includes(key)) return;
+          const opt = document.createElement('option');
+          opt.value = key; opt.textContent = def.label;
+          sel.appendChild(opt);
+        });
+      };
+      fill();
+      sel.addEventListener('focus', fill);
+      sel.addEventListener('mousedown', fill);
+      sel.addEventListener('change', () => {
+        const key = sel.value;
+        if (!key) return;
+        if (TERMS[key].conditionOnly) addSpecial(getOwner(), key);
+        else getList().push(newCondition(key));
+        fill();
+        rerender();
         scheduleRuleCountPreview();
       });
-      weightInput.addEventListener('change', () => { rbRules[index].weight = parseInt(weightInput.value) || 1; });
-      modeSel.addEventListener('change', () => { rbRules[index].mode = modeSel.value; scheduleRuleCountPreview(); });
-      removeBtn.addEventListener('click', () => { rbRules.splice(index, 1); renderRuleRows(); });
+      return sel;
+    }
+    function removeSpecial(owner, key) {
+      if (MIXES[key]) { delete owner[key]; return; }
+      const o = owner.rule.options || {};
+      delete o.similar; delete o.similar_source; delete o.seed_share;
+    }
 
-      const previewSpan = document.createElement('span');
-      previewSpan.className = 'rb-preview-count'; previewSpan.textContent = '';
-
-      row.appendChild(termSel); row.appendChild(valueWrap);
-      row.appendChild(reqToggle); row.appendChild(weightWrap);
-      row.appendChild(modeSel); row.appendChild(removeBtn); row.appendChild(previewSpan);
-      scheduleRuleCountPreview();
+    // Shared shell for a special row: its type select (changing it turns the row back
+    // into a normal condition), a fixed verb where normal rows have is / is not,
+    // the value cell, ✕.
+    function specialRow(owner, key, list, rerender, valueCell, useLabel, useTitle) {
+      const row = document.createElement('div');
+      row.className = 'rb-rule rb-cond';
+      // "with": special rows don't filter, they shape what the conditions allow.
+      const joiner = document.createElement('span'); joiner.className = 'rb-cond-joiner'; joiner.textContent = 'with';
+      const asRule = { term: key, value: '', options: {} };
+      const termSel = buildTermSelect(asRule, () => {
+        removeSpecial(owner, key);
+        if (TERMS[asRule.term].conditionOnly) addSpecial(owner, asRule.term);
+        else list.push({ term: asRule.term, value: asRule.value, options: {}, use: 'require' });
+        rerender(); scheduleRuleCountPreview();
+      }, { condition: true, allow: specialsAvailable(owner) });
+      const use = document.createElement('span');
+      use.className = 'rb-mix-use'; use.textContent = useLabel; use.title = useTitle;
+      row.append(joiner, termSel, use, valueCell,
+        removeButton(`Remove ${TERMS[key].label}`, () => { removeSpecial(owner, key); rerender(); scheduleRuleCountPreview(); }));
       return row;
+    }
+
+    // A split row (Popularity, Studio / Live): a % per tier (blank = split the rest).
+    function buildMixRow(owner, key, list, rerender) {
+      const mix = owner[key];
+      const fields = document.createElement('div');
+      fields.className = 'rb-mix-fields';
+      const status = document.createElement('span');
+      status.className = 'rb-mix-status';
+      const paint = () => {
+        const problem = mixProblem(mix, key);
+        status.classList.toggle('is-bad', !!problem);
+        if (problem) { status.textContent = problem; return; }
+        const w = mixWeights(mix, key);
+        status.textContent = Object.entries(MIXES[key].tiers).filter(([t]) => w[t] > 0)
+          .map(([t, label]) => `${label} ${Math.round(w[t] * 10) / 10}%`).join(' · ');
+      };
+      Object.entries(MIXES[key].tiers).forEach(([tier, label]) => {
+        const field = document.createElement('label');
+        field.className = 'rb-inline-field';
+        const input = document.createElement('input');
+        input.type = 'number'; input.min = '0'; input.max = '100'; input.placeholder = '—';
+        input.setAttribute('aria-label', `${label} %`);
+        input.value = mix[tier] ?? '';
+        input.addEventListener('input', () => {
+          const v = parseFloat(input.value);
+          mix[tier] = Number.isFinite(v) ? Math.max(0, Math.min(100, v)) : null;
+          paint(); scheduleRuleCountPreview();
+        });
+        field.append(document.createTextNode(label), input, document.createTextNode('%'));
+        fields.appendChild(field);
+      });
+      fields.appendChild(status);
+      paint();
+      return specialRow(owner, key, list, rerender, fields, 'split',
+        'Sets the mix of the tracks this section allows — it does not filter them');
+    }
+
+    // Similar Artist row (Artist blocks): depth, source, seed share.
+    function buildSimilarRow(block, list, rerender) {
+      const o = block.rule.options;
+      const fields = document.createElement('div');
+      fields.className = 'rb-mix-fields';
+
+      const depthSel = document.createElement('select');
+      depthSel.setAttribute('aria-label', 'How many similar artists');
+      Object.entries(SIMILAR_OPTIONS).forEach(([value, label]) => {
+        const opt = document.createElement('option'); opt.value = value; opt.textContent = label;
+        if (value === o.similar) opt.selected = true;
+        depthSel.appendChild(opt);
+      });
+      depthSel.addEventListener('change', () => { o.similar = depthSel.value; scheduleRuleCountPreview(); });
+
+      const srcSel = document.createElement('select');
+      srcSel.setAttribute('aria-label', 'Similar artists source');
+      Object.entries(SIMILAR_SOURCE_OPTIONS).forEach(([value, label]) => {
+        const opt = document.createElement('option'); opt.value = value; opt.textContent = label;
+        if (value === (o.similar_source || SIMILAR_DEFAULT_SOURCE)) opt.selected = true;
+        srcSel.appendChild(opt);
+      });
+      srcSel.addEventListener('change', () => { o.similar_source = srcSel.value; scheduleRuleCountPreview(); });
+
+      const seedWrap = document.createElement('label');
+      seedWrap.className = 'rb-inline-field';
+      seedWrap.title = 'How much of this block is the artist itself (blank = one artist among the similar ones)';
+      const seedInput = document.createElement('input');
+      seedInput.type = 'number'; seedInput.min = '0'; seedInput.max = '100'; seedInput.placeholder = 'even';
+      seedInput.value = o.seed_share ?? '';
+      seedInput.addEventListener('change', () => {
+        const v = parseFloat(seedInput.value);
+        if (v >= 0) o.seed_share = Math.min(100, v); else delete o.seed_share;
+      });
+      seedWrap.append(document.createTextNode('seed'), seedInput, document.createTextNode('%'));
+
+      fields.append(depthSel, srcSel, seedWrap);
+      return specialRow(block, 'similar', list, rerender, fields, 'adds',
+        'Adds the artist\'s most similar artists from your library to this block');
     }
 
     function renderValueInput(container, rule) {
@@ -1463,7 +1630,7 @@
           for (let d = sy; d >= 1950; d -= 10) { const o = document.createElement('option'); o.value = `${d}s`; dl.appendChild(o); }
           input.setAttribute('list', listId); container.appendChild(dl);
         }
-        if (rule.term === 'tag' && genreList.length) {
+        if (rule.term === 'genre' && genreList.length) {
           const listId = `genre-list-${Date.now()}`;
           const dl = document.createElement('datalist'); dl.id = listId;
           genreList.forEach(g => { const o = document.createElement('option'); o.value = g; dl.appendChild(o); });
@@ -1481,6 +1648,7 @@
           rule.value = input.value; clearTimeout(debounce);
           debounce = setTimeout(() => scheduleRuleCountPreview(), 400);
         });
+
         container.appendChild(input);
       }
     }
@@ -1488,37 +1656,54 @@
     let ruleCountTimer = null;
     function scheduleRuleCountPreview() { clearTimeout(ruleCountTimer); ruleCountTimer = setTimeout(runRuleCountPreview, 500); }
 
+    // Per-block track counts while building (create and edit).
     async function runRuleCountPreview() {
-      if (rbMode !== 'edit' || !rbEditingPlaylistId) return;
-      const rules = buildRulesPayload();
-      if (!rules.rules.length) return;
+      const { config, blockIndex } = rulesPayload();
+      const counts = [...document.querySelectorAll('#rbBlocks .rb-block-head .rb-preview-count')];
+      counts.forEach(span => { span.textContent = ''; span.className = 'rb-preview-count'; });
+      if (!config.blocks.length) return;
       try {
-        const res  = await fetch(`/playlists/${rbEditingPlaylistId}/preview`, {
+        const res  = await fetch('/playlists/preview-blocks', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ rules })
+          body: JSON.stringify({ rules: config })
         });
         const data = await res.json();
         if (!data.ok) return;
-        document.querySelectorAll('.rb-rule').forEach((row, i) => {
-          const prev = data.preview[i]; const span = row.querySelector('.rb-preview-count');
-          if (!prev || !span) return;
-          span.className = `rb-preview-count ${prev.count > 0 ? 'has-tracks' : 'no-tracks'}`;
-          span.textContent = `${prev.count} tracks`;
+        data.blocks.forEach((b, k) => {
+          const span = counts[blockIndex[k]];
+          if (!span) return;
+          span.className = `rb-preview-count ${b.count > 0 ? 'has-tracks' : 'no-tracks'}`;
+          span.textContent = `${b.count} tracks`;
         });
       } catch (e) {}
     }
 
-    function buildRulesPayload() {
+    // The rules config to save (v2). Blocks / conditions without a value are
+    // left out; blockIndex maps each saved block back to its card.
+    function rulesPayload() {
+      const clean = r => ({ term: r.term, value: r.value, options: { ...(r.options || {}) } });
+      const conds = list => list.filter(c => hasValue(c.value)).map(c => ({ ...clean(c), use: c.use || 'require' }));
+      const blocks = [], blockIndex = [];
+      rbConfig.blocks.forEach((b, i) => {
+        if (!hasValue(b.rule.value)) return;
+        const out = { rule: clean(b.rule), conditions: conds(b.conditions) };
+        if (typeof b.share === 'number') out.share = b.share;
+        for (const key of Object.keys(MIXES)) if (b[key]) out[key] = { ...b[key] };
+        blocks.push(out); blockIndex.push(i);
+      });
+      if (blocks.length === 1) delete blocks[0].share;   // a single block is the whole playlist
       return {
-        version:        1,
-        limit:          parseInt(document.getElementById('rbLimit').value)         || 50,
-        shuffle:        true,
-        max_per_artist: parseInt(document.getElementById('rbMaxPerArtist').value) || null,
-        rules: rbRules.filter(r => r.value !== '' && !(Array.isArray(r.value) && !r.value.length)).map(r => ({
-          term: r.term, value: r.value, weight: r.weight || 1, mode: r.mode || 'easy', options: r.options || {}, required: r.required !== false
-        }))
+        config: {
+          version:    2,
+          limit:      parseInt(document.getElementById('rbLimit').value) || 50,
+          blocks,
+          conditions: conds(rbConfig.conditions),
+          ...Object.fromEntries(Object.keys(MIXES).filter(key => rbConfig[key]).map(key => [key, { ...rbConfig[key] }])),
+        },
+        blockIndex,
       };
     }
+    function buildRulesPayload() { return rulesPayload().config; }
 
     document.getElementById('rulesPreviewBtn').addEventListener('click', async () => {
       const name      = document.getElementById('rulesNameInput').value.trim();
@@ -1527,7 +1712,11 @@
       const previewBtn = document.getElementById('rulesPreviewBtn');
 
       if (!name)              { status.textContent = 'Add a playlist name'; status.className = 'rb-status status-err'; return; }
-      if (!rules.rules.length){ status.textContent = 'Add at least one rule'; status.className = 'rb-status status-err'; return; }
+      if (!rules.blocks.length){ status.textContent = 'Add at least one block'; status.className = 'rb-status status-err'; return; }
+      const shareErr = shareProblem(rules.blocks);
+      if (shareErr)           { status.textContent = shareErr; status.className = 'rb-status status-err'; return; }
+      const popErr = payloadMixProblem(rules);
+      if (popErr)             { status.textContent = popErr; status.className = 'rb-status status-err'; return; }
 
       previewBtn.disabled = true; previewBtn.textContent = 'Previewing...'; status.textContent = '';
 
@@ -1562,42 +1751,21 @@
       saveBtn.disabled = true; saveBtn.textContent = 'Saving...';
       try {
         const refreshCron = document.getElementById('rbRefreshCron').value.trim() || null;
-        const res  = await fetch('/playlists/save-navilist', {
+        const editing = rbMode === 'edit';
+        const res  = await fetch(editing ? `/playlists/${rbEditingPlaylistId}/rules` : '/playlists/save-navilist', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: rbPlaylistName, rules: buildRulesPayload(), trackIds: rbPreviewTracks.map(t => t.id), refresh_cron: refreshCron })
+          body: JSON.stringify({ name: rbPlaylistName, rules: buildRulesPayload(), trackIds: rbPreviewTracks.map(t => t.id), refresh_cron: editing ? (refreshCron || '') : refreshCron })
         });
         const data = await res.json();
         if (data.ok) {
           await loadPlaylists();
-          setTimeout(() => { const c = allPlaylists.find(p => p.id === data.playlistId); if (c) openDetail(c); else showListView(); }, 400);
+          if (editing) returnFromBuilder();
+          else setTimeout(() => { const c = allPlaylists.find(p => p.id === data.playlistId); if (c) openDetail(c); else showListView(); }, 400);
         } else {
-          status.textContent = `✗ ${data.error}`; status.className = 'rb-status status-err';
+          status.textContent = `✗ ${data.error || data.errors?.join(', ')}`; status.className = 'rb-status status-err';
           saveBtn.disabled = false; saveBtn.textContent = 'Save Playlist';
         }
       } catch (e) { status.textContent = '✗ Request failed'; status.className = 'rb-status status-err'; saveBtn.disabled = false; saveBtn.textContent = 'Save Playlist'; }
-    });
-
-    document.getElementById('rulesSaveBtn').addEventListener('click', async () => {
-      const rules   = buildRulesPayload();
-      const status  = document.getElementById('rbStatus');
-      const saveBtn = document.getElementById('rulesSaveBtn');
-      if (!rules.rules.length) { status.textContent = 'Add at least one rule'; status.className = 'rb-status status-err'; return; }
-      saveBtn.disabled = true; saveBtn.textContent = 'Saving...'; status.textContent = ''; status.className = 'rb-status';
-      try {
-        const res  = await fetch(`/playlists/${rbEditingPlaylistId}/rules`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ rules })
-        });
-        const data = await res.json();
-        if (data.ok) {
-          status.textContent = `✓ ${data.count} tracks`; status.className = 'rb-status status-ok';
-          await loadPlaylists();
-          setTimeout(() => { const u = allPlaylists.find(p => p.id === rbEditingPlaylistId); if (u) openDetail(u); }, 800);
-        } else {
-          status.textContent = `✗ ${data.error || data.errors?.join(', ')}`; status.className = 'rb-status status-err';
-          saveBtn.disabled = false; saveBtn.textContent = 'Save & Generate';
-        }
-      } catch (e) { status.textContent = '✗ Request failed'; status.className = 'rb-status status-err'; saveBtn.disabled = false; saveBtn.textContent = 'Save & Generate'; }
     });
 
     document.getElementById('rbPreviewCancelBtn').addEventListener('click', () => {
@@ -1605,14 +1773,114 @@
     });
 
     document.getElementById('rulesCancelBtn').addEventListener('click', () => {
-      if (rbReturnTo === 'detail' && rbEditingPlaylistId) { const p = allPlaylists.find(pl => pl.id === rbEditingPlaylistId); if (p) { openDetail(p); return; } }
-      showListView();
+      returnFromBuilder();
     });
     document.getElementById('rulesBackBtn').addEventListener('click', () => {
-      if (rbReturnTo === 'detail' && rbEditingPlaylistId) { const p = allPlaylists.find(pl => pl.id === rbEditingPlaylistId); if (p) { openDetail(p); return; } }
-      showListView();
+      returnFromBuilder();
     });
-    document.getElementById('rbAddRule').addEventListener('click', () => { rbRules.push(defaultRule()); renderRuleRows(); });
+    document.getElementById('rbAddBlock').addEventListener('click', () => { rbConfig.blocks.push(newBlock()); renderBlocks(); });
+
+
+    // ── Auto-refresh picker ────────────────────────────────────────────────
+    // #rbRefreshCron holds the actual cron expression (what Save sends). The picker
+    // writes it; Custom lets the user type it. Times are the SERVER's clock.
+    let SERVER_TZ = window.__serverTz || { name: 'server time', offsetMin: -new Date().getTimezoneOffset() };
+    fetch('/playlists/api/server-time').then(r => r.json()).then(d => { if (d.ok) { SERVER_TZ = { name: d.tz, offsetMin: d.offsetMin }; paintRefresh(false); } }).catch(() => {});
+    const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    const pad2 = n => String(n).padStart(2, '0');
+
+    // One cron field → sorted allowed values, or null if invalid. Supports * , - /
+    function cronField(str, min, max) {
+      const out = new Set();
+      for (const part of str.split(',')) {
+        const m = /^(\*|\d+(?:-\d+)?)(?:\/(\d+))?$/.exec(part);
+        if (!m) return null;
+        let lo, hi;
+        if (m[1] === '*') { lo = min; hi = max; }
+        else if (m[1].includes('-')) { [lo, hi] = m[1].split('-').map(Number); }
+        else { lo = Number(m[1]); hi = m[2] ? max : lo; }
+        const step = m[2] ? Number(m[2]) : 1;
+        if (!step || lo < min || hi > max || lo > hi) return null;
+        for (let v = lo; v <= hi; v += step) out.add(v);
+      }
+      return [...out].sort((a, b) => a - b);
+    }
+    function parseCron(expr) {
+      const f = expr.trim().split(/\s+/);
+      if (f.length !== 5) return null;
+      const [mi, ho, dom, mo, dow] = [cronField(f[0], 0, 59), cronField(f[1], 0, 23), cronField(f[2], 1, 31), cronField(f[3], 1, 12), cronField(f[4], 0, 7)];
+      if (!mi || !ho || !dom || !mo || !dow) return null;
+      return { mi, ho, dom, mo, dow: [...new Set(dow.map(d => d % 7))], domAny: f[2] === '*', dowAny: f[4] === '*' };
+    }
+    // Next run on the server's wall clock (DST changes ignored), or null.
+    function nextRun(expr) {
+      const c = parseCron(expr); if (!c) return null;
+      const t = new Date(Date.now() + SERVER_TZ.offsetMin * 60000); t.setUTCSeconds(0, 0);
+      for (let i = 0; i < 366 * 24 * 60; i++) {
+        t.setUTCMinutes(t.getUTCMinutes() + 1);
+        if (!c.mi.includes(t.getUTCMinutes()) || !c.ho.includes(t.getUTCHours()) || !c.mo.includes(t.getUTCMonth() + 1)) continue;
+        const domOk = c.dom.includes(t.getUTCDate()), dowOk = c.dow.includes(t.getUTCDay());
+        if (c.domAny && c.dowAny ? true : c.domAny ? dowOk : c.dowAny ? domOk : (domOk || dowOk)) return new Date(t);
+      }
+      return null;
+    }
+    function fmtNext(d) {
+      return `${WEEKDAYS[d.getUTCDay()].slice(0, 3)} ${d.getUTCDate()} ${d.toLocaleString('en-GB', { month: 'short', timeZone: 'UTC' })}, ${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())}`;
+    }
+
+    // Picker state ⇄ cron expression
+    function refreshPickerToCron() {
+      const g = id => document.getElementById(id).value;
+      const [hh, mm] = (g('rbRefreshTime') || '06:00').split(':').map(Number);
+      switch (g('rbRefreshFreq')) {
+        case 'hourly':  return `${g('rbRefreshMinute')} * * * *`;
+        case 'daily':   return `${mm} ${hh} * * *`;
+        case 'weekly':  return `${mm} ${hh} * * ${g('rbRefreshWeekday')}`;
+        case 'monthly': return `${mm} ${hh} ${g('rbRefreshMonthday')} * *`;
+        case 'custom':  return g('rbRefreshCron').trim();
+        default:        return '';
+      }
+    }
+    function setRefreshFromCron(expr) {
+      expr = (expr || '').trim();
+      const g = id => document.getElementById(id);
+      let m, freq = expr ? 'custom' : 'off';
+      if ((m = /^(\d+) \* \* \* \*$/.exec(expr)) && +m[1] < 60)                                   { freq = 'hourly'; g('rbRefreshMinute').value = m[1]; }
+      else if ((m = /^(\d+) (\d+) \* \* \*$/.exec(expr)) && +m[1] < 60 && +m[2] < 24)             { freq = 'daily'; g('rbRefreshTime').value = `${pad2(m[2])}:${pad2(m[1])}`; }
+      else if ((m = /^(\d+) (\d+) \* \* ([0-6])$/.exec(expr)) && +m[1] < 60 && +m[2] < 24)        { freq = 'weekly'; g('rbRefreshTime').value = `${pad2(m[2])}:${pad2(m[1])}`; g('rbRefreshWeekday').value = m[3]; }
+      else if ((m = /^(\d+) (\d+) (\d+) \* \*$/.exec(expr)) && +m[1] < 60 && +m[2] < 24 && +m[3] >= 1 && +m[3] <= 28) { freq = 'monthly'; g('rbRefreshTime').value = `${pad2(m[2])}:${pad2(m[1])}`; g('rbRefreshMonthday').value = m[3]; }
+      g('rbRefreshFreq').value = freq;
+      g('rbRefreshCron').value = expr;
+      paintRefresh(false);
+    }
+    function paintRefresh(fromPicker = true) {
+      const g = id => document.getElementById(id);
+      const freq = g('rbRefreshFreq').value;
+      document.querySelectorAll('.rb-refresh-part').forEach(el => { el.hidden = !el.dataset.for.split(' ').includes(freq); });
+      if (fromPicker && freq !== 'custom') g('rbRefreshCron').value = refreshPickerToCron();
+      else if (fromPicker) g('rbRefreshCron').value = g('rbRefreshCron').value;   // custom: typed text is the value
+      const expr = freq === 'custom' ? g('rbRefreshCron').value.trim() : refreshPickerToCron();
+      if (freq !== 'custom') g('rbRefreshCron').value = expr;
+      const sum = g('rbRefreshSummary'); sum.classList.remove('is-bad');
+      if (!expr) { sum.textContent = freq === 'custom' ? 'Enter a cron expression, or pick a frequency above.' : 'The playlist is only rebuilt when you regenerate it.'; return; }
+      const next = nextRun(expr);
+      if (!parseCron(expr)) { sum.textContent = 'Not recognised as a cron expression — five fields: minute hour day-of-month month day-of-week.'; sum.classList.add('is-bad'); return; }
+      const [hh, mm] = (g('rbRefreshTime').value || '06:00').split(':').map(Number);
+      const when = { hourly: `Every hour at :${pad2(g('rbRefreshMinute').value)}`, daily: `Every day at ${pad2(hh)}:${pad2(mm)}`,
+        weekly: `Every ${WEEKDAYS[g('rbRefreshWeekday').value]} at ${pad2(hh)}:${pad2(mm)}`,
+        monthly: `On day ${g('rbRefreshMonthday').value} of every month at ${pad2(hh)}:${pad2(mm)}`, custom: `Custom schedule (${expr})` }[freq];
+      sum.textContent = `${when} · next run ${next ? fmtNext(next) : '—'} (${SERVER_TZ.name})`;
+    }
+    (function initRefreshPicker() {
+      const fill = (id, items) => { const s = document.getElementById(id); items.forEach(([v, l]) => s.add(new Option(l, v))); };
+      fill('rbRefreshMinute', [0, 15, 30, 45].map(n => [n, `:${pad2(n)}`]));
+      fill('rbRefreshWeekday', [1, 2, 3, 4, 5, 6, 0].map(d => [d, WEEKDAYS[d]]));
+      fill('rbRefreshMonthday', Array.from({ length: 28 }, (_, i) => [i + 1, String(i + 1)]));
+      document.getElementById('rbRefreshMinute').value = 0; document.getElementById('rbRefreshWeekday').value = 1; document.getElementById('rbRefreshMonthday').value = 1;
+      ['rbRefreshFreq', 'rbRefreshMinute', 'rbRefreshWeekday', 'rbRefreshMonthday', 'rbRefreshTime'].forEach(id => document.getElementById(id).addEventListener('change', () => paintRefresh(true)));
+      document.getElementById('rbRefreshCron').addEventListener('input', () => paintRefresh(true));
+      paintRefresh(false);
+    })();
 
     // ── New playlist modal ─────────────────────────────────────────────────
     document.getElementById('newPlaylistWideBtn').addEventListener('click', () => {
@@ -1637,25 +1905,7 @@
       document.getElementById('newPlaylistModal').style.display = 'none';
 
       if (selectedType === 'navilist') {
-        openRuleBuilder('', null, 'list');
-        return;
-      }
-      if (selectedType === 'radio') {
-        radioSeeds = []; radioPreviewTracks = []; radioPreviewConfig = null;
-        renderRadioSeeds();
-        document.getElementById('radioNameInput').value            = '';
-        document.getElementById('radioRefreshCron').value           = '';
-        document.getElementById('radioStatus').textContent          = '';
-        document.getElementById('radioPreviewPanel').style.display = 'none';
-        document.getElementById('radioPreviewBtn').disabled        = false;
-        document.getElementById('radioPreviewBtn').textContent     = 'Preview →';
-        showRadioView();
-        setTimeout(() => document.getElementById('radioNameInput').focus(), 50);
-        loadArtists().then(() => {
-          const dl = document.getElementById('radioArtistList');
-          dl.innerHTML = '';
-          artistList.forEach(a => { const o = document.createElement('option'); o.value = a; dl.appendChild(o); });
-        });
+        openRuleBuilder('', 'list');
         return;
       }
       if (selectedType === 'nsp') { openNspBuilder(null, null); return; }
@@ -1699,95 +1949,6 @@
     });
 
     document.getElementById('backBtn').addEventListener('click', () => { showListView(); loadPlaylists(); });
-
-    // ── Radio builder ──────────────────────────────────────────────────────
-    function renderRadioSeeds() {
-      const chips = document.getElementById('radioSeedChips');
-      chips.innerHTML = '';
-      radioSeeds.forEach((name, i) => {
-        const chip = document.createElement('div');
-        chip.className = 'radio-seed-chip';
-        chip.innerHTML = `<span>${esc(name)}</span><button title="Remove">✕</button>`;
-        chip.querySelector('button').addEventListener('click', () => { radioSeeds.splice(i, 1); renderRadioSeeds(); });
-        chips.appendChild(chip);
-      });
-    }
-
-    function addRadioSeed() {
-      const input = document.getElementById('radioSeedInput');
-      const name  = input.value.trim();
-      if (!name || radioSeeds.includes(name)) { input.value = ''; return; }
-      radioSeeds.push(name); input.value = ''; renderRadioSeeds();
-    }
-
-    document.getElementById('radioAddSeedBtn').addEventListener('click', addRadioSeed);
-    document.getElementById('radioSeedInput').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addRadioSeed(); } });
-    document.getElementById('radioCancelBtn').addEventListener('click', () => showListView());
-    document.getElementById('radioBackBtn').addEventListener('click',   () => showListView());
-
-    document.getElementById('radioPreviewBtn').addEventListener('click', async () => {
-      const stationName = document.getElementById('radioNameInput').value.trim();
-      const status      = document.getElementById('radioStatus');
-      const previewBtn  = document.getElementById('radioPreviewBtn');
-
-      if (!stationName)       { status.textContent = 'Add a station name'; status.className = 'rb-status status-err'; return; }
-      if (!radioSeeds.length) { status.textContent = 'Add at least one seed artist'; status.className = 'rb-status status-err'; return; }
-
-      const depth        = parseFloat(document.querySelector('input[name="radioDepth"]:checked')?.value || '0.25');
-      const track_count  = parseInt(document.getElementById('radioTrackCount').value) || 50;
-      const include_seed = document.getElementById('radioIncludeSeed').checked;
-
-      previewBtn.disabled = true; previewBtn.textContent = 'Previewing...'; status.textContent = ''; status.className = 'rb-status';
-
-      try {
-        const res  = await fetch('/playlists/preview-radio', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ artists: radioSeeds, depth, track_count, include_seed })
-        });
-        const data = await res.json();
-        if (data.ok) {
-          radioPreviewTracks = data.tracks;
-          radioPreviewConfig = data.config;
-          document.getElementById('radioPreviewCount').textContent = `— ${data.count} tracks`;
-          renderPreviewTracks('radioPreviewTracks', radioPreviewTracks, (idx) => {
-            radioPreviewTracks.splice(idx, 1);
-            renderPreviewTracks('radioPreviewTracks', radioPreviewTracks, arguments.callee);
-            document.getElementById('radioPreviewCount').textContent = `— ${radioPreviewTracks.length} tracks`;
-          });
-          document.getElementById('radioPreviewPanel').style.display = '';
-          document.getElementById('radioSaveStatus').textContent     = '';
-        } else { status.textContent = `✗ ${data.error}`; status.className = 'rb-status status-err'; }
-      } catch (e) { status.textContent = '✗ Request failed'; status.className = 'rb-status status-err'; }
-      finally { previewBtn.disabled = false; previewBtn.textContent = 'Preview →'; }
-    });
-
-    document.getElementById('radioSaveBtn').addEventListener('click', async () => {
-      const stationName = document.getElementById('radioNameInput').value.trim();
-      const status      = document.getElementById('radioSaveStatus');
-      const saveBtn     = document.getElementById('radioSaveBtn');
-      if (!radioPreviewTracks.length) { status.textContent = 'Nothing to save — run Preview first'; status.className = 'rb-status status-err'; return; }
-      saveBtn.disabled = true; saveBtn.textContent = 'Saving...';
-      try {
-        const refreshCron = document.getElementById('radioRefreshCron').value.trim() || null;
-        const res  = await fetch('/playlists/save-radio', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: stationName, config: radioPreviewConfig, trackIds: radioPreviewTracks.map(t => t.id), refresh_cron: refreshCron })
-        });
-        const data = await res.json();
-        if (data.ok) {
-          await loadPlaylists();
-          setTimeout(() => { const c = allPlaylists.find(p => p.id === data.playlistId); if (c) openDetail(c); else showListView(); }, 400);
-        } else {
-          status.textContent = `✗ ${data.error}`; status.className = 'rb-status status-err';
-          saveBtn.disabled = false; saveBtn.textContent = 'Save Playlist';
-        }
-      } catch (e) { status.textContent = '✗ Request failed'; status.className = 'rb-status status-err'; saveBtn.disabled = false; saveBtn.textContent = 'Save Playlist'; }
-    });
-
-    document.getElementById('radioPreviewCancelBtn').addEventListener('click', () => {
-      radioPreviewTracks = []; radioPreviewConfig = null;
-      document.getElementById('radioPreviewPanel').style.display = 'none';
-    });
 
     // ── NSP detail ──────────────────────────────────────────────────────────
     function openNspDetail(p) {
@@ -1961,7 +2122,7 @@
           valueWrap.appendChild(inp); valueWrap.appendChild(lbl);
         } else if (ft === 'playlist') {
           const sel = document.createElement('select'); sel.style.cssText = 'flex:1; min-width:0;';
-          const opts = allPlaylists.filter(p => !isInactive(p) && !isNspPlaylist(p));
+          const opts = allPlaylists.filter(p => !isNspPlaylist(p));
           if (!opts.length) {
             const empty = document.createElement('option'); empty.textContent = 'No playlists available'; empty.disabled = true; sel.appendChild(empty);
           } else {
@@ -2829,15 +2990,6 @@
     });
 
     document.getElementById('selClearBtn').addEventListener('click', () => { selected.clear(); renderCards(); });
-    document.getElementById('selActivateBtn').addEventListener('click', async () => {
-      for (const id of [...selected]) { const p = allPlaylists.find(pl => pl.id === id); if (p && isInactive(p)) await fetch(`/playlists/${id}/activate`, { method: 'POST' }); }
-      selected.clear(); await loadPlaylists();
-    });
-    document.getElementById('selDeactivateBtn').addEventListener('click', async () => {
-      if (!confirm(`Deactivate ${selected.size} playlist(s)?`)) return;
-      for (const id of [...selected]) { const p = allPlaylists.find(pl => pl.id === id); if (p && !isInactive(p)) await fetch(`/playlists/${id}/deactivate`, { method: 'POST' }); }
-      selected.clear(); await loadPlaylists();
-    });
     document.getElementById('selDeleteBtn').addEventListener('click', async () => {
       if (!confirm(`Delete ${selected.size} playlist(s)? This cannot be undone.`)) return;
       for (const id of [...selected]) {
@@ -2859,9 +3011,7 @@
     });
   </script>
   <footer class="app-footer">
-    <span>naviList v<span id="appVersion">…</span></span>
-    <span>-</span>
-    <a href="https://github.com/ofernander/naviList" target="_blank" rel="noopener">GitHub</a>
+    <span>naviList v<span id="appVersion">…</span></span> · <a href="https://github.com/ofernander/naviList" target="_blank" rel="noopener"><svg class="app-footer-icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg> GitHub</a>
   </footer>
   <script>
     fetch('/api/version').then(r => r.json()).then(d => {

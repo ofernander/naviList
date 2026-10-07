@@ -1,7 +1,10 @@
 'use strict';
 
 // Full DB schema — all tables defined here.
-// No migrations. Drop the DB file and restart to rebuild clean.
+// New columns on existing tables are added by the guarded, idempotent migrations
+// at the bottom, so existing user DBs upgrade in place on startup.
+
+const { parseComment, normalizeRules, currentTypeConfig } = require('../lib/playlist_types');
 
 module.exports = function (db) {
   db.exec(`
@@ -60,7 +63,7 @@ module.exports = function (db) {
       result         TEXT
     );
 
-    -- Artists — optional MBID lookup cache (populated on demand, e.g. radio playlist creation)
+    -- Artists — optional MBID lookup cache (populated on demand, e.g. similar-artist lookups)
     CREATE TABLE IF NOT EXISTS artists (
       artist_id   TEXT PRIMARY KEY,
       name        TEXT NOT NULL,
@@ -79,7 +82,7 @@ module.exports = function (db) {
       score             REAL,
       source            TEXT NOT NULL DEFAULT 'lastfm',
       fetched_at        INTEGER NOT NULL,
-      PRIMARY KEY (artist_id, similar_name)
+      PRIMARY KEY (artist_id, source, similar_name)
     );
 
     CREATE INDEX IF NOT EXISTS idx_artist_similar_artist_id ON artist_similar(artist_id);
@@ -168,6 +171,7 @@ module.exports = function (db) {
       artist    TEXT NOT NULL,
       title     TEXT NOT NULL,
       matched   INTEGER NOT NULL DEFAULT 0,
+      track_id  TEXT,
       PRIMARY KEY (lb_mbid, position)
     );
 
@@ -200,16 +204,21 @@ module.exports = function (db) {
       artist    TEXT NOT NULL,
       title     TEXT NOT NULL,
       matched   INTEGER NOT NULL DEFAULT 0,
+      track_id  TEXT,
       PRIMARY KEY (lfm_id, position)
     );
 
     CREATE INDEX IF NOT EXISTS idx_lfm_playlist_tracks_id ON lfm_playlist_tracks(lfm_id);
 
-    -- naviList playlist registry — local copies of all known playlists
+    -- naviList playlist registry — local copies of all known playlists.
+    -- type/config are the source of truth for naviList playlists; comment mirrors
+    -- the Navidrome comment (see lib/playlist_types.js).
     CREATE TABLE IF NOT EXISTS navilist_playlists (
       navidrome_id    TEXT PRIMARY KEY,
       name            TEXT NOT NULL,
       comment         TEXT,
+      type            TEXT,
+      config          TEXT,
       active          INTEGER NOT NULL DEFAULT 1,
       track_count     INTEGER,
       duration        INTEGER,
@@ -236,10 +245,100 @@ module.exports = function (db) {
   const trackCols = db.prepare('PRAGMA table_info(tracks)').all().map(c => c.name);
   if (!trackCols.includes('mbid'))    db.exec('ALTER TABLE tracks ADD COLUMN mbid TEXT');
   if (!trackCols.includes('is_live')) db.exec('ALTER TABLE tracks ADD COLUMN is_live INTEGER');
+  // Popularity within the artist (lib/popularity.js). pop_source NULL = not fetched yet.
+  if (!trackCols.includes('pop_score'))      db.exec('ALTER TABLE tracks ADD COLUMN pop_score REAL');
+  // Scores were briefly based on listeners (pre-release): rename the column and
+  // clear the scores once so every artist is re-rated by plays.
+  if (trackCols.includes('pop_listeners')) {
+    db.exec('ALTER TABLE tracks RENAME COLUMN pop_listeners TO pop_plays');
+    db.exec('UPDATE tracks SET pop_score = NULL, pop_plays = NULL, pop_source = NULL, pop_fetched_at = NULL');
+  } else if (!trackCols.includes('pop_plays')) db.exec('ALTER TABLE tracks ADD COLUMN pop_plays INTEGER');
+  if (!trackCols.includes('pop_source'))     db.exec('ALTER TABLE tracks ADD COLUMN pop_source TEXT');
+  if (!trackCols.includes('pop_fetched_at')) db.exec('ALTER TABLE tracks ADD COLUMN pop_fetched_at INTEGER');
+
+  // Artist MBID fill (lib/artist_mbid.js): where the MBID came from and when it was
+  // last looked up. Rows from before the fill keep a null source and count as resolved.
+  const artistCols = db.prepare('PRAGMA table_info(artists)').all().map(c => c.name);
+  if (!artistCols.includes('mbid_source'))     db.exec('ALTER TABLE artists ADD COLUMN mbid_source TEXT');
+  if (!artistCols.includes('mbid_checked_at')) db.exec('ALTER TABLE artists ADD COLUMN mbid_checked_at INTEGER');
+  // Live fill (lib/live_fill.js): when the artist's live releases were last scanned.
+  if (!artistCols.includes('live_checked_at')) db.exec('ALTER TABLE artists ADD COLUMN live_checked_at INTEGER');
+
+  // Navidrome sends musicBrainzId "" for untagged songs; older syncs stored it as-is.
+  // Live scans made while those looked like MBIDs matched nothing — rescan them.
+  const clearedMbids = db.prepare("UPDATE tracks SET mbid = NULL WHERE mbid = ''").run().changes;
+  if (clearedMbids) db.exec('UPDATE artists SET live_checked_at = NULL');
 
   // Index created after the ALTER above so the column exists on pre-existing DBs.
   db.exec('CREATE INDEX IF NOT EXISTS idx_tracks_is_live ON tracks(is_live)');
 
   // Drop the obsolete MB length cache — superseded by per-track mbid/is_live.
   db.exec('DROP TABLE IF EXISTS mb_recordings');
+
+  // artist_similar keyed per source (Last.fm + ListenBrainz). SQLite can't alter a
+  // primary key, so pre-existing DBs rebuild the table once; rows are kept.
+  const simPk = db.prepare('PRAGMA table_info(artist_similar)').all().filter(c => c.pk > 0).map(c => c.name);
+  if (!simPk.includes('source')) {
+    db.transaction(() => {
+      db.exec(`
+        CREATE TABLE artist_similar_new (
+          artist_id         TEXT NOT NULL,
+          similar_name      TEXT NOT NULL,
+          similar_artist_id TEXT,
+          score             REAL,
+          source            TEXT NOT NULL DEFAULT 'lastfm',
+          fetched_at        INTEGER NOT NULL,
+          PRIMARY KEY (artist_id, source, similar_name)
+        );
+        INSERT INTO artist_similar_new (artist_id, similar_name, similar_artist_id, score, source, fetched_at)
+          SELECT artist_id, similar_name, similar_artist_id, score, source, fetched_at FROM artist_similar;
+        DROP TABLE artist_similar;
+        ALTER TABLE artist_similar_new RENAME TO artist_similar;
+        CREATE INDEX IF NOT EXISTS idx_artist_similar_artist_id ON artist_similar(artist_id);
+      `);
+    })();
+  }
+
+  // Matched local track id on cached LB / Last.fm source rows (pre-existing DBs),
+  // so snapshots reuse the exact match instead of re-matching text.
+  for (const table of ['lb_playlist_tracks', 'lfm_playlist_tracks']) {
+    const cols = db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name);
+    if (!cols.includes('track_id')) db.exec(`ALTER TABLE ${table} ADD COLUMN track_id TEXT`);
+  }
+
+  // Registry type/config (pre-existing DBs), backfilled from the mirrored comment.
+  const plCols = db.prepare('PRAGMA table_info(navilist_playlists)').all().map(c => c.name);
+  if (!plCols.includes('type'))   db.exec('ALTER TABLE navilist_playlists ADD COLUMN type TEXT');
+  if (!plCols.includes('config')) db.exec('ALTER TABLE navilist_playlists ADD COLUMN config TEXT');
+
+  const untyped = db.prepare(
+    "SELECT navidrome_id, comment FROM navilist_playlists WHERE type IS NULL AND comment LIKE 'navilist:%'"
+  ).all();
+  if (untyped.length) {
+    const setType = db.prepare('UPDATE navilist_playlists SET type = ?, config = ? WHERE navidrome_id = ?');
+    db.transaction(rows => {
+      for (const r of rows) {
+        const { type, config } = parseComment(r.comment);
+        if (type) setType.run(type, config ? JSON.stringify(config) : null, r.navidrome_id);
+      }
+    })(untyped);
+  }
+
+  // Configs saved in an older shape: rules (term `tag` → `genre`, `required` →
+  // `use`) and legacy radio playlists (→ rules playlist with similar-artist
+  // rules). The Navidrome comment follows (refresh.migrateLegacyComments /
+  // next publish). Only rows that actually change are written.
+  const configRows = db.prepare(
+    "SELECT navidrome_id, type, config FROM navilist_playlists WHERE type IN ('navilist', 'radio') AND config IS NOT NULL"
+  ).all();
+  const setTypeConfig = db.prepare('UPDATE navilist_playlists SET type = ?, config = ? WHERE navidrome_id = ?');
+  db.transaction(rows => {
+    for (const r of rows) {
+      let current;
+      try { current = currentTypeConfig(r.type, JSON.parse(r.config)); }
+      catch (e) { continue; }   // malformed config — left as is; read paths normalize too
+      const json = JSON.stringify(current.config);
+      if (current.type !== r.type || json !== r.config) setTypeConfig.run(current.type, json, r.navidrome_id);
+    }
+  })(configRows);
 };

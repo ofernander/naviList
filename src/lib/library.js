@@ -4,10 +4,11 @@ const path      = require('path');
 const db        = require('../db/index');
 const fs        = require('fs');
 const navidrome = require('../providers/navidrome');
+const { getSettings: readSettings } = require('../db/settings');
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-// getSettings and buildNaviParams delegate to navidrome.js — single source of truth
-function getSettings()                      { return navidrome.getSettings(db); }
+// buildNaviParams delegates to navidrome.js — single source of truth
+function getSettings()                      { return readSettings(db); }
 function buildNaviParams(settings, extra)   { return navidrome.buildParams(settings, extra); }
 
 // ── GET /library — serve static HTML page ────────────────────────────────────

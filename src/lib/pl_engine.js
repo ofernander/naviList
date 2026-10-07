@@ -6,64 +6,93 @@
  * Single entry point for all smart playlist generation logic.
  * Design spec: MISC/pl_engine.md
  *
+ * A rules playlist is a set of blocks (config format: lib/playlist_types.js):
+ * each block is a starting rule narrowed by its own conditions plus the shared
+ * ones, optionally split by studio / live and by popularity; the playlist
+ * combines the blocks by share.
+ *
  * Exports:
- *   generatePlaylist(db, rules)  → Promise<string[]>   — full resolution to track ID list
+ *   generatePlaylist(db, config) → Promise<string[]>   — full resolution to track ID list
  *   resolveRule(db, rule)        → Promise<string[]>   — single term → ranked track ID pool
- *   validateRules(rules)         → { ok, errors[] }    — validate rules JSON
- *   previewRules(db, rules)      → Promise<Object[]>   — per-rule count + sample, no full resolution
+ *   validateRules(config)        → { ok, errors[] }    — validate a rules config
+ *   previewRules(db, config)     → Promise<Object[]>   — per-block count + sample, no combining
  */
 
 const logger = require('../utils/logger');
-const { filterLiveIds, filterStudioPool } = require('./sync/helpers');
+const { cleanPool, orderByArtist, mixByPopularity, splitVersions, mixVersions, combineBlocks } = require('./finalize');
+const { similarForArtist } = require('./similar');
+const { CONDITION_USES, SIMILAR_DEPTHS, SIMILAR_SOURCES, canonicalTerm, normalizeRules, shareProblem,
+        MIX_TIERS, mixProblem, mixWeights } = require('./playlist_types');
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const SUPPORTED_TERMS = ['artist', 'tag', 'stats', 'decade', 'mood'];
-const SUPPORTED_MODES = ['easy', 'medium', 'hard'];
+const SUPPORTED_TERMS = ['artist', 'genre', 'stats', 'decade', 'mood'];
 const SUPPORTED_STATS = ['top_played', 'recently_played', 'not_recently_played', 'unplayed', 'starred', 'highly_rated', 'loved', 'disliked', 'top_artists'];
+// Stats values whose result is a meaningful best-first ranking.
+const RANKED_STATS    = ['top_played', 'recently_played', 'top_artists', 'highly_rated'];
 const DEFAULT_LIMIT   = 25;
-const DEFAULT_MODE    = 'easy';
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
-/**
- * Validate a rules object. Returns { ok: bool, errors: string[] }.
- */
-function validateRules(rules) {
+const hasValue = v => !(v === undefined || v === null || v === '' || (Array.isArray(v) && !v.length));
+
+// Errors for one rule (a block's start or a condition), prefixed with `where`.
+function ruleErrors(rule, where, { condition = false } = {}) {
   const errors = [];
+  if (!rule || typeof rule !== 'object') return [`${where}: missing`];
+  if (!SUPPORTED_TERMS.includes(canonicalTerm(rule.term))) errors.push(`${where}: unknown term "${rule.term}"`);
+  if (!hasValue(rule.value)) errors.push(`${where}: value is required`);
+  if (condition && !CONDITION_USES.includes(rule.use)) errors.push(`${where}: use must be one of ${CONDITION_USES.join(' | ')}`);
+  const o = rule.options || {};
+  if (o.similar !== undefined && !SIMILAR_DEPTHS[o.similar]) errors.push(`${where}: similar must be one of ${Object.keys(SIMILAR_DEPTHS).join(' | ')}`);
+  if (o.similar_source !== undefined && !SIMILAR_SOURCES.includes(o.similar_source)) errors.push(`${where}: similar_source must be one of ${SIMILAR_SOURCES.join(' | ')}`);
+  if (o.seed_share !== undefined && !(typeof o.seed_share === 'number' && o.seed_share >= 0 && o.seed_share <= 100)) errors.push(`${where}: seed_share must be 0–100`);
+  return errors;
+}
 
-  if (!rules || typeof rules !== 'object')       { return { ok: false, errors: ['rules must be an object'] }; }
-  if (!Array.isArray(rules.rules))               { errors.push('rules.rules must be an array'); }
-  if (rules.limit && typeof rules.limit !== 'number') { errors.push('rules.limit must be a number'); }
-
-  (rules.rules || []).forEach((rule, i) => {
-    if (!SUPPORTED_TERMS.includes(rule.term))    { errors.push(`rule[${i}]: unknown term "${rule.term}"`); }
-    if (rule.value === undefined || rule.value === null || rule.value === '') { errors.push(`rule[${i}]: value is required`); }
-    if (rule.mode && !SUPPORTED_MODES.includes(rule.mode)) { errors.push(`rule[${i}]: unknown mode "${rule.mode}"`); }
-    if (rule.weight !== undefined && (typeof rule.weight !== 'number' || rule.weight < 1)) {
-      errors.push(`rule[${i}]: weight must be a positive integer`);
-    }
-    if (rule.required !== undefined && typeof rule.required !== 'boolean') {
-      errors.push(`rule[${i}]: required must be a boolean`);
+/**
+ * Validate a rules config (v1 or v2 — normalized first). Returns { ok, errors[] }.
+ * checkShares: false skips the share total (per-block previews don't use it).
+ */
+function validateRules(config, { checkShares = true } = {}) {
+  if (!config || typeof config !== 'object') return { ok: false, errors: ['rules must be an object'] };
+  config = normalizeRules(config);
+  const errors = [];
+  if (!Array.isArray(config.blocks) || !config.blocks.length) errors.push('add at least one block');
+  if (config.limit !== undefined && typeof config.limit !== 'number') errors.push('limit must be a number');
+  (config.blocks || []).forEach((b, i) => {
+    errors.push(...ruleErrors(b.rule, `block ${i + 1}`));
+    if (b.share !== undefined && !(typeof b.share === 'number' && b.share > 0 && b.share <= 100)) errors.push(`block ${i + 1}: share must be 1–100`);
+    (b.conditions || []).forEach((c, j) => errors.push(...ruleErrors(c, `block ${i + 1} condition ${j + 1}`, { condition: true })));
+    for (const key of Object.keys(MIX_TIERS)) {
+      const problem = mixProblem(b[key], key);
+      if (problem) errors.push(`block ${i + 1}: ${problem}`);
     }
   });
-
+  for (const key of Object.keys(MIX_TIERS)) {
+    const problem = mixProblem(config[key], key);
+    if (problem) errors.push(`every block: ${problem}`);
+  }
+  (config.conditions || []).forEach((c, j) => {
+    errors.push(...ruleErrors(c, `shared condition ${j + 1}`, { condition: true }));
+    // "Only artist X" on every block would reduce the playlist to one artist.
+    if (canonicalTerm(c.term) === 'artist' && c.use !== 'exclude') errors.push(`shared condition ${j + 1}: an artist for every block can only be Not`);
+  });
+  const shares = checkShares ? shareProblem(config.blocks) : null;
+  if (shares) errors.push(shares);
   return { ok: errors.length === 0, errors };
 }
 
 /**
- * Resolve a single rule to a ranked array of track IDs.
- * Mode slicing is applied here.
+ * Resolve a single rule to an array of track IDs (best-first for ranked stats).
  */
 async function resolveRule(db, rule) {
-  const mode = rule.mode || DEFAULT_MODE;
-
-  switch (rule.term) {
-    case 'stats':   return resolveStats(db, rule, mode);
-    case 'decade':  return resolveDecade(db, rule, mode);
-    case 'tag':     return resolveTag(db, rule, mode);
-    case 'artist':  return resolveArtist(db, rule, mode);
-    case 'mood':    return resolveMood(db, rule, mode);
+  switch (canonicalTerm(rule.term)) {
+    case 'stats':   return resolveStats(db, rule);
+    case 'decade':  return resolveDecade(db, rule);
+    case 'genre':   return resolveGenre(db, rule);
+    case 'artist':  return resolveArtist(db, rule);
+    case 'mood':    return resolveMood(db, rule);
     default:
       logger.warn('pl_engine', `unknown term: ${rule.term}`);
       return [];
@@ -71,131 +100,108 @@ async function resolveRule(db, rule) {
 }
 
 /**
- * Generate a full playlist from a rules object.
- * Returns a deduplicated, interleaved, optionally shuffled array of track IDs.
+ * A block's track pool, in its starting rule's order: the start narrowed by
+ * every Only condition (same term repeated = either, different terms = all
+ * must hold), minus every Not condition. Shared conditions apply like the
+ * block's own.
  */
-async function generatePlaylist(db, rules) {
-  const validation = validateRules(rules);
+async function resolveBlock(db, block, shared = []) {
+  const conditions = [...(block.conditions || []), ...shared];
+  let pool = await resolveRule(db, block.rule);
+
+  const groups = new Map();   // term → Set of ids (Only conditions, union within a term)
+  for (const c of conditions.filter(c => c.use !== 'exclude')) {
+    const term = canonicalTerm(c.term);
+    if (!groups.has(term)) groups.set(term, new Set());
+    (await resolveRule(db, c)).forEach(id => groups.get(term).add(id));
+  }
+  for (const set of groups.values()) pool = pool.filter(id => set.has(id));
+
+  const notConds = conditions.filter(c => c.use === 'exclude');
+  if (notConds.length) {
+    const excluded = new Set();
+    for (const c of notConds) (await resolveRule(db, c)).forEach(id => excluded.add(id));
+    pool = pool.filter(id => !excluded.has(id));
+  }
+  return pool;
+}
+
+// A block keeps its order only when it starts from a ranked stat (e.g. top
+// played) — the limit then takes the best tracks; every other block shuffles,
+// so a playlist varies on each refresh.
+const isRanked = rule => canonicalTerm(rule.term) === 'stats' && RANKED_STATS.includes(rule.value);
+
+/**
+ * Generate a playlist from a rules config (v1 or v2). Each block: pool →
+ * shuffle (unless ranked) → clean (disliked, studio) → even split by artist
+ * (with optional seed share); then the blocks are combined by share.
+ */
+async function generatePlaylist(db, config) {
+  config = normalizeRules(config);
+  const validation = validateRules(config);
   if (!validation.ok) {
     logger.error('pl_engine', `invalid rules: ${validation.errors.join(', ')}`);
     return [];
   }
+  const limit  = config.limit ?? DEFAULT_LIMIT;
+  const lists  = [];
+  for (const [i, block] of config.blocks.entries()) {
+    let pool = await resolveBlock(db, block, config.conditions);
+    if (!isRanked(block.rule)) fisherYates(pool);
 
-  const limit        = rules.limit          ?? DEFAULT_LIMIT;
-  // Preserve rank ordering for a pure single-rule ranked playlist (e.g. top played).
-  // Shuffle remains on when multiple required groups or preferred rules are present,
-  // where a single global rank order is no longer meaningful.
-  const isSingleRankedRule = rules.rules.length === 1 && rules.rules[0].required !== false;
-  const shuffle      = rules.shuffle === false ? false : !isSingleRankedRule;
-  const maxPerArtist = rules.max_per_artist ?? 5;
-
-  // Split into required (filter) and preferred (boost) rules
-  const requiredRules  = rules.rules.filter(r => r.required !== false);
-  const preferredRules = rules.rules.filter(r => r.required === false);
-
-  // Resolve required rules
-  const resolvedRequired = await Promise.all(
-    requiredRules.map(rule => resolveRule(db, rule).then(ids => {
-      logger.debug('pl_engine', `required rule [${rule.term}:${rule.value}] resolved ${ids.length} tracks`);
-      return { rule, ids };
-    }))
-  );
-
-  // Group by term — union within group, intersect across groups
-  const termGroups = new Map();
-  for (const { rule, ids } of resolvedRequired) {
-    if (!termGroups.has(rule.term)) termGroups.set(rule.term, new Set());
-    ids.forEach(id => termGroups.get(rule.term).add(id));
-  }
-  logger.debug('pl_engine', `term groups: ${[...termGroups.entries()].map(([t, s]) => `${t}:${s.size}`).join(', ')}`);
-
-  // Intersect across term groups — build sets once, not per-candidate
-  const termArrays = [...termGroups.values()].map(s => [...s]);
-  let merged;
-  if (termArrays.length === 0) {
-    merged = [];
-  } else if (termArrays.length === 1) {
-    merged = termArrays[0];
-  } else {
-    const otherSets = termArrays.slice(1).map(arr => new Set(arr));
-    merged = termArrays[0].filter(id => otherSets.every(s => s.has(id)));
-  }
-  logger.debug('pl_engine', `intersect result: ${merged.length} tracks from ${termGroups.size} term group(s)`);
-
-  if (!merged.length) {
-    logger.info('pl_engine', 'no tracks matched required rules');
-    return [];
+    const o = block.rule.options || {};
+    const seedShare = canonicalTerm(block.rule.term) === 'artist' && o.similar ? o.seed_share : undefined;
+    const seedArtistIds = seedShare === undefined ? [] : db.prepare(
+      'SELECT DISTINCT artist_id FROM tracks WHERE LOWER(artist) = LOWER(?)'
+    ).all(block.rule.value).map(r => r.artist_id);
+    const order = ids => orderByArtist(db, ids, { seedArtistIds, seedShare });
+    lists.push(await orderBlock(db, block, config, pool, order));
+    logger.debug('pl_engine', `block ${i + 1} [${block.rule.term}:${block.rule.value}] → ${lists[i].length} tracks`);
   }
 
-  // Score candidates against preferred rules
-  let scored;
-  if (preferredRules.length) {
-    const resolvedPreferred = await Promise.all(
-      preferredRules.map(rule => resolveRule(db, rule).then(ids => {
-        logger.debug('pl_engine', `preferred rule [${rule.term}:${rule.value}] resolved ${ids.length} tracks`);
-        return { rule, ids: new Set(ids) };
-      }))
-    );
-    const scoreMap = new Map();
-    for (const { rule, ids } of resolvedPreferred) {
-      const weight = rule.weight || 1;
-      for (const id of ids) {
-        scoreMap.set(id, (scoreMap.get(id) || 0) + weight);
-      }
-    }
-    // Sort by score descending, shuffle within equal-score tiers
-    const buckets = new Map();
-    for (const id of merged) {
-      const score = scoreMap.get(id) || 0;
-      if (!buckets.has(score)) buckets.set(score, []);
-      buckets.get(score).push(id);
-    }
-    if (shuffle) buckets.forEach(bucket => fisherYates(bucket));
-    scored = [...buckets.keys()].sort((a, b) => b - a).flatMap(s => buckets.get(s));
-  } else {
-    scored = merged;
-    if (shuffle) fisherYates(scored);
-  }
-
-  // Apply per-artist cap if set
-  const capped = maxPerArtist ? capPerArtist(db, scored, maxPerArtist) : scored;
-
-  // Apply disliked exclusion — remove any track the user has marked as disliked
-  const dislikedSet = new Set(
-    db.prepare('SELECT DISTINCT track_id FROM loved_tracks WHERE score = -1').all().map(r => r.track_id)
-  );
-  const filtered = dislikedSet.size > 0 ? capped.filter(id => !dislikedSet.has(id)) : capped;
-  if (dislikedSet.size > 0) logger.info('pl_engine', `excluded ${capped.length - filtered.length} disliked tracks`);
-
-  // App-wide live exclusion — studio preference for generated playlists.
-  const studioOnly = await filterStudioPool(db, filtered);
-  const liveRemoved = filtered.length - studioOnly.length;
-  if (liveRemoved > 0) logger.info('pl_engine', `excluded ${liveRemoved} live tracks`);
-  else                 logger.debug('pl_engine', 'live check: no live tracks to exclude');
-
-  logger.info('pl_engine', `generated ${studioOnly.length} tracks — ${requiredRules.length} required rule(s), ${preferredRules.length} preferred rule(s)`);
-  logger.debug('pl_engine', `limit: ${limit}, shuffle: ${shuffle}, maxPerArtist: ${maxPerArtist}, disliked excluded: ${capped.length - filtered.length}`);
-  return studioOnly.slice(0, limit);
+  // A single block's share is ignored — it is the whole playlist.
+  const shares = config.blocks.length > 1 ? config.blocks.map(b => b.share) : [undefined];
+  const ids = combineBlocks(lists, shares, limit);
+  if (!ids.length) logger.info('pl_engine', 'no tracks matched any block');
+  logger.info('pl_engine', `generated ${ids.length} tracks from ${config.blocks.length} block(s), ${config.conditions.length} shared condition(s)`);
+  return ids;
 }
 
 /**
- * Preview: resolve each rule and return per-rule metadata without full merging.
- * Useful for the UI to show "this rule would match N tracks" before committing.
+ * Preview: each block's pool size + a sample, without combining. Lets the rule
+ * builder show "this block matches N tracks" while editing.
  */
-async function previewRules(db, rules) {
-  const validation = validateRules(rules);
-  if (!validation.ok) return rules.rules.map((r, i) => ({ rule: r, ok: false, error: validation.errors.filter(e => e.startsWith(`rule[${i}]`)).join(', ') }));
+async function previewRules(db, config) {
+  config = normalizeRules(config);
+  const validation = validateRules(config, { checkShares: false });
+  if (!validation.ok) return { ok: false, errors: validation.errors };
+  const blocks = [];
+  for (const block of config.blocks) {
+    let ids = await resolveBlock(db, block, config.conditions);
+    // Splits never use tiers at 0%, so those tracks don't count.
+    const versions = block.versions ?? config.versions;
+    const popular  = block.popularity ?? config.popularity;
+    const byPop    = list => popular ? mixByPopularity(db, list, mixWeights(popular, 'popularity')) : list;
+    if (versions && mixWeights(versions, 'versions').live > 0) ids = mixVersions(db, splitVersions(db, ids), mixWeights(versions, 'versions'), byPop);
+    else ids = byPop(ids);
+    blocks.push({ count: ids.length, sample: ids.slice(0, 5) });
+  }
+  return { ok: true, blocks };
+}
 
-  return Promise.all(
-    rules.rules.map(async rule => {
-      const ids = await resolveRule(db, rule);
-      return {
-        rule,
-        count:  ids.length,
-        sample: ids.slice(0, 5)
-      };
-    })
-  );
+/**
+ * A block's pool, cleaned and in playlist order. Splits apply when set (a
+ * block's own wins over the playlist's): Studio / Live first, so its ratio is
+ * exact, then Popularity within each side. Without a Studio / Live split that
+ * takes live, the pool is studio only, as always.
+ */
+async function orderBlock(db, block, config, pool, order) {
+  const popular  = block.popularity ?? config.popularity;
+  const byPop    = ids => popular ? mixByPopularity(db, ids, mixWeights(popular, 'popularity'), order) : order(ids);
+  const versions = block.versions ?? config.versions;
+  const vw       = versions && mixWeights(versions, 'versions');
+  if (vw && vw.live > 0) return mixVersions(db, splitVersions(db, pool, 'pl_engine'), vw, byPop);
+  return byPop(await cleanPool(db, pool, 'pl_engine'));
 }
 
 // ── Term resolvers ────────────────────────────────────────────────────────────
@@ -204,7 +210,7 @@ async function previewRules(db, rules) {
  * stats — local play history and track metadata
  * values: top_played | recently_played | unplayed | starred | highly_rated
  */
-function resolveStats(db, rule, mode) {
+function resolveStats(db, rule) {
   const opts   = rule.options || {};
   const value  = rule.value;
 
@@ -222,7 +228,7 @@ function resolveStats(db, rule, mode) {
           GROUP BY track_id
           ORDER BY plays DESC
         `).all(cutoff);
-        return modeSlice(rows.map(r => r.id), mode);
+        return rows.map(r => r.id);
       } else if (source === 'navidrome') {
         // Default: Navidrome all-time play_count
         const rows = db.prepare(`
@@ -230,7 +236,7 @@ function resolveStats(db, rule, mode) {
           WHERE play_count > 0
           ORDER BY play_count DESC
         `).all();
-        return modeSlice(rows.map(r => r.id), mode);
+        return rows.map(r => r.id);
       } else {
         // External source (lastfm | listenbrainz | maloja): read synced rankings
         // from user_top_tracks for the selected period, ordered by rank.
@@ -240,7 +246,7 @@ function resolveStats(db, rule, mode) {
           WHERE source = ? AND period = ?
           ORDER BY rank ASC
         `).all(source, period);
-        return modeSlice(rows.map(r => r.id), mode);
+        return rows.map(r => r.id);
       }
     }
 
@@ -252,7 +258,7 @@ function resolveStats(db, rule, mode) {
         WHERE played_at >= ?
         ORDER BY played_at DESC
       `).all(cutoff);
-      return modeSlice(rows.map(r => r.track_id), mode);
+      return rows.map(r => r.track_id);
     }
 
     case 'not_recently_played': {
@@ -304,14 +310,14 @@ function resolveStats(db, rule, mode) {
         WHERE artist_id IN (${placeholders})
         ORDER BY play_count DESC
       `).all(...artistIds);
-      return modeSlice(rows.map(r => r.id), mode);
+      return rows.map(r => r.id);
     }
 
     case 'unplayed': {
       const rows = db.prepare(`
         SELECT id FROM tracks WHERE play_count = 0 OR play_count IS NULL
       `).all();
-      return rows.map(r => r.id); // unranked — mode has no effect
+      return rows.map(r => r.id);
     }
 
     case 'starred': {
@@ -328,7 +334,7 @@ function resolveStats(db, rule, mode) {
         WHERE user_rating >= ?
         ORDER BY user_rating DESC
       `).all(minRating);
-      return modeSlice(rows.map(r => r.id), mode);
+      return rows.map(r => r.id);
     }
 
     default:
@@ -341,7 +347,7 @@ function resolveStats(db, rule, mode) {
  * decade — filter by tracks.year
  * value: "1990s" | "1990" | "90s" — also accepts array for multiple decades (OR'd)
  */
-function resolveDecade(db, rule, _mode) {
+function resolveDecade(db, rule) {
   const values  = Array.isArray(rule.value) ? rule.value : [rule.value];
   const results = new Set();
   for (const val of values) {
@@ -358,76 +364,56 @@ function resolveDecade(db, rule, _mode) {
 }
 
 /**
- * tag — genre/style matching
- * Phase 1: local tracks.genre only (easy mode)
- * Phase 3: artist_tags table for medium/hard
+ * genre — matches the track's own genre tag. Tracks with no genre tag
+ * fall back to their artist's tags (artist_tags: Last.fm + MusicBrainz), so
+ * untagged files still match without pulling in an artist's off-genre songs.
+ * options.match: 'and' (default) | 'or'.
  */
-function resolveTag(db, rule, mode) {
-  const tags    = Array.isArray(rule.value) ? rule.value : [rule.value];
+function resolveGenre(db, rule) {
+  const tags    = (Array.isArray(rule.value) ? rule.value : [rule.value]).map(t => String(t).toLowerCase());
   const match   = rule.options?.match || 'and';
+  const ph      = tags.map(() => '?').join(', ');
   const results = new Set();
 
-  if (mode === 'easy') {
-    // Local genre field only
-    if (match === 'or') {
-      const lowerTags    = tags.map(t => t.toLowerCase());
-      const placeholders = lowerTags.map(() => '?').join(', ');
-      const rows = db.prepare(`
-        SELECT id FROM tracks WHERE LOWER(genre) IN (${placeholders})
-      `).all(...lowerTags);
-      rows.forEach(r => results.add(r.id));
-    } else {
-      // AND: track genre must match all tags — since tracks have one genre field,
-      // AND with multiple tags on a single-value field only works for one tag.
-      // For Phase 3 (artist_tags), proper AND across multi-tag rows will be implemented.
-      const rows = db.prepare(`
-        SELECT id FROM tracks WHERE LOWER(genre) = LOWER(?)
-      `).all(tags[0]);
-      rows.forEach(r => results.add(r.id));
-      // Additional tags beyond first silently ignored in easy mode (single genre field)
-    }
-  } else {
-    // medium / hard — query artist_tags table (Phase 3)
-    // Tags are stored lowercase in artist_tags at sync time.
-    const lowerTags = tags.map(t => t.toLowerCase());
+  // 1. Track genre. The field holds a single genre, so AND with several tags can
+  //    only test the first one here; the artist-tag fallback applies AND fully.
+  const trackRows = match === 'or'
+    ? db.prepare(`SELECT id FROM tracks WHERE LOWER(genre) IN (${ph})`).all(...tags)
+    : db.prepare('SELECT id FROM tracks WHERE LOWER(genre) = ?').all(tags[0]);
+  trackRows.forEach(r => results.add(r.id));
 
-    if (match === 'or') {
-      const placeholders = lowerTags.map(() => '?').join(', ');
-      const rows = db.prepare(`
+  // 2. Tracks without a genre tag: match on their artist's tags.
+  const untagged   = "(t.genre IS NULL OR TRIM(t.genre) = '')";
+  const artistRows = match === 'or'
+    ? db.prepare(`
         SELECT DISTINCT t.id FROM tracks t
         JOIN artist_tags atags ON atags.artist_id = t.artist_id
-        WHERE atags.tag IN (${placeholders})
-          AND atags.tag != '__none__'
-        ORDER BY atags.weight DESC
-      `).all(...lowerTags);
-      rows.forEach(r => results.add(r.id));
-    } else {
-      // AND: artist must have ALL specified tags
-      const placeholders = lowerTags.map(() => '?').join(', ');
-      const rows = db.prepare(`
-        SELECT DISTINCT t.id FROM tracks t
+        WHERE ${untagged} AND atags.tag IN (${ph})
+      `).all(...tags)
+    : db.prepare(`
+        SELECT t.id FROM tracks t
         JOIN artist_tags atags ON atags.artist_id = t.artist_id
-        WHERE atags.tag IN (${placeholders})
-          AND atags.tag != '__none__'
+        WHERE ${untagged} AND atags.tag IN (${ph})
         GROUP BY t.id
         HAVING COUNT(DISTINCT atags.tag) >= ?
-        ORDER BY MAX(atags.weight) DESC
-      `).all(...lowerTags, lowerTags.length);
-      rows.forEach(r => results.add(r.id));
-    }
-  }
+      `).all(...tags, tags.length);
+  artistRows.forEach(r => results.add(r.id));
 
   return [...results];
 }
 
 /**
- * artist — tracks by artist + similar artists
- * Phase 1: nosim only (local tracks table)
- * Phase 2: similar artists via artist_similar cache table
+ * artist — tracks by the named artist. With options.similar (close | medium |
+ * wide) the rule also takes that artist's 5 / 15 / 40 most similar artists that
+ * are in the library — the "radio" option — from options.similar_source
+ * (listenbrainz | lastfm; default ListenBrainz, which falls back to Last.fm
+ * when it has nothing and a key is set). Without it the rule is strict to the
+ * named artist. Similar artists are fetched once per artist and source, then
+ * cached (lib/similar.js).
  */
-async function resolveArtist(db, rule, mode) {
+async function resolveArtist(db, rule) {
   const name   = rule.value;
-  const nosim  = rule.options?.nosim || false;
+  const depth  = SIMILAR_DEPTHS[rule.options?.similar];
 
   // Find artist_id(s) matching the name
   const artistRows = db.prepare(`
@@ -443,17 +429,13 @@ async function resolveArtist(db, rule, mode) {
 
   const artistIds = new Set(artistRows.map(r => r.artist_id));
 
-  if (!nosim) {
-    // Phase 2: expand with similar artists from artist_similar table.
-    // Table always exists (defined in schema); empty until Phase 2 sync runs.
-    for (const artistId of [...artistIds]) {
-      const similar = db.prepare(`
-        SELECT similar_artist_id FROM artist_similar
-        WHERE artist_id = ? AND similar_artist_id IS NOT NULL
-        ORDER BY score DESC
-      `).all(artistId);
-      const sliced = modeSlice(similar.map(r => r.similar_artist_id), mode);
-      sliced.forEach(id => artistIds.add(id));
+  if (depth !== undefined) {
+    const seeds  = [...artistIds];
+    for (const artistId of seeds) {
+      const similar = await similarForArtist(db, artistId, name, rule.options?.similar_source);
+      const owned = [...new Set(similar.map(r => r.artistId))]
+        .filter(id => !seeds.includes(id));
+      owned.slice(0, depth).forEach(id => artistIds.add(id));
     }
   }
 
@@ -471,7 +453,7 @@ async function resolveArtist(db, rule, mode) {
  * mood — MusicBrainz mood tags
  * Phase 3: requires artist_tags table
  */
-function resolveMood(db, rule, _mode) {
+function resolveMood(db, rule) {
   // artist_tags table always exists (defined in schema); empty until Phase 3 sync runs.
   const mood = rule.value.toLowerCase();
   const rows = db.prepare(`
@@ -486,51 +468,8 @@ function resolveMood(db, rule, _mode) {
   return rows.map(r => r.id);
 }
 
-// ── Mode slicing ──────────────────────────────────────────────────────────────
+// ── Shuffle ───────────────────────────────────────────────────────────────────
 
-/**
- * Slice a ranked array into easy / medium / hard thirds.
- * easy   → top third
- * medium → middle third
- * hard   → bottom third
- */
-function modeSlice(ids, mode) {
-  if (!ids.length) return [];
-  const third = Math.ceil(ids.length / 3);
-  switch (mode) {
-    case 'easy':   return ids.slice(0, third);
-    case 'medium': return ids.slice(third, third * 2);
-    case 'hard':   return ids.slice(third * 2);
-    default:       return ids.slice(0, third);
-  }
-}
-
-// ── Per-artist cap ───────────────────────────────────────────────────────────
-
-/**
- * Cap the number of tracks per artist.
- * Looks up artist_id for each track ID and enforces the cap.
- * Prepared statement is created once outside the loop for performance.
- */
-function capPerArtist(db, ids, max) {
-  const counts    = new Map();
-  const getArtist = db.prepare('SELECT artist_id FROM tracks WHERE id = ?');
-  return ids.filter(id => {
-    const row      = getArtist.get(id);
-    const artistId = row?.artist_id || id;
-    const count    = counts.get(artistId) || 0;
-    if (count >= max) return false;
-    counts.set(artistId, count + 1);
-    return true;
-  });
-}
-
-// ── Interleaving ──────────────────────────────────────────────────────────────
-
-/**
- * Round-robin interleave pools by weight, deduplicate on the fly.
- * Each pool contributes in proportion to its weight.
- */
 function fisherYates(arr) {
   for (let i = arr.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
@@ -568,49 +507,6 @@ function windowToCutoff(window) {
   }
 }
 
-// ── Radio resolution ─────────────────────────────────────────────────────────
-
-/**
- * resolveRadio — build a track pool from artist_similar cache for a given set of seed artist_ids.
- * Used for radio playlist regeneration (data was already seeded at creation time).
- * config: { artistIds: string[], depth: number, includeSeed: bool }
- */
-async function resolveRadio(db, config) {
-  const { artistIds, depth = 0.25, includeSeed = true } = config;
-  if (!artistIds?.length) return [];
-
-  const allArtistIds = new Set();
-  if (includeSeed) artistIds.forEach(id => allArtistIds.add(id));
-
-  for (const artistId of artistIds) {
-    const similar = db.prepare(`
-      SELECT similar_artist_id FROM artist_similar
-      WHERE artist_id = ?
-        AND similar_artist_id IS NOT NULL
-        AND score >= ?
-        AND similar_name != '__none__'
-      ORDER BY score DESC
-    `).all(artistId, depth);
-    similar.forEach(r => allArtistIds.add(r.similar_artist_id));
-  }
-
-  if (!allArtistIds.size) return [];
-
-  const placeholders = [...allArtistIds].map(() => '?').join(', ');
-  const rows = db.prepare(`
-    SELECT id FROM tracks
-    WHERE artist_id IN (${placeholders})
-    ORDER BY play_count DESC
-  `).all(...allArtistIds);
-
-  const radioIds    = rows.map(r => r.id);
-  const studioIds   = await filterStudioPool(db, radioIds);
-  const liveRemoved = radioIds.length - studioIds.length;
-  if (liveRemoved > 0) logger.info('pl_engine', `radio: excluded ${liveRemoved} live tracks`);
-  else                 logger.debug('pl_engine', 'radio: live check: no live tracks to exclude');
-  return studioIds;
-}
-
 // ── Exports ───────────────────────────────────────────────────────────────────
 
-module.exports = { generatePlaylist, resolveRule, validateRules, previewRules, resolveRadio, fisherYates };
+module.exports = { generatePlaylist, resolveRule, validateRules, previewRules };

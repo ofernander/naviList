@@ -43,6 +43,7 @@ app.use('/settings', require('./lib/settings'));
 app.use('/nsp', require('./lib/nsp'));
 const syncModule = require('./lib/sync');
 app.use('/sync', syncModule.router);
+app.use('/sync', require('./lib/external_playlists'));   // LB / Last.fm playlist routes
 syncModule.startAutoRefresh();
 app.use('/status', require('./lib/status'));
 app.use('/logs',   require('./lib/logs'));

@@ -407,7 +407,6 @@ select:focus {
 
 .pl-badge-navilist,
 .pl-badge-nsp,
-.pl-badge-radio,
 .pl-badge-manual,
 .pl-badge-lastfm,
 .pl-badge-listenbrainz,
@@ -569,6 +568,12 @@ select:focus {
 
 .pl-type-title { font-size: 0.88rem; font-weight: 600; color: var(--text); margin-bottom: 0.25rem; }
 .pl-type-desc  { font-size: 0.74rem; color: var(--text-faint); line-height: 1.35; }
+
+/* New-playlist picker: naviList is the main way to build a playlist, so it spans
+   the top as the hero, centred; the other types sit underneath. */
+.pl-type-option.pl-type-hero { grid-column: 1 / -1; height: auto; padding: 1.25rem 1.35rem; align-items: center; text-align: center; }
+.pl-type-hero .pl-type-title { font-size: 1.05rem; margin-bottom: 0.35rem; }
+.pl-type-hero .pl-type-desc  { font-size: 0.82rem; color: var(--text-muted); }
 
 .modal input[type="text"] {
   width: 100%;
@@ -997,6 +1002,82 @@ select:focus {
 }
 .rb-rule-remove:hover { color: var(--danger); background: var(--danger-tint); }
 
+/* ── Rule builder blocks ─────────────────────────────────────────────────── */
+.rb-section-hint { font-size: 0.8rem; color: var(--text-dim); margin: -0.25rem 0 0.6rem; }
+
+.rb-blocks { display: flex; flex-direction: column; gap: 0.75rem; margin-bottom: 0.75rem; }
+
+.rb-block {
+  border: 0.5px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--surface-2);
+  padding: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+/* Block start: rule type | value | share | count | remove */
+.rb-rule.rb-block-head { grid-template-columns: 130px 1fr 125px auto 2rem; }
+
+/* Similar options under an Artist block */
+.rb-block-opts {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem;
+  padding: 0 0.75rem 0 calc(130px + 1.25rem);
+}
+.rb-block-opts select,
+.rb-block-opts input[type="number"] {
+  padding: 0.3rem 0.45rem;
+  background: var(--surface);
+  border: 0.5px solid var(--border);
+  border-radius: 5px;
+  font-size: 0.82rem;
+  color: var(--text);
+}
+.rb-block-opts select { width: 150px; }
+
+/* Conditions: indented under the block start */
+.rb-block-conds { display: flex; flex-direction: column; gap: 0.4rem; margin-left: 1.25rem; }
+/* joiner | type | is / is not (or a special row's verb) | value | ✕ — reads as a sentence */
+.rb-rule.rb-cond { grid-template-columns: 1.6rem 130px 90px 1fr 2rem; padding: 0.45rem 0.75rem; }
+.rb-cond-joiner { font-size: 0.75rem; color: var(--text-dim); text-align: right; }
+/* An "or" row sits tight against the row it pairs with, so a group reads as one unit */
+.rb-rule.rb-cond.is-or { margin-top: -0.3rem; }
+.rb-rules-list > .rb-rule.rb-cond.is-or { margin-top: -0.45rem; }
+
+.rb-inline-field {
+  display: flex; flex-direction: row; align-items: center; gap: 0.3rem;
+  margin: 0;   /* the global label style stacks + spaces fields */
+  font-size: 0.78rem; color: var(--text-dim); white-space: nowrap;
+}
+.rb-rule .rb-inline-field input[type="number"],
+.rb-block-opts .rb-inline-field input[type="number"] { width: 64px; flex-shrink: 0; }
+
+/* Special condition rows (Popularity, Studio / Live, Similar Artist): fields in the value column */
+.rb-mix-fields { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem 0.75rem; min-width: 0; }
+.rb-rule .rb-mix-fields input[type="number"] { width: 58px; flex-shrink: 0; }
+.rb-rule .rb-mix-fields select { width: auto; }
+.rb-mix-status { flex-basis: 100%; font-size: 0.75rem; color: var(--text-dim); }
+.rb-mix-status.is-bad { color: var(--danger); }
+.rb-mix-use { font-size: 0.8rem; color: var(--text-dim); text-align: center; }
+
+.rb-add-cond {
+  align-self: flex-start;
+  margin-left: 1.25rem;
+  background: none; border: none; cursor: pointer;
+  appearance: none; -webkit-appearance: none;
+  font-size: 0.8rem; color: var(--accent);
+  padding: 0.15rem 0.25rem;
+}
+.rb-add-cond:hover { text-decoration: underline; }
+
+@media (max-width: 640px) {
+  .rb-rule.rb-block-head { grid-template-columns: 1fr 1fr; }
+  .rb-rule.rb-cond       { grid-template-columns: 1fr 1fr; }
+  .rb-block-opts         { padding-left: 0.75rem; }
+  .rb-cond-joiner:empty  { display: none; }
+}
+
 .rb-preview-count {
   font-size: 0.72rem;
   color: var(--text-dimmer);
@@ -1021,6 +1102,7 @@ select:focus {
   justify-content: center;
 }
 .rb-add-rule:hover { background: var(--accent-tint); }
+select.rb-add-rule { appearance: none; -webkit-appearance: none; text-align: center; text-align-last: center; }
 
 .rb-actions {
   display: flex;
@@ -1232,9 +1314,6 @@ select:focus {
   background: var(--surface);
 }
 
-.pl-list-row.is-inactive { opacity: 0.45; }
-.pl-list-row.is-inactive .pl-list-row-name { color: var(--text-faint); }
-
 /* ── Playlist list column header + multi-select ─────────────────────────── */
 .pl-list-col-header {
   display: grid;
@@ -1405,67 +1484,6 @@ select:focus {
 .log-warn  { color: var(--warning-text); }
 .log-error { color: var(--danger); }
 
-/* ── Radio builder ─────────────────────────────────────────────── */
-
-.radio-seeds {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.4rem;
-  margin-bottom: 0.5rem;
-  min-height: 2rem;
-}
-
-.radio-seed-chip {
-  display: flex;
-  align-items: center;
-  gap: 0.3rem;
-  padding: 0.25rem 0.6rem;
-  background: var(--accent-tint);
-  border: 0.5px solid var(--accent-tint-border);
-  border-radius: 20px;
-  font-size: 0.82rem;
-  color: var(--accent-hover);
-}
-
-.radio-seed-chip button {
-  background: none;
-  border: none;
-  cursor: pointer;
-  color: var(--accent-hover);
-  font-size: 0.9rem;
-  line-height: 1;
-  padding: 0;
-  opacity: 0.6;
-}
-.radio-seed-chip button:hover { opacity: 1; }
-
-.radio-seed-input-row {
-  display: flex;
-  gap: 0.5rem;
-  align-items: center;
-}
-
-.radio-seed-input-row input { flex: 1; }
-
-.radio-depth-options {
-  display: flex;
-  gap: 0.75rem;
-  flex-wrap: wrap;
-}
-
-.radio-depth-option {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  cursor: pointer;
-  font-size: 0.875rem;
-}
-
-.radio-depth-option input[type="radio"] {
-  accent-color: var(--accent);
-  cursor: pointer;
-}
-
 /* ── Preview track panel ─────────────────────────────────── */
 .rb-preview-tracks {
   background: var(--surface);
@@ -1509,12 +1527,19 @@ select:focus {
   padding: 1.5rem 1rem;
   font-size: 0.78rem;
   color: var(--text-dimmer);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 1rem;
-  border-top: 0.5px solid var(--border-subtle);
   margin-top: 2rem;
 }
 .app-footer a { color: var(--text-dimmer); text-decoration: none; }
 .app-footer a:hover { color: var(--accent); }
+.app-footer-icon { width: 0.95em; height: 0.95em; vertical-align: -0.15em; }
+
+/* Auto-refresh picker */
+.rb-refresh { display: flex; flex-direction: column; gap: 0.5rem; }
+.rb-refresh-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.6rem; font-size: 0.85rem; color: var(--text-dim); }
+.rb-refresh-part[hidden] { display: none; }
+.rb-refresh-part { display: inline-flex; align-items: center; gap: 0.4rem; }
+.rb-refresh input[type="time"] { padding: 0.45rem 0.6rem; background: var(--surface-2); border: 0.5px solid var(--border); border-radius: 6px; color: var(--text); font-size: 0.9rem; color-scheme: dark light; }
+.rb-refresh input[type="time"]:focus { outline: none; border-color: var(--accent); }
+input#rbRefreshCron { width: 160px; font-family: monospace; }
+.rb-refresh-summary { font-size: 0.78rem; color: var(--text-dim); }
+.rb-refresh-summary.is-bad { color: var(--danger); }
