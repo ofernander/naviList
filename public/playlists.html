@@ -100,7 +100,6 @@
         <option value="navilist">naviList</option>
         <option value="listenbrainz">ListenBrainz</option>
         <option value="manual">Manual</option>
-        <option value="deactivated">Deactivated</option>
         <option value="exportify">Exportify</option>
       </select>
       <div class="pl-view-toggle">
@@ -123,8 +122,6 @@
     </div>
     <div id="plSelectionBar" style="display:none" class="pl-selection-bar-multi">
       <span id="selCount" class="pl-sel-count"></span>
-      <button class="btn btn-secondary btn-sm" id="selActivateBtn">Activate</button>
-      <button class="btn btn-secondary btn-sm" id="selDeactivateBtn">Deactivate</button>
       <button class="btn btn-danger btn-sm" id="selDeleteBtn">Delete</button>
       <button class="btn btn-secondary btn-sm" id="selClearBtn">Clear</button>
     </div>
@@ -173,7 +170,7 @@
     <div class="rb-section">
       <div class="rb-section-label">Global Conditions</div>
       <div class="rb-rules-list" id="rbSharedConditions"></div>
-      <button class="rb-add-rule" id="rbAddShared">+ Add condition</button>
+      <div id="rbAddShared"></div>
     </div>
 
     <div class="rb-section">
@@ -186,17 +183,27 @@
     <div class="rb-section" style="margin-top:1rem;">
       <div class="rb-section-label">Auto-refresh</div>
       <div class="rb-globals">
-        <div class="rb-global-field" style="flex-direction:column; align-items:flex-start; gap:0.4rem;">
-          <label for="rbRefreshCron">Cron schedule</label>
-          <input type="text" id="rbRefreshCron" placeholder="e.g. 0 6 * * *" style="width:160px; font-family:monospace;" />
-          <div style="font-size:0.78rem; color:#aaa; line-height:1.7;">
-            <code>* * * * *</code> every minute &nbsp;·&nbsp;
-            <code>0 * * * *</code> hourly &nbsp;·&nbsp;
-            <code>0 6 * * *</code> daily 6am &nbsp;·&nbsp;
-            <code>0 6 * * 1</code> Mon 6am &nbsp;·&nbsp;
-            <code>0 6 1 * *</code> 1st of month &nbsp;·&nbsp;
-            leave blank to disable
+        <div class="rb-refresh">
+          <div class="rb-refresh-row">
+            <select id="rbRefreshFreq" aria-label="Refresh frequency">
+              <option value="off">Don't refresh</option>
+              <option value="hourly">Every hour</option>
+              <option value="daily">Every day</option>
+              <option value="weekly">Every week</option>
+              <option value="monthly">Every month</option>
+              <option value="custom">Custom (cron)</option>
+            </select>
+            <span class="rb-refresh-part" data-for="hourly">at minute
+              <select id="rbRefreshMinute" aria-label="Minute"></select></span>
+            <span class="rb-refresh-part" data-for="weekly">on
+              <select id="rbRefreshWeekday" aria-label="Day of the week"></select></span>
+            <span class="rb-refresh-part" data-for="monthly">on day
+              <select id="rbRefreshMonthday" aria-label="Day of the month"></select></span>
+            <span class="rb-refresh-part" data-for="daily weekly monthly">at
+              <input type="time" id="rbRefreshTime" value="06:00" aria-label="Time" /></span>
+            <input type="text" id="rbRefreshCron" class="rb-refresh-part" data-for="custom" placeholder="e.g. 0 6 * * *" aria-label="Cron expression" />
           </div>
+          <div class="rb-refresh-summary" id="rbRefreshSummary"></div>
         </div>
       </div>
     </div>
@@ -204,7 +211,6 @@
     <div class="rb-actions">
       <button class="btn btn-secondary" id="rulesCancelBtn">Cancel</button>
       <button class="btn" id="rulesPreviewBtn">Preview →</button>
-      <button class="btn" id="rulesSaveBtn" style="display:none">Save &amp; Generate</button>
       <span class="rb-status" id="rbStatus"></span>
     </div>
 
@@ -491,7 +497,6 @@
     };
     function getPlaylistType(p) { return UI_TYPES[p.type] || 'manual'; }
     function isNspPlaylist(p)   { return p.type === 'nsp'; }
-    function isInactive(p)      { return p.active === 0; }
 
     function badgeClass(type) {
       return 'pl-badge-' + (type || 'manual');
@@ -595,15 +600,7 @@
       const filtered = allPlaylists.filter(p => {
         const matchSearch = !q || p.name.toLowerCase().includes(q);
         const type     = getPlaylistType(p);
-        const inactive = isInactive(p);
-        const matchFilter =
-          (activeFilter === 'deactivated' && inactive) ||
-          (activeFilter === 'all' && !inactive) ||
-          (!inactive && (
-            activeFilter === type ||
-            (activeFilter === 'navilist' && type === 'navilist') ||
-            (activeFilter === 'manual'   && type === 'manual')
-          ));
+        const matchFilter = activeFilter === 'all' || activeFilter === type;
         return matchSearch && matchFilter;
       });
 
@@ -675,7 +672,6 @@
       const row  = document.createElement('div');
       row.className  = 'pl-list-row';
       row.dataset.id = p.id;
-      if (isInactive(p)) row.classList.add('is-inactive');
 
       const header = document.createElement('div');
       header.className = 'pl-list-row-header';
@@ -755,7 +751,7 @@
       if (type === 'navilist') {
         const editBtn = document.createElement('button');
         editBtn.className = 'btn btn-secondary btn-sm'; editBtn.textContent = 'Edit rules';
-        editBtn.addEventListener('click', () => editRules(p));
+        editBtn.addEventListener('click', () => editRules(p, 'detail'));
         actions.appendChild(editBtn);
 
         const regenBtn = document.createElement('button');
@@ -773,18 +769,6 @@
       renameBtn.className = 'btn btn-secondary btn-sm'; renameBtn.textContent = 'Rename';
       renameBtn.addEventListener('click', () => renamePlaylist(p));
       actions.appendChild(renameBtn);
-
-      if (isInactive(p)) {
-        const activateBtn = document.createElement('button');
-        activateBtn.className = 'btn btn-secondary btn-sm'; activateBtn.textContent = '▶ Activate';
-        activateBtn.addEventListener('click', () => activatePlaylist(p, activateBtn));
-        actions.appendChild(activateBtn);
-      } else {
-        const deactivateBtn = document.createElement('button');
-        deactivateBtn.className = 'btn btn-secondary btn-sm'; deactivateBtn.textContent = 'Deactivate';
-        deactivateBtn.addEventListener('click', () => deactivatePlaylist(p, deactivateBtn));
-        actions.appendChild(deactivateBtn);
-      }
 
       const deleteBtn = document.createElement('button');
       deleteBtn.className = 'btn btn-danger btn-sm'; deleteBtn.textContent = 'Delete';
@@ -887,9 +871,6 @@
         { label: 'Open',   action: () => openDetail(p) },
         { label: 'Export', action: () => openExportModal(p) },
         { label: 'Rename', action: () => renamePlaylist(p) },
-        ...(isInactive(p)
-          ? [{ label: '▶ Activate', action: () => activatePlaylist(p, { disabled: false, textContent: '' }) }]
-          : [{ label: 'Deactivate', action: () => deactivatePlaylist(p, { disabled: false, textContent: '' }) }]),
         { label: 'Delete', action: () => deletePlaylist(p), danger: true },
       ];
 
@@ -926,7 +907,7 @@
       if (type === 'navilist') {
         const editBtn = document.createElement('button');
         editBtn.className = 'btn btn-secondary btn-sm'; editBtn.textContent = 'Edit rules';
-        editBtn.addEventListener('click', () => editRules(p));
+        editBtn.addEventListener('click', () => editRules(p, 'list'));
         actions.appendChild(editBtn);
 
         const regenBtn = document.createElement('button');
@@ -1006,20 +987,26 @@
     }
 
     // ── Playlist actions ───────────────────────────────────────────────────
-    function editRules(p) {
-      openRuleBuilder(p.name, 'detail', p.id);
+    // Same builder as creating; `from` ('list' | 'detail') is where Save / Cancel return to.
+    function editRules(p, from) {
+      openRuleBuilder(p.name, from, p.id);
     }
 
-    // Rebuilds from the rules stored on the server.
+    // Rebuilds from the rules stored on the server, in place: the list stays the list,
+    // an open playlist refreshes where it is.
     async function regenerate(id, btn) {
+      const p = allPlaylists.find(pl => pl.id === id);
+      if (!confirm(`Regenerate "${p?.name || 'this playlist'}"?\n\nIt is rebuilt from its rules, so it can add new tracks and replace ones currently on it — including any you added or kept by hand.`)) return;
       if (btn) { btn.disabled = true; btn.textContent = 'Regenerating...'; }
       try {
         const res  = await fetch(`/playlists/${id}/regenerate`, { method: 'POST' });
         const data = await res.json();
         if (data.ok) {
+          const onDetail = document.getElementById('viewDetail').style.display !== 'none';
           await loadPlaylists();
           const updated = allPlaylists.find(pl => pl.id === id);
-          if (updated) openDetail(updated);
+          if (onDetail && updated) openDetail(updated);
+          else if (btn) { btn.disabled = false; btn.textContent = 'Regenerate'; }
         } else {
           alert(`Regenerate failed: ${data.error}`);
           if (btn) { btn.disabled = false; btn.textContent = 'Regenerate'; }
@@ -1041,27 +1028,6 @@
       });
       const data = await res.json();
       if (data.ok) { await loadPlaylists(); showListView(); }
-    }
-
-    async function deactivatePlaylist(p, btn) {
-      if (!confirm(`Remove "${p.name}" from Navidrome? It will stay in naviList and can be reactivated.`)) return;
-      btn.disabled = true; btn.textContent = 'Deactivating...';
-      try {
-        const res  = await fetch(`/playlists/${p.id}/deactivate`, { method: 'POST' });
-        const data = await res.json();
-        if (data.ok) { await loadPlaylists(); }
-        else { btn.disabled = false; btn.textContent = 'Deactivate'; alert(`✗ ${data.error}`); }
-      } catch (e) { btn.disabled = false; btn.textContent = 'Deactivate'; }
-    }
-
-    async function activatePlaylist(p, btn) {
-      btn.disabled = true; btn.textContent = 'Activating...';
-      try {
-        const res  = await fetch(`/playlists/${p.id}/activate`, { method: 'POST' });
-        const data = await res.json();
-        if (data.ok) { await loadPlaylists(); }
-        else { btn.disabled = false; btn.textContent = '▶ Activate'; alert(`✗ ${data.error}`); }
-      } catch (e) { btn.disabled = false; btn.textContent = '▶ Activate'; }
     }
 
     async function doDelete(p) {
@@ -1148,6 +1114,12 @@
     // Open the rule builder: a new playlist starts with one Artist block; an
     // existing one loads its config from the server, already in the current
     // (v2 block) shape whatever format it was saved in.
+    // Leave the builder: back to where an edit was opened from (the list, or the playlist's page).
+    function returnFromBuilder() {
+      if (rbReturnTo === 'detail' && rbEditingPlaylistId) { const p = allPlaylists.find(pl => pl.id === rbEditingPlaylistId); if (p) { openDetail(p); return; } }
+      showListView();
+    }
+
     async function openRuleBuilder(playlistName, returnTo, editingId = null) {
       loadGenres(); loadArtists();
       rbPlaylistName      = playlistName;
@@ -1155,17 +1127,16 @@
       rbMode              = editingId ? 'edit' : 'create';
       rbEditingPlaylistId = editingId || null;
       rbPreviewTracks     = [];
-      rbConfig            = { blocks: [newBlock()], conditions: [] };
+      rbConfig            = { blocks: [newBlock()], conditions: [], versions: { ...MIXES.versions.preset } };   // new playlists start Studio-only, as they always behaved
       document.getElementById('rbLimit').value = 25;
+      setRefreshFromCron('');
 
       document.getElementById('rulesNameInput').value       = playlistName;
       document.getElementById('rbStatus').textContent       = '';
       document.getElementById('rbPreviewPanel').style.display = 'none';
 
-      document.getElementById('rulesPreviewBtn').style.display = rbMode === 'create' ? '' : 'none';
-      document.getElementById('rulesSaveBtn').style.display    = rbMode === 'edit'   ? '' : 'none';
-      document.getElementById('rulesSaveBtn').disabled    = false;
-      document.getElementById('rulesSaveBtn').textContent = 'Save & Generate';
+      const saveBtn = document.getElementById('rbSaveBtn');
+      saveBtn.disabled = false; saveBtn.textContent = 'Save Playlist';
 
       if (editingId) {
         document.getElementById('rbBlocks').innerHTML = '<div class="rb-section-hint">Loading rules…</div>';
@@ -1177,6 +1148,7 @@
             rbConfig = { blocks: d.rules.blocks || [], conditions: d.rules.conditions || [], popularity: d.rules.popularity, versions: d.rules.versions };
             if (!rbConfig.blocks.length) rbConfig.blocks = [newBlock()];
             document.getElementById('rbLimit').value = d.rules.limit ?? 25;
+            setRefreshFromCron(d.refresh_cron);
           }
         } catch (e) {}
         renderBuilder();
@@ -1211,7 +1183,7 @@
     };
 
     function newBlock()     { return { rule: { term: 'artist', value: '', options: {} }, conditions: [] }; }
-    function newCondition() { return { term: 'decade', value: '', options: {}, use: 'require' }; }
+    function newCondition(term) { return { term, value: term === 'stats' ? 'top_played' : '', options: {}, use: 'require' }; }
     const hasValue = v => !(v === undefined || v === null || v === '' || (Array.isArray(v) && !v.length));
 
     // Block shares are strict percentages of the playlist: all blank = even;
@@ -1264,7 +1236,12 @@
 
     function renderBuilder() {
       renderBlocks();
-      renderConditionList(document.getElementById('rbSharedConditions'), rbConfig.conditions, { shared: true, owner: rbConfig });
+      const shared = document.getElementById('rbSharedConditions');
+      const sharedRerender = () => renderConditionList(shared, rbConfig.conditions, { shared: true, owner: rbConfig });
+      sharedRerender();
+      const addShared = document.getElementById('rbAddShared');
+      addShared.innerHTML = '';
+      addShared.appendChild(buildAddCondition(() => rbConfig, () => rbConfig.conditions, sharedRerender, 'rb-add-rule'));
       scheduleRuleCountPreview();
     }
 
@@ -1340,9 +1317,8 @@
       const conds = document.createElement('div');
       conds.className = 'rb-block-conds';
       renderConditionList(conds, block.conditions, { owner: block });
-      const addCond = document.createElement('button');
-      addCond.className = 'rb-add-cond'; addCond.textContent = '+ Add condition';
-      addCond.addEventListener('click', () => { block.conditions.push(newCondition()); renderConditionList(conds, block.conditions, { owner: block }); });
+      const addCond = buildAddCondition(() => block, () => block.conditions,
+        () => renderConditionList(conds, block.conditions, { owner: block }), 'rb-add-cond');
       card.append(conds, addCond);
       return card;
     }
@@ -1423,6 +1399,41 @@
       if (MIXES[key]) { owner[key] = { ...MIXES[key].preset }; return; }
       const o = owner.rule.options || (owner.rule.options = {});
       o.similar = SIMILAR_DEFAULT; o.similar_source = o.similar_source || SIMILAR_DEFAULT_SOURCE;
+    }
+    // "+ Add condition" dropdown: pick the type up front, so no default row to change.
+    // Offers the normal terms plus the specials the owner can still add; options are
+    // refreshed on focus because adding a special removes it from the list.
+    function buildAddCondition(getOwner, getList, rerender, className) {
+      const sel = document.createElement('select');
+      sel.className = className;
+      sel.setAttribute('aria-label', 'Add condition');
+      const fill = () => {
+        const owner = getOwner();
+        const allow = specialsAvailable(owner);
+        sel.innerHTML = '';
+        const ph = document.createElement('option');
+        ph.value = ''; ph.textContent = '+ Add condition'; ph.hidden = true; ph.selected = true;
+        sel.appendChild(ph);
+        Object.entries(TERMS).sort((a, b) => a[1].label.localeCompare(b[1].label)).forEach(([key, def]) => {
+          if (def.conditionOnly && !allow.includes(key)) return;
+          const opt = document.createElement('option');
+          opt.value = key; opt.textContent = def.label;
+          sel.appendChild(opt);
+        });
+      };
+      fill();
+      sel.addEventListener('focus', fill);
+      sel.addEventListener('mousedown', fill);
+      sel.addEventListener('change', () => {
+        const key = sel.value;
+        if (!key) return;
+        if (TERMS[key].conditionOnly) addSpecial(getOwner(), key);
+        else getList().push(newCondition(key));
+        fill();
+        rerender();
+        scheduleRuleCountPreview();
+      });
+      return sel;
     }
     function removeSpecial(owner, key) {
       if (MIXES[key]) { delete owner[key]; return; }
@@ -1740,46 +1751,21 @@
       saveBtn.disabled = true; saveBtn.textContent = 'Saving...';
       try {
         const refreshCron = document.getElementById('rbRefreshCron').value.trim() || null;
-        const res  = await fetch('/playlists/save-navilist', {
+        const editing = rbMode === 'edit';
+        const res  = await fetch(editing ? `/playlists/${rbEditingPlaylistId}/rules` : '/playlists/save-navilist', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: rbPlaylistName, rules: buildRulesPayload(), trackIds: rbPreviewTracks.map(t => t.id), refresh_cron: refreshCron })
+          body: JSON.stringify({ name: rbPlaylistName, rules: buildRulesPayload(), trackIds: rbPreviewTracks.map(t => t.id), refresh_cron: editing ? (refreshCron || '') : refreshCron })
         });
         const data = await res.json();
         if (data.ok) {
           await loadPlaylists();
-          setTimeout(() => { const c = allPlaylists.find(p => p.id === data.playlistId); if (c) openDetail(c); else showListView(); }, 400);
+          if (editing) returnFromBuilder();
+          else setTimeout(() => { const c = allPlaylists.find(p => p.id === data.playlistId); if (c) openDetail(c); else showListView(); }, 400);
         } else {
-          status.textContent = `✗ ${data.error}`; status.className = 'rb-status status-err';
+          status.textContent = `✗ ${data.error || data.errors?.join(', ')}`; status.className = 'rb-status status-err';
           saveBtn.disabled = false; saveBtn.textContent = 'Save Playlist';
         }
       } catch (e) { status.textContent = '✗ Request failed'; status.className = 'rb-status status-err'; saveBtn.disabled = false; saveBtn.textContent = 'Save Playlist'; }
-    });
-
-    document.getElementById('rulesSaveBtn').addEventListener('click', async () => {
-      const rules   = buildRulesPayload();
-      const status  = document.getElementById('rbStatus');
-      const saveBtn = document.getElementById('rulesSaveBtn');
-      if (!rules.blocks.length) { status.textContent = 'Add at least one block'; status.className = 'rb-status status-err'; return; }
-      const shareErr = shareProblem(rules.blocks);
-      if (shareErr)            { status.textContent = shareErr; status.className = 'rb-status status-err'; return; }
-      const popErr = payloadMixProblem(rules);
-      if (popErr)              { status.textContent = popErr; status.className = 'rb-status status-err'; return; }
-      saveBtn.disabled = true; saveBtn.textContent = 'Saving...'; status.textContent = ''; status.className = 'rb-status';
-      try {
-        const res  = await fetch(`/playlists/${rbEditingPlaylistId}/rules`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ rules })
-        });
-        const data = await res.json();
-        if (data.ok) {
-          status.textContent = `✓ ${data.count} tracks`; status.className = 'rb-status status-ok';
-          await loadPlaylists();
-          setTimeout(() => { const u = allPlaylists.find(p => p.id === rbEditingPlaylistId); if (u) openDetail(u); }, 800);
-        } else {
-          status.textContent = `✗ ${data.error || data.errors?.join(', ')}`; status.className = 'rb-status status-err';
-          saveBtn.disabled = false; saveBtn.textContent = 'Save & Generate';
-        }
-      } catch (e) { status.textContent = '✗ Request failed'; status.className = 'rb-status status-err'; saveBtn.disabled = false; saveBtn.textContent = 'Save & Generate'; }
     });
 
     document.getElementById('rbPreviewCancelBtn').addEventListener('click', () => {
@@ -1787,18 +1773,114 @@
     });
 
     document.getElementById('rulesCancelBtn').addEventListener('click', () => {
-      if (rbReturnTo === 'detail' && rbEditingPlaylistId) { const p = allPlaylists.find(pl => pl.id === rbEditingPlaylistId); if (p) { openDetail(p); return; } }
-      showListView();
+      returnFromBuilder();
     });
     document.getElementById('rulesBackBtn').addEventListener('click', () => {
-      if (rbReturnTo === 'detail' && rbEditingPlaylistId) { const p = allPlaylists.find(pl => pl.id === rbEditingPlaylistId); if (p) { openDetail(p); return; } }
-      showListView();
+      returnFromBuilder();
     });
     document.getElementById('rbAddBlock').addEventListener('click', () => { rbConfig.blocks.push(newBlock()); renderBlocks(); });
-    document.getElementById('rbAddShared').addEventListener('click', () => {
-      rbConfig.conditions.push(newCondition());
-      renderConditionList(document.getElementById('rbSharedConditions'), rbConfig.conditions, { shared: true, owner: rbConfig });
-    });
+
+
+    // ── Auto-refresh picker ────────────────────────────────────────────────
+    // #rbRefreshCron holds the actual cron expression (what Save sends). The picker
+    // writes it; Custom lets the user type it. Times are the SERVER's clock.
+    let SERVER_TZ = window.__serverTz || { name: 'server time', offsetMin: -new Date().getTimezoneOffset() };
+    fetch('/playlists/api/server-time').then(r => r.json()).then(d => { if (d.ok) { SERVER_TZ = { name: d.tz, offsetMin: d.offsetMin }; paintRefresh(false); } }).catch(() => {});
+    const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    const pad2 = n => String(n).padStart(2, '0');
+
+    // One cron field → sorted allowed values, or null if invalid. Supports * , - /
+    function cronField(str, min, max) {
+      const out = new Set();
+      for (const part of str.split(',')) {
+        const m = /^(\*|\d+(?:-\d+)?)(?:\/(\d+))?$/.exec(part);
+        if (!m) return null;
+        let lo, hi;
+        if (m[1] === '*') { lo = min; hi = max; }
+        else if (m[1].includes('-')) { [lo, hi] = m[1].split('-').map(Number); }
+        else { lo = Number(m[1]); hi = m[2] ? max : lo; }
+        const step = m[2] ? Number(m[2]) : 1;
+        if (!step || lo < min || hi > max || lo > hi) return null;
+        for (let v = lo; v <= hi; v += step) out.add(v);
+      }
+      return [...out].sort((a, b) => a - b);
+    }
+    function parseCron(expr) {
+      const f = expr.trim().split(/\s+/);
+      if (f.length !== 5) return null;
+      const [mi, ho, dom, mo, dow] = [cronField(f[0], 0, 59), cronField(f[1], 0, 23), cronField(f[2], 1, 31), cronField(f[3], 1, 12), cronField(f[4], 0, 7)];
+      if (!mi || !ho || !dom || !mo || !dow) return null;
+      return { mi, ho, dom, mo, dow: [...new Set(dow.map(d => d % 7))], domAny: f[2] === '*', dowAny: f[4] === '*' };
+    }
+    // Next run on the server's wall clock (DST changes ignored), or null.
+    function nextRun(expr) {
+      const c = parseCron(expr); if (!c) return null;
+      const t = new Date(Date.now() + SERVER_TZ.offsetMin * 60000); t.setUTCSeconds(0, 0);
+      for (let i = 0; i < 366 * 24 * 60; i++) {
+        t.setUTCMinutes(t.getUTCMinutes() + 1);
+        if (!c.mi.includes(t.getUTCMinutes()) || !c.ho.includes(t.getUTCHours()) || !c.mo.includes(t.getUTCMonth() + 1)) continue;
+        const domOk = c.dom.includes(t.getUTCDate()), dowOk = c.dow.includes(t.getUTCDay());
+        if (c.domAny && c.dowAny ? true : c.domAny ? dowOk : c.dowAny ? domOk : (domOk || dowOk)) return new Date(t);
+      }
+      return null;
+    }
+    function fmtNext(d) {
+      return `${WEEKDAYS[d.getUTCDay()].slice(0, 3)} ${d.getUTCDate()} ${d.toLocaleString('en-GB', { month: 'short', timeZone: 'UTC' })}, ${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())}`;
+    }
+
+    // Picker state ⇄ cron expression
+    function refreshPickerToCron() {
+      const g = id => document.getElementById(id).value;
+      const [hh, mm] = (g('rbRefreshTime') || '06:00').split(':').map(Number);
+      switch (g('rbRefreshFreq')) {
+        case 'hourly':  return `${g('rbRefreshMinute')} * * * *`;
+        case 'daily':   return `${mm} ${hh} * * *`;
+        case 'weekly':  return `${mm} ${hh} * * ${g('rbRefreshWeekday')}`;
+        case 'monthly': return `${mm} ${hh} ${g('rbRefreshMonthday')} * *`;
+        case 'custom':  return g('rbRefreshCron').trim();
+        default:        return '';
+      }
+    }
+    function setRefreshFromCron(expr) {
+      expr = (expr || '').trim();
+      const g = id => document.getElementById(id);
+      let m, freq = expr ? 'custom' : 'off';
+      if ((m = /^(\d+) \* \* \* \*$/.exec(expr)) && +m[1] < 60)                                   { freq = 'hourly'; g('rbRefreshMinute').value = m[1]; }
+      else if ((m = /^(\d+) (\d+) \* \* \*$/.exec(expr)) && +m[1] < 60 && +m[2] < 24)             { freq = 'daily'; g('rbRefreshTime').value = `${pad2(m[2])}:${pad2(m[1])}`; }
+      else if ((m = /^(\d+) (\d+) \* \* ([0-6])$/.exec(expr)) && +m[1] < 60 && +m[2] < 24)        { freq = 'weekly'; g('rbRefreshTime').value = `${pad2(m[2])}:${pad2(m[1])}`; g('rbRefreshWeekday').value = m[3]; }
+      else if ((m = /^(\d+) (\d+) (\d+) \* \*$/.exec(expr)) && +m[1] < 60 && +m[2] < 24 && +m[3] >= 1 && +m[3] <= 28) { freq = 'monthly'; g('rbRefreshTime').value = `${pad2(m[2])}:${pad2(m[1])}`; g('rbRefreshMonthday').value = m[3]; }
+      g('rbRefreshFreq').value = freq;
+      g('rbRefreshCron').value = expr;
+      paintRefresh(false);
+    }
+    function paintRefresh(fromPicker = true) {
+      const g = id => document.getElementById(id);
+      const freq = g('rbRefreshFreq').value;
+      document.querySelectorAll('.rb-refresh-part').forEach(el => { el.hidden = !el.dataset.for.split(' ').includes(freq); });
+      if (fromPicker && freq !== 'custom') g('rbRefreshCron').value = refreshPickerToCron();
+      else if (fromPicker) g('rbRefreshCron').value = g('rbRefreshCron').value;   // custom: typed text is the value
+      const expr = freq === 'custom' ? g('rbRefreshCron').value.trim() : refreshPickerToCron();
+      if (freq !== 'custom') g('rbRefreshCron').value = expr;
+      const sum = g('rbRefreshSummary'); sum.classList.remove('is-bad');
+      if (!expr) { sum.textContent = freq === 'custom' ? 'Enter a cron expression, or pick a frequency above.' : 'The playlist is only rebuilt when you regenerate it.'; return; }
+      const next = nextRun(expr);
+      if (!parseCron(expr)) { sum.textContent = 'Not recognised as a cron expression — five fields: minute hour day-of-month month day-of-week.'; sum.classList.add('is-bad'); return; }
+      const [hh, mm] = (g('rbRefreshTime').value || '06:00').split(':').map(Number);
+      const when = { hourly: `Every hour at :${pad2(g('rbRefreshMinute').value)}`, daily: `Every day at ${pad2(hh)}:${pad2(mm)}`,
+        weekly: `Every ${WEEKDAYS[g('rbRefreshWeekday').value]} at ${pad2(hh)}:${pad2(mm)}`,
+        monthly: `On day ${g('rbRefreshMonthday').value} of every month at ${pad2(hh)}:${pad2(mm)}`, custom: `Custom schedule (${expr})` }[freq];
+      sum.textContent = `${when} · next run ${next ? fmtNext(next) : '—'} (${SERVER_TZ.name})`;
+    }
+    (function initRefreshPicker() {
+      const fill = (id, items) => { const s = document.getElementById(id); items.forEach(([v, l]) => s.add(new Option(l, v))); };
+      fill('rbRefreshMinute', [0, 15, 30, 45].map(n => [n, `:${pad2(n)}`]));
+      fill('rbRefreshWeekday', [1, 2, 3, 4, 5, 6, 0].map(d => [d, WEEKDAYS[d]]));
+      fill('rbRefreshMonthday', Array.from({ length: 28 }, (_, i) => [i + 1, String(i + 1)]));
+      document.getElementById('rbRefreshMinute').value = 0; document.getElementById('rbRefreshWeekday').value = 1; document.getElementById('rbRefreshMonthday').value = 1;
+      ['rbRefreshFreq', 'rbRefreshMinute', 'rbRefreshWeekday', 'rbRefreshMonthday', 'rbRefreshTime'].forEach(id => document.getElementById(id).addEventListener('change', () => paintRefresh(true)));
+      document.getElementById('rbRefreshCron').addEventListener('input', () => paintRefresh(true));
+      paintRefresh(false);
+    })();
 
     // ── New playlist modal ─────────────────────────────────────────────────
     document.getElementById('newPlaylistWideBtn').addEventListener('click', () => {
@@ -2040,7 +2122,7 @@
           valueWrap.appendChild(inp); valueWrap.appendChild(lbl);
         } else if (ft === 'playlist') {
           const sel = document.createElement('select'); sel.style.cssText = 'flex:1; min-width:0;';
-          const opts = allPlaylists.filter(p => !isInactive(p) && !isNspPlaylist(p));
+          const opts = allPlaylists.filter(p => !isNspPlaylist(p));
           if (!opts.length) {
             const empty = document.createElement('option'); empty.textContent = 'No playlists available'; empty.disabled = true; sel.appendChild(empty);
           } else {
@@ -2908,15 +2990,6 @@
     });
 
     document.getElementById('selClearBtn').addEventListener('click', () => { selected.clear(); renderCards(); });
-    document.getElementById('selActivateBtn').addEventListener('click', async () => {
-      for (const id of [...selected]) { const p = allPlaylists.find(pl => pl.id === id); if (p && isInactive(p)) await fetch(`/playlists/${id}/activate`, { method: 'POST' }); }
-      selected.clear(); await loadPlaylists();
-    });
-    document.getElementById('selDeactivateBtn').addEventListener('click', async () => {
-      if (!confirm(`Deactivate ${selected.size} playlist(s)?`)) return;
-      for (const id of [...selected]) { const p = allPlaylists.find(pl => pl.id === id); if (p && !isInactive(p)) await fetch(`/playlists/${id}/deactivate`, { method: 'POST' }); }
-      selected.clear(); await loadPlaylists();
-    });
     document.getElementById('selDeleteBtn').addEventListener('click', async () => {
       if (!confirm(`Delete ${selected.size} playlist(s)? This cannot be undone.`)) return;
       for (const id of [...selected]) {
@@ -2938,9 +3011,7 @@
     });
   </script>
   <footer class="app-footer">
-    <span>naviList v<span id="appVersion">…</span></span>
-    <span>-</span>
-    <a href="https://github.com/ofernander/naviList" target="_blank" rel="noopener">GitHub</a>
+    <span>naviList v<span id="appVersion">…</span></span> · <a href="https://github.com/ofernander/naviList" target="_blank" rel="noopener"><svg class="app-footer-icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg> GitHub</a>
   </footer>
   <script>
     fetch('/api/version').then(r => r.json()).then(d => {

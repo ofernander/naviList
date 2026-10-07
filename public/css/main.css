@@ -1065,6 +1065,7 @@ select:focus {
   align-self: flex-start;
   margin-left: 1.25rem;
   background: none; border: none; cursor: pointer;
+  appearance: none; -webkit-appearance: none;
   font-size: 0.8rem; color: var(--accent);
   padding: 0.15rem 0.25rem;
 }
@@ -1101,6 +1102,7 @@ select:focus {
   justify-content: center;
 }
 .rb-add-rule:hover { background: var(--accent-tint); }
+select.rb-add-rule { appearance: none; -webkit-appearance: none; text-align: center; text-align-last: center; }
 
 .rb-actions {
   display: flex;
@@ -1311,9 +1313,6 @@ select:focus {
   overflow: hidden;
   background: var(--surface);
 }
-
-.pl-list-row.is-inactive { opacity: 0.45; }
-.pl-list-row.is-inactive .pl-list-row-name { color: var(--text-faint); }
 
 /* ── Playlist list column header + multi-select ─────────────────────────── */
 .pl-list-col-header {
@@ -1528,12 +1527,19 @@ select:focus {
   padding: 1.5rem 1rem;
   font-size: 0.78rem;
   color: var(--text-dimmer);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 1rem;
-  border-top: 0.5px solid var(--border-subtle);
   margin-top: 2rem;
 }
 .app-footer a { color: var(--text-dimmer); text-decoration: none; }
 .app-footer a:hover { color: var(--accent); }
+.app-footer-icon { width: 0.95em; height: 0.95em; vertical-align: -0.15em; }
+
+/* Auto-refresh picker */
+.rb-refresh { display: flex; flex-direction: column; gap: 0.5rem; }
+.rb-refresh-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.6rem; font-size: 0.85rem; color: var(--text-dim); }
+.rb-refresh-part[hidden] { display: none; }
+.rb-refresh-part { display: inline-flex; align-items: center; gap: 0.4rem; }
+.rb-refresh input[type="time"] { padding: 0.45rem 0.6rem; background: var(--surface-2); border: 0.5px solid var(--border); border-radius: 6px; color: var(--text); font-size: 0.9rem; color-scheme: dark light; }
+.rb-refresh input[type="time"]:focus { outline: none; border-color: var(--accent); }
+input#rbRefreshCron { width: 160px; font-family: monospace; }
+.rb-refresh-summary { font-size: 0.78rem; color: var(--text-dim); }
+.rb-refresh-summary.is-bad { color: var(--danger); }

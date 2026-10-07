@@ -230,9 +230,9 @@ async function syncLfmPlaylists(db, settings) {
 
       // Push to ND for subscribed playlists
       const sub = db.prepare('SELECT * FROM lfm_playlists WHERE lfm_id = ?').get(lfm_id);
-      // Deactivated playlist = paused subscription; activate relinks and resumes it.
+      // A playlist still awaiting restore (refresh.restoreDeactivatedPlaylists) is skipped.
       const paused = sub?.navidrome_id && isPaused.get(sub.navidrome_id);
-      if (paused) logger.debug('sync', `lfm-playlists: "${title}" paused (playlist deactivated) — not pushed`);
+      if (paused) logger.debug('sync', `lfm-playlists: "${title}" waiting to be restored in Navidrome — not pushed`);
       if (sub?.enabled && !paused) {
         const trackIds = ids.filter(Boolean);
         if (trackIds.length) {

@@ -27,9 +27,13 @@ const TYPES = {
 const SCHEDULED_TYPES = new Set([TYPES.NAVILIST]);
 
 const COMMENT_RE = /^navilist:([a-z-]+)(?:\s+(\{[\s\S]*\}))?\s*$/;
+// Rules playlists carry a readable description instead of their config (the
+// registry holds the config); this prefix is what marks one as naviList's.
+const RULES_COMMENT_PREFIX = 'naviList · ';
 
 // Parse a Navidrome comment → { type, config }. Unknown or untagged → { type: null, config: null }.
 function parseComment(comment) {
+  if ((comment || '').startsWith(RULES_COMMENT_PREFIX)) return { type: TYPES.NAVILIST, config: null };
   const m = COMMENT_RE.exec(comment || '');
   if (!m) return { type: null, config: null };
   let config = null;
@@ -39,9 +43,24 @@ function parseComment(comment) {
   return { type: m[1], config };
 }
 
+// One line summarising a rules config, e.g. "naviList · Artist: Zach Bryan + similar · 50 tracks".
+function describeRules(config) {
+  const blocks = (config?.blocks || []).map(b => {
+    const r = b.rule || {};
+    const term = String(r.term || '').replace(/_/g, ' ');
+    const name = term.charAt(0).toUpperCase() + term.slice(1);
+    return `${name}: ${r.value}` + (canonicalTerm(r.term) === 'artist' && r.options?.similar ? ' + similar' : '');
+  });
+  const shown = blocks.slice(0, 3).join(', ') + (blocks.length > 3 ? ` +${blocks.length - 3} more` : '');
+  return [RULES_COMMENT_PREFIX + (shown || 'Rules playlist'), config?.limit ? `${config.limit} tracks` : null]
+    .filter(Boolean).join(' · ');
+}
+
 // Build the Navidrome comment for a type + config. Untyped → null (no comment).
+// Rules playlists get a readable summary; other types keep `navilist:<type> <json>`.
 function buildComment(type, config) {
   if (!type) return null;
+  if (type === TYPES.NAVILIST) return describeRules(config);
   return config ? `navilist:${type} ${JSON.stringify(config)}` : `navilist:${type}`;
 }
 

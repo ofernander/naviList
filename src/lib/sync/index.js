@@ -439,9 +439,11 @@ function startAutoRefresh() {
   }, 30 * 60 * 1000);
 
   // ── 6. On startup: load cron schedules for naviList playlists, and rewrite any
-  //       playlist comment still in an older rules format ──────────────────────
+  //       playlist comment still in an older rules format, and bring back any
+  //       playlist deactivated before that feature was removed ─────────────────
   refresh.loadScheduledPlaylists();
   runDetached('migrate-legacy-comments', () => refresh.migrateLegacyComments());
+  runDetached('restore-deactivated', () => refresh.restoreDeactivatedPlaylists());
 
   logger.info('sync', 'auto-refresh scheduled: library poll every 5m, full sync every 6h, services every 30m, playlist refresh via cron');
 }

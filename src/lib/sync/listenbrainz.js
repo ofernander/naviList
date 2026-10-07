@@ -326,9 +326,9 @@ async function syncLbPlaylists(db, settings) {
 
   for (const sub of subs) {
     try {
-      // Deactivated playlist = paused subscription; activate relinks and resumes it.
+      // A playlist still awaiting restore (refresh.restoreDeactivatedPlaylists) is skipped.
       if (sub.navidrome_id && isPaused.get(sub.navidrome_id)) {
-        logger.debug('sync', `lb-sync: subscription ${sub.lb_mbid} paused (playlist deactivated) — skipping`);
+        logger.debug('sync', `lb-sync: subscription ${sub.lb_mbid} playlist waiting to be restored in Navidrome — skipping`);
         continue;
       }
       let mbid = sub.lb_mbid;

@@ -7,9 +7,9 @@ const navidrome = require('../providers/navidrome');
 const engine    = require('./pl_engine');
 const logger = require('../utils/logger');
 const { writeMissingArtists } = require('./sync/helpers');
-const { publishPlaylist, snapshotPlaylist } = require('./publish');
+const { publishPlaylist }                   = require('./publish');
 const { buildMatcher, FUZZY_MIN_SCORE }     = require('./match');
-const { setRefreshSchedule, cancelPlaylistRefresh, schedulePlaylistRefresh, refreshPlaylist } = require('./refresh');
+const { setRefreshSchedule, cronProblem, cancelPlaylistRefresh, refreshPlaylist } = require('./refresh');
 const { TYPES, parseComment, normalizeRules, currentTypeConfig } = require('./playlist_types');
 const { getSettings }                       = require('../db/settings');
 
@@ -45,14 +45,9 @@ router.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, '..', '..', 'public', 'playlists.html'));
 });
 
-// GET /playlists/api/list — merge active (from ND) with inactive (from local DB) + NSP files
+// GET /playlists/api/list — Navidrome playlists + NSP files
 router.get('/api/list', async (req, res) => {
   const active   = await navidrome.getPlaylists(db);
-  const inactive = db.prepare(`
-    SELECT navidrome_id as id, name, comment, track_count as songCount,
-           duration, 0 as active
-    FROM navilist_playlists WHERE active = 0
-  `).all();
   const createdAt = {};
   db.prepare('SELECT navidrome_id, created_at FROM navilist_playlists').all()
     .forEach(r => { createdAt[r.navidrome_id] = r.created_at; });
@@ -97,7 +92,6 @@ router.get('/api/list', async (req, res) => {
 
   const playlists = [
     ...taggedActive.map(p => enrichPlaylist({ ...p, active: 1, created_at: createdAt[p.id] || ndCreated(p) })),
-    ...inactive.map(enrichPlaylist),
     ...nspPlaylists.map(p => ({ ...p, type: 'nsp' })),
   ];
   res.json({ ok: true, playlists });
@@ -133,32 +127,25 @@ router.get('/api/artists', (req, res) => {
   res.json({ ok: true, artists });
 });
 
+// GET /playlists/api/server-time — the clock refresh schedules run on (cron uses
+// the server's timezone), so the builder can say when "06:00" is.
+router.get('/api/server-time', (req, res) => {
+  res.json({ ok: true, tz: Intl.DateTimeFormat().resolvedOptions().timeZone, offsetMin: -new Date().getTimezoneOffset() });
+});
+
 // GET /playlists/api/:id/rules — a rules playlist's config in the current (v2)
 // shape, for the rule builder: registry first, else the Navidrome comment.
+// refresh_cron is its auto-refresh schedule (null = none).
 router.get('/api/:id/rules', (req, res) => {
   const { type, config } = playlistTypeConfig(req.params.id, null);
   if (type !== TYPES.NAVILIST || !config) return res.json({ ok: false, error: 'Not a rules playlist' });
-  res.json({ ok: true, rules: config });
+  const refresh_cron = db.prepare('SELECT refresh_cron FROM navilist_playlists WHERE navidrome_id = ?').get(req.params.id)?.refresh_cron || null;
+  res.json({ ok: true, rules: config, refresh_cron });
 });
 
-// GET /playlists/api/:id — JSON detail (inactive playlists served from local snapshot)
+// GET /playlists/api/:id — JSON detail
 router.get('/api/:id', async (req, res) => {
   const { id } = req.params;
-
-  // Check if this is an inactive playlist
-  const local = db.prepare('SELECT * FROM navilist_playlists WHERE navidrome_id = ? AND active = 0').get(id);
-  if (local) {
-    const tracks = db.prepare(`
-      SELECT t.id, t.title, t.artist, t.duration
-      FROM navilist_playlist_tracks npt
-      JOIN tracks t ON t.id = npt.track_id
-      WHERE npt.playlist_id = ? ORDER BY npt.position ASC
-    `).all(id);
-    return res.json({ ok: true, playlist: {
-      id, name: local.name, comment: local.comment,
-      entry: tracks, songCount: tracks.length, duration: local.duration
-    }});
-  }
 
   const playlist = await navidrome.getPlaylist(db, id);
   if (!playlist) return res.json({ ok: false, error: 'Not found' });
@@ -201,6 +188,8 @@ router.post('/save-navilist', async (req, res) => {
   if (!trackIds?.length) return res.json({ ok: false, error: 'trackIds required' });
   const validation = engine.validateRules(rules);
   if (!validation.ok) return res.json({ ok: false, error: validation.errors.join(' ') });
+  const badCron = cronProblem(refresh_cron);
+  if (badCron) return res.json({ ok: false, error: badCron });
 
   const published = await publishPlaylist(db, { name: name.trim(), type: TYPES.NAVILIST, config: rules, trackIds });
   if (!published.ok) return res.json(published);
@@ -229,12 +218,8 @@ router.post('/:id/rename', async (req, res) => {
   const { name } = req.body;
   if (!name?.trim()) return res.json({ ok: false, error: 'Name is required' });
 
-  const local = db.prepare('SELECT active FROM navilist_playlists WHERE navidrome_id = ?').get(req.params.id);
-  // Only update ND if active
-  if (!local || local.active) {
-    const result = await navidrome.updatePlaylist(db, req.params.id, { name: name.trim() });
-    if (!result.ok) return res.json(result);
-  }
+  const result = await navidrome.updatePlaylist(db, req.params.id, { name: name.trim() });
+  if (!result.ok) return res.json(result);
   db.prepare('UPDATE navilist_playlists SET name = ? WHERE navidrome_id = ?').run(name.trim(), req.params.id);
   res.json({ ok: true });
 });
@@ -277,12 +262,20 @@ router.post('/:id/rules', async (req, res) => {
 
   const validation = engine.validateRules(rules);
   if (!validation.ok) return res.json({ ok: false, errors: validation.errors });
+  // refresh_cron: absent = leave the schedule alone; empty = clear it.
+  const setCron  = req.body.refresh_cron !== undefined;
+  const badCron  = setCron && cronProblem(req.body.refresh_cron);
+  if (badCron) return res.json({ ok: false, error: badCron });
 
-  const trackIds = await engine.generatePlaylist(db, rules);
+  // trackIds: the previewed list the builder saves (edits made in the preview kept);
+  // absent = generate from the rules. name: rename along with the save.
+  const { name, trackIds: given } = req.body;
+  const trackIds = Array.isArray(given) && given.length ? given : await engine.generatePlaylist(db, rules);
   if (!trackIds.length) return res.json({ ok: false, error: 'No tracks matched rules' });
 
-  const result = await publishPlaylist(db, { id: req.params.id, type: TYPES.NAVILIST, config: rules, trackIds });
+  const result = await publishPlaylist(db, { id: req.params.id, name: name?.trim() || null, type: TYPES.NAVILIST, config: rules, trackIds });
   if (!result.ok) return res.json(result);
+  if (setCron) setRefreshSchedule(req.params.id, req.body.refresh_cron, 'edit-rules');
 
   logger.info('playlists', `rules saved + regenerated ${req.params.id}: ${trackIds.length} tracks`);
   res.json({ ok: true, count: trackIds.length });
@@ -292,7 +285,6 @@ router.post('/:id/rules', async (req, res) => {
 router.post('/:id/regenerate', async (req, res) => {
   const row = db.prepare('SELECT * FROM navilist_playlists WHERE navidrome_id = ?').get(req.params.id);
   if (!row)        return res.json({ ok: false, error: 'Playlist not found in registry' });
-  if (!row.active) return res.json({ ok: false, error: 'Activate the playlist first' });
   res.json(await refreshPlaylist(row, 'regenerate'));
 });
 
@@ -301,70 +293,6 @@ router.post('/:id/regenerate', async (req, res) => {
 router.post('/preview-blocks', async (req, res) => {
   const result = await engine.previewRules(db, req.body.rules);
   res.json(result);
-});
-
-// POST /playlists/:id/deactivate — remove from ND, keep locally
-router.post('/:id/deactivate', async (req, res) => {
-  const { id } = req.params;
-
-  // Snapshot the current tracks from ND before deleting — the stored list can be
-  // stale (removals, edits made in Navidrome). A known playlist keeps its
-  // registry comment/type/config; an unknown one is registered from ND's comment.
-  const detail = await navidrome.getPlaylist(db, id);
-  if (!detail) return res.json({ ok: false, error: 'Could not read the playlist from Navidrome — not deactivated' });
-  const existing = db.prepare('SELECT 1 FROM navilist_playlists WHERE navidrome_id = ?').get(id);
-  const tracks   = Array.isArray(detail.entry) ? detail.entry : (detail.entry ? [detail.entry] : []);
-  snapshotPlaylist(db, id, detail.name, existing ? null : (detail.comment || null),
-    tracks.map(t => t.id), detail.duration || null);
-
-  const result = await navidrome.deletePlaylist(db, id);
-  if (!result.ok) return res.json(result);
-  const now = Math.floor(Date.now() / 1000);
-  db.prepare('UPDATE navilist_playlists SET active = 0, deactivated_at = ? WHERE navidrome_id = ?').run(now, id);
-  // A subscription keeps pointing at this (now inactive) playlist: sync treats it
-  // as paused until the playlist is activated again.
-  cancelPlaylistRefresh(id);
-  logger.info('playlists', `deactivated "${id}" — removed from ND, kept locally`);
-  res.json({ ok: true });
-});
-
-// POST /playlists/:id/activate — restore from local snapshot to ND
-router.post('/:id/activate', async (req, res) => {
-  const { id } = req.params;
-  const local = db.prepare('SELECT * FROM navilist_playlists WHERE navidrome_id = ?').get(id);
-  if (!local) return res.json({ ok: false, error: 'Playlist not found in local registry' });
-
-  const trackIds = db.prepare(`
-    SELECT track_id FROM navilist_playlist_tracks
-    WHERE playlist_id = ? ORDER BY position ASC
-  `).all(id).map(r => r.track_id);
-
-  const created = await navidrome.createPlaylist(db, local.name, trackIds);
-  if (!created.ok) return res.json(created);
-
-  const newId = created.playlist.id;
-
-  if (local.comment) {
-    await navidrome.updatePlaylist(db, newId, { comment: local.comment });
-  }
-
-  db.transaction(() => {
-    // Move track snapshot to new ND id
-    db.prepare('UPDATE navilist_playlist_tracks SET playlist_id = ? WHERE playlist_id = ?').run(newId, id);
-    // Replace registry row
-    db.prepare('DELETE FROM navilist_playlists WHERE navidrome_id = ?').run(id);
-    db.prepare(`
-      INSERT INTO navilist_playlists (navidrome_id, name, comment, type, config, active, track_count, duration, created_at, refresh_cron)
-      VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
-    `).run(newId, local.name, local.comment, local.type, local.config, local.track_count, local.duration, local.created_at, local.refresh_cron);
-    // Resume any subscription paused on the old id
-    db.prepare('UPDATE lb_subscriptions SET navidrome_id = ? WHERE navidrome_id = ?').run(newId, id);
-    db.prepare('UPDATE lfm_playlists SET navidrome_id = ? WHERE navidrome_id = ?').run(newId, id);
-  })();
-  if (local.refresh_cron) schedulePlaylistRefresh(newId, local.refresh_cron);
-
-  logger.info('playlists', `activated "${local.name}" → new ND id ${newId} (${trackIds.length} tracks)`);
-  res.json({ ok: true, newId, count: trackIds.length });
 });
 
 // POST /playlists/:id/purge — remove from local DB only, no ND call (for stale NSP rows etc)
@@ -376,28 +304,24 @@ router.post('/:id/purge', (req, res) => {
   res.json({ ok: true });
 });
 
-// POST /playlists/:id/delete — delete from NL and ND (if active)
+// POST /playlists/:id/delete — delete from NL and ND
 router.post('/:id/delete', async (req, res) => {
   const { id } = req.params;
-  const local = db.prepare('SELECT active FROM navilist_playlists WHERE navidrome_id = ?').get(id);
 
-  // Only delete from ND if active (inactive ones are already gone from ND)
-  if (!local || local.active) {
-    const result = await navidrome.deletePlaylist(db, id);
-    if (!result.ok) return res.json(result);
-  }
+  const result = await navidrome.deletePlaylist(db, id);
+  if (!result.ok) return res.json(result);
 
   db.transaction(() => {
     db.prepare('DELETE FROM navilist_playlist_tracks WHERE playlist_id = ?').run(id);
     db.prepare('DELETE FROM navilist_playlists WHERE navidrome_id = ?').run(id);
-    // Deleting a subscription's playlist ends the subscription (deactivate pauses it).
+    // Deleting a subscription's playlist ends the subscription.
     db.prepare('DELETE FROM lb_subscriptions WHERE navidrome_id = ?').run(id);
     db.prepare('UPDATE lfm_playlists SET enabled = 0, navidrome_id = NULL WHERE navidrome_id = ?').run(id);
   })();
 
   cancelPlaylistRefresh(id);
 
-  logger.info('playlists', `deleted ${id} (was ${local?.active ? 'active' : 'inactive'})`);
+  logger.info('playlists', `deleted ${id}`);
   res.json({ ok: true });
 });
 
@@ -406,22 +330,10 @@ router.get('/:id/export', async (req, res) => {
   const { id } = req.params;
   const format  = (req.query.format || 'm3u').toLowerCase();
 
-  let name, tracks;
-  const local = db.prepare('SELECT * FROM navilist_playlists WHERE navidrome_id = ? AND active = 0').get(id);
-  if (local) {
-    name   = local.name;
-    tracks = db.prepare(`
-      SELECT t.id, t.title, t.artist, t.duration
-      FROM navilist_playlist_tracks npt
-      JOIN tracks t ON t.id = npt.track_id
-      WHERE npt.playlist_id = ? ORDER BY npt.position ASC
-    `).all(id);
-  } else {
-    const playlist = await navidrome.getPlaylist(db, id);
-    if (!playlist) return res.status(404).json({ ok: false, error: 'Not found' });
-    name   = playlist.name;
-    tracks = Array.isArray(playlist.entry) ? playlist.entry : (playlist.entry ? [playlist.entry] : []);
-  }
+  const playlist = await navidrome.getPlaylist(db, id);
+  if (!playlist) return res.status(404).json({ ok: false, error: 'Not found' });
+  const name   = playlist.name;
+  const tracks = Array.isArray(playlist.entry) ? playlist.entry : (playlist.entry ? [playlist.entry] : []);
 
   const safeName = (name || 'playlist').replace(/[^\w\s\-\u2013\u2014]/g, '').trim().replace(/\s+/g, '_');
 

@@ -17,15 +17,16 @@ const { parseComment, buildComment, allowsLive } = require('./playlist_types');
 
 // ── Registry snapshot ─────────────────────────────────────────────────────────
 
-// Snapshot a playlist into the local registry. type/config are derived from the
-// comment. A null name or comment keeps the existing value, so callers that only
-// replace tracks never wipe the playlist type.
-function snapshotPlaylist(db, id, name, comment, trackIds, duration) {
+// Snapshot a playlist into the local registry. type/config come from `typed`
+// when given (the comment of a rules playlist is only a summary), else from the
+// comment. A null name, comment, type or config keeps the existing value, so
+// callers that only replace tracks never wipe the playlist type.
+function snapshotPlaylist(db, id, name, comment, trackIds, duration, typed = null) {
   const now = Math.floor(Date.now() / 1000);
   // If name is null, keep existing name
   const existing = db.prepare('SELECT name FROM navilist_playlists WHERE navidrome_id = ?').get(id);
   const resolvedName = name ?? existing?.name ?? '';
-  const { type, config } = parseComment(comment);
+  const { type, config } = typed || parseComment(comment);
 
   const upsert = db.prepare(`
     INSERT INTO navilist_playlists (navidrome_id, name, comment, type, config, active, track_count, duration, created_at)
@@ -110,7 +111,7 @@ async function publishPlaylist(db, { id = null, name, type = null, config = null
   if (comment)    meta.comment = comment;
   if (Object.keys(meta).length) await navidrome.updatePlaylist(db, playlistId, meta);
 
-  snapshotPlaylist(db, playlistId, name ?? null, comment, trackIds, sumDuration(db, trackIds));
+  snapshotPlaylist(db, playlistId, name ?? null, comment, trackIds, sumDuration(db, trackIds), { type, config });
   if (type) scheduleStudioRefine(db, playlistId, trackIds, comment, { keepLive: allowsLive(config) });
 
   return { ok: true, playlistId, created: !id };

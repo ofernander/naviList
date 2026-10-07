@@ -263,8 +263,7 @@ async function deletePlaylist(db, id) {
 // After a library sync: register naviList-tagged Navidrome playlists the registry
 // doesn't know (e.g. after a DB reset — type/config come from the comment), and
 // refresh name / track count of known ones. Never writes comment/type/config —
-// publish.js owns those — and never fetches track lists: deactivate snapshots
-// a playlist's tracks when it needs them.
+// publish.js owns those — and never fetches track lists.
 async function adoptTaggedPlaylists(db) {
   const playlists = await getPlaylists(db);
   if (!playlists.length) return { ok: true, adopted: 0 };

@@ -82,16 +82,23 @@ function cancelPlaylistRefresh(navidromeId) {
   }
 }
 
-// Store + start a refresh schedule for a just-saved playlist. Invalid → skipped.
-function setRefreshSchedule(navidromeId, cronExpr, label = 'save') {
+// Why a schedule can't be used, or null — empty / missing means "no schedule" and is fine.
+// Routes check this before saving so a bad schedule is refused, not silently dropped.
+function cronProblem(cronExpr) {
   const expr = cronExpr?.trim();
-  if (!expr) return;
-  if (!cron.validate(expr)) {
-    logger.warn('refresh', `${label}: invalid cron expression "${expr}" — skipping schedule`);
+  return expr && !cron.validate(expr) ? `Invalid refresh schedule "${expr}"` : null;
+}
+
+// Store + start a playlist's refresh schedule; empty clears it. Invalid → left as it was.
+function setRefreshSchedule(navidromeId, cronExpr, label = 'save') {
+  const expr = cronExpr?.trim() || null;
+  if (cronProblem(expr)) {
+    logger.warn('refresh', `${label}: invalid cron expression "${expr}" — schedule not changed`);
     return;
   }
   db.prepare('UPDATE navilist_playlists SET refresh_cron = ? WHERE navidrome_id = ?').run(expr, navidromeId);
-  schedulePlaylistRefresh(navidromeId, expr);
+  if (expr) schedulePlaylistRefresh(navidromeId, expr);
+  else      cancelPlaylistRefresh(navidromeId);
 }
 
 function loadScheduledPlaylists() {
@@ -144,12 +151,46 @@ async function migrateLegacyComments() {
   if (stale) logger.info('refresh', `comment migration: ${done}/${stale} playlist comment(s) updated to the current rules format`);
 }
 
+// Deactivate was removed. A playlist deactivated earlier lives only in the registry
+// (it was deleted from Navidrome), so recreate each one once: tracks from the stored
+// snapshot, comment, registry row under the new id, its subscription relinked and its
+// schedule resumed. Idempotent — one that fails (Navidrome down) is retried next start.
+async function restoreDeactivatedPlaylists() {
+  const rows = db.prepare('SELECT * FROM navilist_playlists WHERE active = 0').all();
+  if (!rows.length) return;
+  const getTracks = db.prepare('SELECT track_id FROM navilist_playlist_tracks WHERE playlist_id = ? ORDER BY position ASC');
+  let done = 0;
+  for (const local of rows) {
+    const trackIds = getTracks.all(local.navidrome_id).map(r => r.track_id);
+    const created  = await navidrome.createPlaylist(db, local.name, trackIds);
+    if (!created.ok) { logger.warn('refresh', `restore: "${local.name}" not recreated in Navidrome: ${created.error}`); continue; }
+    const newId = created.playlist.id;
+    if (local.comment) await navidrome.updatePlaylist(db, newId, { comment: local.comment });
+
+    db.transaction(() => {
+      db.prepare('UPDATE navilist_playlist_tracks SET playlist_id = ? WHERE playlist_id = ?').run(newId, local.navidrome_id);
+      db.prepare('DELETE FROM navilist_playlists WHERE navidrome_id = ?').run(local.navidrome_id);
+      db.prepare(`
+        INSERT INTO navilist_playlists (navidrome_id, name, comment, type, config, active, track_count, duration, created_at, refresh_cron)
+        VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
+      `).run(newId, local.name, local.comment, local.type, local.config, local.track_count, local.duration, local.created_at, local.refresh_cron);
+      db.prepare('UPDATE lb_subscriptions SET navidrome_id = ? WHERE navidrome_id = ?').run(newId, local.navidrome_id);
+      db.prepare('UPDATE lfm_playlists SET navidrome_id = ? WHERE navidrome_id = ?').run(newId, local.navidrome_id);
+    })();
+    if (local.refresh_cron) schedulePlaylistRefresh(newId, local.refresh_cron);
+    done++;
+  }
+  logger.info('refresh', `restore: ${done}/${rows.length} previously deactivated playlist(s) recreated in Navidrome`);
+}
+
 module.exports = {
   migrateLegacyComments,
+  restoreDeactivatedPlaylists,
   refreshPlaylist,
   schedulePlaylistRefresh,
   cancelPlaylistRefresh,
   setRefreshSchedule,
+  cronProblem,
   loadScheduledPlaylists,
   regenerateRulesPlaylists,
 };
