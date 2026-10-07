@@ -569,6 +569,12 @@ select:focus {
 .pl-type-title { font-size: 0.88rem; font-weight: 600; color: var(--text); margin-bottom: 0.25rem; }
 .pl-type-desc  { font-size: 0.74rem; color: var(--text-faint); line-height: 1.35; }
 
+/* New-playlist picker: naviList is the main way to build a playlist, so it spans
+   the top as the hero, centred; the other types sit underneath. */
+.pl-type-option.pl-type-hero { grid-column: 1 / -1; height: auto; padding: 1.25rem 1.35rem; align-items: center; text-align: center; }
+.pl-type-hero .pl-type-title { font-size: 1.05rem; margin-bottom: 0.35rem; }
+.pl-type-hero .pl-type-desc  { font-size: 0.82rem; color: var(--text-muted); }
+
 .modal input[type="text"] {
   width: 100%;
   padding: 0.5rem 0.75rem;
