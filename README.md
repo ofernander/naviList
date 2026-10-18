@@ -94,6 +94,9 @@ services:
 | `LIDARR_QUALITY_PROFILE_ID` | - | Lidarr quality profile ID |
 | `LIDARR_METADATA_PROFILE_ID` | - | Lidarr metadata profile ID |
 | `NL_NSP_PATH` | - | Path inside the container where `.nsp` files are written |
+| `MUSICBRAINZ_URL` | - | Your own MusicBrainz server, e.g. `http://nulmd:5001`. Blank uses musicbrainz.org |
+| `MUSICBRAINZ_API_KEY` | - | API key for that server, if it needs one (sent as `X-API-Key`) |
+| `MUSICBRAINZ_DELAY_MS` | `0` | Milliseconds between requests to your own server. musicbrainz.org always gets one every 2 seconds |
 
 ### 3. Navidrome configuration
 

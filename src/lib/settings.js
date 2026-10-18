@@ -20,6 +20,13 @@ router.post('/test-navidrome', async (req, res) => {
   res.json(result);
 });
 
+// Test a MusicBrainz server (the values on the form, not yet saved).
+router.post('/test-musicbrainz', async (req, res) => {
+  const result = await require('../providers/musicbrainz').ping(req.body);
+  logger.info('settings', `musicbrainz test → ${result.ok ? `ok (${result.ms}ms)` : result.error}`);
+  res.json(result);
+});
+
 router.get('/music-folders', async (req, res) => {
   try {
     const folders = await navidrome.getMusicFolders(db);
@@ -66,7 +73,8 @@ router.post('/', (req, res) => {
     'lidarr_auto_add',
     'deezer_artist_images',
     'nsp_path',
-    'fuzzy_match_threshold'
+    'fuzzy_match_threshold',
+    'musicbrainz_url', 'musicbrainz_api_key', 'musicbrainz_delay_ms'
   ];
 
   const upsert = db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)');
@@ -85,6 +93,7 @@ router.post('/', (req, res) => {
   const data = {};
   fields.forEach(f => { if (body[f] !== undefined) data[f] = body[f]; });
   upsertMany(data);
+  require('../providers/musicbrainz').configure(getSettings(db));   // a new server applies without a restart
 
   logger.info('settings', 'credentials saved');
   res.redirect('/settings');

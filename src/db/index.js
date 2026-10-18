@@ -37,6 +37,9 @@ const ENV_SETTINGS = {
   lidarr_quality_profile_id: process.env.LIDARR_QUALITY_PROFILE_ID,
   lidarr_metadata_profile_id: process.env.LIDARR_METADATA_PROFILE_ID,
   nsp_path:                   process.env.NL_NSP_PATH,
+  musicbrainz_url:            process.env.MUSICBRAINZ_URL,
+  musicbrainz_api_key:        process.env.MUSICBRAINZ_API_KEY,
+  musicbrainz_delay_ms:       process.env.MUSICBRAINZ_DELAY_MS,
 };
 
 const seedSetting = db.prepare('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)');

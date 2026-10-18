@@ -38,7 +38,7 @@ async function syncArtistTagsMusicbrainz(db) {
   for (const { artist_id, artist } of todo) {
     try {
       const tags = await mb.getArtistTags(artist);
-      if (!tags.length) { sentinel.run(artist_id, fetchedAt); fetched++; await sleep(1000); continue; }
+      if (!tags.length) { sentinel.run(artist_id, fetchedAt); fetched++; await sleep(Math.min(1000, mb.requestDelayMs())); continue; }
       db.transaction(rows => { for (const r of rows) upsert.run(r); })(
         tags.map(t => ({ artistId: artist_id, tag: t.name.toLowerCase(), weight: t.count, fetchedAt }))
       );
@@ -48,7 +48,7 @@ async function syncArtistTagsMusicbrainz(db) {
       failed++;
       logger.warn('sync', `artist-tags/musicbrainz failed for "${artist}": ${e.message}`);
     }
-    await sleep(1000);
+    await sleep(Math.min(1000, mb.requestDelayMs()));
   }
 
   logger.info('sync', `artist-tags/musicbrainz: ${fetched} fetched, ${failed} failed`);

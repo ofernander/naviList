@@ -3,26 +3,80 @@
 /**
  * musicbrainz.js — MusicBrainz API provider
  *
- * No API key required. Rate limit: 1 req/sec (enforced by callers).
+ * Talks to musicbrainz.org by default (no key; one request every 2 seconds), or to
+ * a server of the user's own that speaks the same /ws/2 API (a mirror, or a caching
+ * server such as nuLMD) — see configure(). A custom server can need an API key, sent
+ * as `X-API-Key`, and sets its own delay between requests.
  * Docs: https://musicbrainz.org/doc/MusicBrainz_API
  */
 
-const BASE_URL   = 'https://musicbrainz.org/ws/2';
-const TIMEOUT    = 15000;
-const USER_AGENT = 'naviList (https://github.com/ofernander/navilist)';
-const RATE_LIMIT_MS = 2000;   // MusicBrainz allows ~1 req / 2s per IP
-const MAX_ATTEMPTS  = 3;      // initial try + 2 retries on transient failure
+const DEFAULT_BASE  = 'https://musicbrainz.org/ws/2';
+const TIMEOUT       = 15000;
+const USER_AGENT    = 'naviList (https://github.com/ofernander/navilist)';
+const PUBLIC_DELAY_MS = 2000;   // musicbrainz.org allows ~1 req / 2s per IP
+const MAX_ATTEMPTS  = 3;        // initial try + 2 retries on transient failure
+
+// ── Which server ─────────────────────────────────────────────────────────────
+
+// '' / blank → musicbrainz.org. Accepts http(s)://host[:port] with or without /ws/2.
+// Throws on anything else.
+function normalizeBase(raw) {
+  const text = String(raw || '').trim();
+  if (!text) return DEFAULT_BASE;
+  let u;
+  try { u = new URL(text); } catch (e) { throw new Error(`"${text}" is not a valid URL`); }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new Error('the MusicBrainz server URL must start with http:// or https://');
+  const path = u.pathname.replace(/\/+$/, '');
+  return `${u.origin}${/\/ws\/2$/.test(path) ? path : `${path}/ws/2`}`;
+}
+
+// The public servers keep the 2 second spacing whatever the delay setting says, and never
+// receive an API key meant for a private server.
+const isPublicHost = base => /(^|\.)musicbrainz\.org$/i.test(new URL(base).hostname);
+
+// The setting values → { base, key, delayMs } (throws on a bad URL).
+function resolve(settings = {}) {
+  const base   = normalizeBase(settings.musicbrainz_url);
+  const custom = !isPublicHost(base);
+  const d      = parseInt(settings.musicbrainz_delay_ms, 10);
+  return {
+    base,
+    custom,
+    key:     custom ? String(settings.musicbrainz_api_key || '').trim() : '',
+    delayMs: custom ? (Number.isFinite(d) && d >= 0 ? d : 0) : PUBLIC_DELAY_MS,
+  };
+}
+
+let current = resolve();
+
+// Apply the saved settings (at startup, and whenever they are saved). A bad URL is
+// logged and musicbrainz.org is used until it's fixed.
+function configure(settings) {
+  const logger = require('../utils/logger');
+  try { current = resolve(settings); }
+  catch (e) { logger.warn('musicbrainz', `${e.message} — using musicbrainz.org`); current = resolve(); }
+  logger.info('musicbrainz', `server: ${current.base}${current.custom ? ` (delay ${current.delayMs}ms${current.key ? ', API key set' : ''})` : ''}`);
+}
+
+// ms between requests right now — callers that pace their own loops use it.
+const requestDelayMs = () => current.delayMs;
+
+function requestHeaders(c = current) {
+  return { 'User-Agent': USER_AGENT, ...(c.key ? { 'X-API-Key': c.key } : {}) };
+}
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 // Global request spacer — serializes ALL MB calls (tags, artist, recordings)
 // so concurrent loops can never collectively exceed the rate limit. Each caller
-// reserves the next >=RATE_LIMIT_MS slot and waits for it.
+// reserves the next slot (the configured delay after the previous one) and waits for it.
+// A delay of 0 (your own server) skips the spacing.
 let nextSlot = 0;
 async function acquireSlot() {
+  if (!current.delayMs) return;
   const now  = Date.now();
   const wait = Math.max(0, nextSlot - now);
-  nextSlot   = Math.max(now, nextSlot) + RATE_LIMIT_MS;
+  nextSlot   = Math.max(now, nextSlot) + current.delayMs;
   if (wait) await sleep(wait);
 }
 
@@ -31,18 +85,19 @@ async function acquireSlot() {
 async function request(path, params = {}) {
   const logger = require('../utils/logger');
   const qs  = new URLSearchParams({ fmt: 'json', ...params });
-  const url = `${BASE_URL}${path}?${qs}`;
+  const url = `${current.base}${path}?${qs}`;
   logger.debug('musicbrainz', `request: ${path} ${JSON.stringify(params)}`);
 
   for (let attempt = 1; ; attempt++) {
-    await acquireSlot();                        // global >=2s spacing
+    await acquireSlot();                        // global spacing (2s on musicbrainz.org)
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), TIMEOUT);
     try {
-      const res = await fetch(url, { signal: controller.signal, headers: { 'User-Agent': USER_AGENT } });
+      const res = await fetch(url, { signal: controller.signal, headers: requestHeaders() });
       if (res.status === 503) {
         throw Object.assign(new Error('HTTP 503'), { retryAfter: parseInt(res.headers.get('retry-after'), 10) || 0 });
       }
+      if (res.status === 401 || res.status === 403) throw new Error(`HTTP ${res.status} — the MusicBrainz server refused the API key`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return await res.json();
     } catch (e) {
@@ -56,6 +111,37 @@ async function request(path, params = {}) {
     } finally {
       clearTimeout(timer);
     }
+  }
+}
+
+// Settings page "Test", run against the given (unsaved) URL and key: one search for MusicBrainz's
+// built-in "Various Artists" entry — present on every MusicBrainz server and tied to no artist or
+// genre. A search checks the server, the key and the search index naviList depends on to find artist
+// IDs. It is deliberately NOT a lookup of that entry by ID: nuLMD refuses its built-in special artists
+// (404), and looking up a special artist there can start a huge background fetch.
+// → { ok: true, ms } or { ok: false, error }.
+const PROBE = { id: '89ad4ac3-39f7-470e-963a-56509c546377', name: 'Various Artists' };
+
+async function ping(settings) {
+  let c;
+  try { c = resolve(settings); } catch (e) { return { ok: false, error: e.message }; }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10000);
+  const started = Date.now();
+  try {
+    const res = await fetch(`${c.base}/artist?${new URLSearchParams({ query: `artist:"${PROBE.name}"`, limit: 5, fmt: 'json' })}`,
+      { signal: controller.signal, headers: requestHeaders(c) });
+    if (res.status === 401 || res.status === 403) return { ok: false, error: `the server refused the API key (HTTP ${res.status})` };
+    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
+    const data = await res.json().catch(() => null);
+    if (!Array.isArray(data?.artists)) return { ok: false, error: 'the server answered, but not like a MusicBrainz /ws/2 API' };
+    if (!data.artists.some(a => a.id === PROBE.id))
+      return { ok: false, error: 'the search ran but found nothing — the search index may be empty or still building' };
+    return { ok: true, ms: Date.now() - started, server: c.base };
+  } catch (e) {
+    return { ok: false, error: e.name === 'AbortError' ? 'timed out' : `cannot reach the server (${e.message})` };
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -142,7 +228,11 @@ async function getRecordingIsLive(mbid) {
  * null when this was the last one.
  */
 async function getLiveRecordingsPage(artistMbid, offset = 0) {
-  const data = await request('/release', { artist: artistMbid, type: 'live', inc: 'recordings', limit: 100, offset });
+  // A 404 means this server has nothing to browse for the artist — nuLMD refuses MusicBrainz's special
+  // artists such as Various Artists (and any artist its owner blocked). That is "no live releases",
+  // not a failure to retry on every run.
+  const data = await request('/release', { artist: artistMbid, type: 'live', inc: 'recordings', limit: 100, offset })
+    .catch(e => { if (e.message === 'HTTP 404') return { releases: [] }; throw e; });
   const releases = data?.releases || [];
   const recordingIds = [];
   for (const rel of releases)
@@ -154,4 +244,4 @@ async function getLiveRecordingsPage(artistMbid, offset = 0) {
 
 // ── Exports ───────────────────────────────────────────────────────────────────
 
-module.exports = { findArtistMbid, getArtistTagsByMbid, getArtistTags, getArtistAliases, getRecordingIsLive, getLiveRecordingsPage };
+module.exports = { configure, ping, requestDelayMs, findArtistMbid, getArtistTagsByMbid, getArtistTags, getArtistAliases, getRecordingIsLive, getLiveRecordingsPage };

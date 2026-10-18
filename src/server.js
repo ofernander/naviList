@@ -41,6 +41,8 @@ app.use('/playlists', require('./lib/playlists'));
 app.use('/library', require('./lib/library'));
 app.use('/settings', require('./lib/settings'));
 app.use('/nsp', require('./lib/nsp'));
+// Which MusicBrainz server to use (settings are in the DB by now)
+require('./providers/musicbrainz').configure(require('./db/settings').getSettings(require('./db/index')));
 const syncModule = require('./lib/sync');
 app.use('/sync', syncModule.router);
 app.use('/sync', require('./lib/external_playlists'));   // LB / Last.fm playlist routes
