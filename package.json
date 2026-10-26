@@ -1,6 +1,6 @@
 {
   "name": "navilist",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Playlist manager & generator for Navidrome",
   "main": "src/server.js",
   "scripts": {
