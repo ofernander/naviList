@@ -7,3 +7,4 @@ docker-compose.override.yml
 docker-compose.override.1.yml
 docker-compose.override.build.yml
 data
+.claude
