@@ -188,6 +188,28 @@ function blockKey(db, config) {
 }
 
 /**
+ * Which copies the post-save studio tie-break (studio.refineStudioPicks) may
+ * swap a track for, so the published playlist keeps its rules. null for a
+ * playlist without a Library rule: those keep the swap they always had (any copy
+ * of the song). With one, a copy may replace a track only if every block whose
+ * pool held the track also holds the copy — so the swap keeps the block's
+ * library, its other conditions and its share. Disliked copies never qualify.
+ * → null | (origId, candId) => boolean
+ */
+async function refineScope(db, config) {
+  config = normalizeRules(config);
+  if (!config?.blocks?.length || !usesLibrary(config)) return null;
+  const disliked = new Set(db.prepare('SELECT DISTINCT track_id FROM loved_tracks WHERE score = -1').all().map(r => r.track_id));
+  const pools = [];
+  for (const block of config.blocks) pools.push(new Set(await resolveBlock(db, block, config.conditions)));
+  return (origId, candId) => {
+    if (disliked.has(candId)) return false;
+    const holding = pools.filter(p => p.has(origId));
+    return holding.length > 0 && holding.every(p => p.has(candId));
+  };
+}
+
+/**
  * Preview: each block's pool size + a sample, without combining. Lets the rule
  * builder show "this block matches N tracks" while editing.
  */
@@ -492,6 +514,9 @@ function resolveRating(db, rule) {
 function resolveLibrary(db, rule) {
   const ids = (Array.isArray(rule.value) ? rule.value : [rule.value]).map(String);
   const ph  = ids.map(() => '?').join(', ');
+  const known = new Set(db.prepare('SELECT id FROM libraries').all().map(r => r.id));
+  const gone  = ids.filter(id => !known.has(id));
+  if (known.size && gone.length) logger.warn('pl_engine', `library rule: library ${gone.join(', ')} is no longer in Navidrome — it matches no tracks`);
   return db.prepare(`SELECT id FROM tracks WHERE library_id IN (${ph})`).all(...ids).map(r => r.id);
 }
 
@@ -555,4 +580,4 @@ function windowToCutoff(window) {
 
 // ── Exports ───────────────────────────────────────────────────────────────────
 
-module.exports = { generatePlaylist, resolveRule, validateRules, previewRules, blockKey };
+module.exports = { generatePlaylist, resolveRule, validateRules, previewRules, blockKey, refineScope };

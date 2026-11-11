@@ -25,10 +25,10 @@ function freshDb() {
 }
 
 const insert = db => db.prepare(`
-  INSERT INTO tracks (id, title, artist, artist_id, album, album_id, genre, user_rating, library_id, synced_at)
-  VALUES (@id, @title, @artist, @artistId, 'alb', 'alb', @genre, @rating, @lib, 0)`);
+  INSERT INTO tracks (id, title, artist, artist_id, album, album_id, genre, user_rating, library_id, is_live, mbid, synced_at)
+  VALUES (@id, @title, @artist, @artistId, @album, 'alb', @genre, @rating, @lib, @isLive, @mbid, 0)`);
 const track = (id, title, artist, extra = {}) =>
-  ({ id, title, artist, artistId: artist.toLowerCase(), genre: null, rating: null, lib: null, ...extra });
+  ({ id, title, artist, artistId: artist.toLowerCase(), album: 'alb', genre: null, rating: null, lib: null, isLive: null, mbid: null, ...extra });
 
 const libBlocks = (limit, a = 60, b = 40, cond = []) => ({
   limit,
@@ -199,4 +199,178 @@ test('when every block is short the playlist is just shorter, never padded with 
   const ids = await engine.generatePlaylist(db, libBlocks(20));
   assert.equal(ids.length, 4);
   assert.equal(new Set(ids.map(songOf(db))).size, 4);
+});
+
+// ── 4. Post-save studio refinement keeps Library rules ────────────────────────
+
+const publish   = require('../src/lib/publish');
+const { normalizeRules } = require('../src/lib/playlist_types');
+
+// Stub Navidrome writes and capture what publishPlaylist (and the detached
+// studio refine after it) sends, so tests check the published track ids.
+function stubNavidrome() {
+  const calls = [];
+  const orig = { ...navidrome };
+  navidrome.createPlaylist        = async (db, name, ids) => { calls.push(['create', ids]); return { ok: true, playlist: { id: 'pl1' } }; };
+  navidrome.replacePlaylistTracks = async (db, id, ids) => { calls.push(['replace', ids]); return { ok: true }; };
+  navidrome.updatePlaylist        = async () => ({ ok: true });
+  return { calls, restore: () => Object.assign(navidrome, orig) };
+}
+const settle = () => new Promise(r => setTimeout(r, 150));   // let the detached refine finish
+const published = db => db.prepare('SELECT track_id FROM navilist_playlist_tracks WHERE playlist_id = ? ORDER BY position').all('pl1').map(r => r.track_id);
+
+test('studio refine never swaps a Library playlist track for a copy in another library', async () => {
+  const db = freshDb(); const ins = insert(db);
+  // "Hit" is in both libraries. Theirs' copy is MB-confirmed studio; Mine's is unknown —
+  // the old refine would swap Mine's copy for Theirs'.
+  ins.run(track('mine-hit',   'Hit', 'Band', { lib: '1', rating: 5 }));
+  ins.run(track('theirs-hit', 'Hit', 'Band', { lib: '2', isLive: 0 }));
+  for (let i = 0; i < 5; i++) ins.run(track(`m${i}`, `Mine ${i}`,   `M${i}`, { lib: '1', rating: 5 }));
+  for (let i = 0; i < 5; i++) ins.run(track(`t${i}`, `Theirs ${i}`, `T${i}`, { lib: '2' }));
+  const config = libBlocks(6, 50, 50, [{ term: 'rating', value: 'min4', use: 'require' }]);
+  const trackIds = ['mine-hit', 'm0', 'm1', 't0', 't1', 't2'];
+
+  const nd = stubNavidrome();
+  try {
+    const res = await publish.publishPlaylist(db, { name: 'Blend', type: 'navilist', config: normalizeRules(config), trackIds });
+    assert.equal(res.ok, true);
+    await settle();
+    assert.deepEqual(published(db), trackIds, 'registry keeps the Library pick');
+    assert.ok(!nd.calls.some(([k]) => k === 'replace'), 'no refine replace sent to Navidrome');
+  } finally { nd.restore(); }
+});
+
+test('studio refine never swaps to a same-library copy that breaks another condition', async () => {
+  const db = freshDb(); const ins = insert(db);
+  ins.run(track('hit-5star', 'Hit', 'Band', { lib: '1', rating: 5 }));
+  ins.run(track('hit-2star', 'Hit', 'Band', { lib: '1', rating: 2, isLive: 0 }));   // studio, but fails Rating ≥ 4
+  const config = normalizeRules(libBlocks(5, 100, undefined, [{ term: 'rating', value: 'min4', use: 'require' }]));
+  config.blocks = config.blocks.slice(0, 1);
+  assert.deepEqual(await publish.refineForPlaylist(db, ['hit-5star'], { type: 'navilist', config }), ['hit-5star']);
+});
+
+test('studio refine still swaps within the rules when the copy qualifies', async () => {
+  const db = freshDb(); const ins = insert(db);
+  ins.run(track('hit-unknown', 'Hit', 'Band', { lib: '1', rating: 5 }));
+  ins.run(track('hit-studio',  'Hit', 'Band', { lib: '1', rating: 5, isLive: 0 }));
+  ins.run(track('hit-other',   'Hit', 'Band', { lib: '2', isLive: 0 }));
+  const config = normalizeRules(libBlocks(5, 60, 40, [{ term: 'rating', value: 'min4', use: 'require' }]));
+
+  const nd = stubNavidrome();
+  try {
+    await publish.publishPlaylist(db, { name: 'Blend', type: 'navilist', config, trackIds: ['hit-unknown'] });
+    await settle();
+    assert.deepEqual(published(db), ['hit-studio'], 'swapped to the studio copy in the same library');
+    assert.deepEqual(nd.calls.at(-1), ['replace', ['hit-studio']]);
+  } finally { nd.restore(); }
+});
+
+test('published Library playlist keeps its library shares through the refine (overlapping libraries)', async () => {
+  const db = freshDb(); const ins = insert(db);
+  // 20 songs in both libraries; every copy in Theirs is MB-confirmed studio, so the
+  // old refine would move all of Mine's overlapping picks over to Theirs.
+  for (let i = 0; i < 30; i++) ins.run(track(`m${i}`, `Song ${i}`, `A${i % 6}`, { lib: '1', rating: 5 }));
+  for (let i = 0; i < 30; i++) ins.run(track(`t${i}`, `Song ${i < 20 ? i : 100 + i}`, `A${i % 6}`, { lib: '2', isLive: 0 }));
+  const config = normalizeRules(libBlocks(20, 60, 40, [{ term: 'rating', value: 'min4', use: 'require' }]));
+  const lib = libOf(db), song = songOf(db);
+
+  const nd = stubNavidrome();
+  try {
+    for (let run = 0; run < 10; run++) {
+      const trackIds = await engine.generatePlaylist(db, config);
+      await publish.publishPlaylist(db, { id: 'pl1', type: 'navilist', config, trackIds });
+      await settle();
+      const final = published(db);
+      assert.equal(final.filter(id => lib(id) === '1').length, 12, 'Mine keeps 60%');
+      assert.equal(final.filter(id => lib(id) === '2').length, 8,  'Theirs keeps 40%');
+      assert.equal(new Set(final.map(song)).size, 20);
+    }
+  } finally { nd.restore(); }
+});
+
+test('playlists without a Library rule keep the old library-wide refine', async () => {
+  const db = freshDb(); const ins = insert(db);
+  ins.run(track('rock-hit', 'Hit', 'Band', { genre: 'rock' }));
+  ins.run(track('any-hit',  'Hit', 'Band', { genre: 'pop', isLive: 0 }));
+  const config = normalizeRules({ blocks: [{ rule: { term: 'genre', value: 'rock' } }] });
+  assert.deepEqual(await publish.refineForPlaylist(db, ['rock-hit'], { type: 'navilist', config }), ['any-hit']);
+  assert.deepEqual(await publish.refineForPlaylist(db, ['rock-hit'], { type: 'import' }), ['any-hit']);
+});
+
+// ── 5. Library data is published only after a complete sync ──────────────────
+
+function mockWithFailures(songsByFolder, folderNames) {
+  const state = { fail: null, names: folderNames, songs: songsByFolder };   // fail: { folder, offset }
+  const server = http.createServer((req, res) => {
+    const u = new URL(req.url, 'http://x');
+    const action = u.pathname.split('/').pop();
+    let body = { status: 'ok' };
+    if (action === 'getMusicFolders') {
+      body.musicFolders = { musicFolder: Object.entries(state.names).map(([id, name]) => ({ id: Number(id), name })) };
+    } else if (action === 'search3') {
+      const f = u.searchParams.get('musicFolderId');
+      const off = Number(u.searchParams.get('songOffset'));
+      if (state.fail && state.fail.folder === f && state.fail.offset === off) body = { status: 'failed', error: { message: 'boom' } };
+      else body.searchResult3 = { song: (state.songs[f] || []).slice(off, off + 500) };
+    } else if (action === 'getPlaylists') {
+      body.playlists = { playlist: [] };
+    }
+    res.end(JSON.stringify({ 'subsonic-response': body }));
+  });
+  return new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve({ server, state })));
+}
+
+const libraryState = db => ({
+  libraries: db.prepare('SELECT id, name FROM libraries ORDER BY id').all(),
+  tags:      db.prepare('SELECT id, library_id FROM tracks ORDER BY id').all(),
+});
+
+for (const [where, fail] of [['the first page', { folder: '1', offset: 0 }], ['a later page', { folder: '1', offset: 500 }], ['a later folder', { folder: '2', offset: 0 }]]) {
+  test(`a sync that fails on ${where} leaves library data exactly as it was`, async () => {
+    // Folder 1 has 700 songs, so it takes two pages.
+    const { server, state } = await mockWithFailures({ 1: songs('m', 700), 2: songs('t', 10) }, { 1: 'Mine', 2: 'Theirs' });
+    try {
+      const db = freshDb();
+      configure(db, server.address().port);
+      assert.equal((await navidrome.syncLibrary(db)).ok, true);
+      const before = libraryState(db);
+
+      // Navidrome changes: a library is renamed, a new one appears, songs move library.
+      state.names = { 1: 'Mine (renamed)', 2: 'Theirs', 3: 'New' };
+      state.songs = { 1: songs('m', 700).concat(songs('t', 5)), 2: songs('t', 10).slice(5), 3: songs('n', 4) };
+      state.fail  = fail;
+      const res = await navidrome.syncLibrary(db);
+      assert.equal(res.ok, false);
+      const after = libraryState(db);
+      assert.deepEqual(after.libraries, before.libraries, 'library list unchanged');
+      // New songs may already be in tracks (metadata syncs page by page, as before),
+      // but untagged; every existing song keeps its old library.
+      const old = new Map(before.tags.map(r => [r.id, r.library_id]));
+      for (const r of after.tags) assert.equal(r.library_id, old.has(r.id) ? old.get(r.id) : null, `tag of ${r.id}`);
+
+      state.fail = null;
+      assert.equal((await navidrome.syncLibrary(db)).ok, true);
+      const done = libraryState(db);
+      assert.deepEqual(done.libraries.map(l => l.name), ['Mine (renamed)', 'Theirs', 'New']);
+      const tagOf = new Map(done.tags.map(r => [r.id, r.library_id]));
+      assert.equal(tagOf.get('t0'), '1', 'moved song re-tagged once the sync completes');
+      assert.equal(tagOf.get('n0'), '3');
+    } finally { server.close(); }
+  });
+}
+
+// ── 6. Dedupe policy for distinct recordings ──────────────────────────────────
+
+test('policy: in a Library playlist, same artist + title counts as one song even across distinct recordings', async () => {
+  // Two different recordings (different MBIDs and albums) of "Song" by "Band",
+  // one per library. naviList's song key is artist + title (studio.songKey), so a
+  // Library playlist uses only one of them. Playlists without a Library rule are
+  // unaffected (see the first test in this file).
+  const db = freshDb(); const ins = insert(db);
+  ins.run(track('rec-a', 'Song', 'Band', { lib: '1', mbid: 'mbid-a', album: 'Album 1' }));
+  ins.run(track('rec-b', 'Song', 'Band', { lib: '2', mbid: 'mbid-b', album: 'Album 2 (2011 re-recording)' }));
+  for (let run = 0; run < 10; run++) {
+    const ids = await engine.generatePlaylist(db, libBlocks(10));
+    assert.equal(ids.filter(id => id.startsWith('rec-')).length, 1);
+  }
 });

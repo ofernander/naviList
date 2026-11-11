@@ -1630,26 +1630,37 @@
         wrap.appendChild(sel); wrap.appendChild(windowSel); wrap.appendChild(periodSel); wrap.appendChild(sourceSel);
         container.appendChild(wrap);
       } else if (def.valueType === 'library-select') {
+        // A saved rule keeps its library even when that library is gone (removed,
+        // renumbered, or not synced yet): it shows as unavailable and only an
+        // explicit pick changes it. A new rule starts on the first library.
         const sel = document.createElement('select');
         sel.setAttribute('aria-label', 'Library');
-        if (!libraryList.length) {
+        const known = libraryList.find(l => String(l.id) === String(rule.value));
+        if (hasValue(rule.value) && !known) {
           const opt = document.createElement('option');
-          opt.value = rule.value || ''; opt.textContent = rule.options?.name || 'No libraries yet: run a library sync';
+          opt.value = String(rule.value);
+          opt.textContent = `${rule.options?.name || `Library ${rule.value}`} (unavailable)`;
+          opt.dataset.unavailable = '1';
+          sel.appendChild(opt);
+        } else if (!libraryList.length) {
+          const opt = document.createElement('option');
+          opt.value = ''; opt.textContent = 'No libraries yet: run a library sync';
           sel.appendChild(opt);
         }
         libraryList.forEach(l => {
           const opt = document.createElement('option');
           opt.value = l.id; opt.textContent = l.name;
-          if (String(l.id) === String(rule.value)) opt.selected = true;
           sel.appendChild(opt);
         });
+        sel.value = hasValue(rule.value) ? String(rule.value) : (libraryList[0] ? String(libraryList[0].id) : '');
         const pick = () => {
-          rule.value = sel.value;
           const lib = libraryList.find(l => String(l.id) === sel.value);
-          rule.options = { ...rule.options, ...(lib ? { name: lib.name } : {}) };
+          if (!lib) return;   // the unavailable entry: leave the saved value and name as they are
+          rule.value = sel.value;
+          rule.options = { ...rule.options, name: lib.name };
         };
-        if (libraryList.length && !libraryList.some(l => String(l.id) === String(rule.value))) sel.value = libraryList[0].id;
-        if (sel.value) pick();
+        if (!hasValue(rule.value)) pick();
+        else if (known) rule.options = { ...rule.options, name: known.name };   // follow a rename; the id is unchanged
         sel.addEventListener('change', () => { pick(); scheduleRuleCountPreview(); });
         container.appendChild(sel);
       } else if (def.valueType === 'rating-select') {

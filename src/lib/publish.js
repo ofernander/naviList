@@ -13,7 +13,7 @@ const navidrome = require('../providers/navidrome');
 const logger    = require('../utils/logger');
 const { runDetached } = require('./sync/helpers');
 const { refineStudioPicks } = require('./studio');
-const { parseComment, buildComment, allowsLive } = require('./playlist_types');
+const { parseComment, buildComment, allowsLive, TYPES } = require('./playlist_types');
 
 // ── Registry snapshot ─────────────────────────────────────────────────────────
 
@@ -63,9 +63,17 @@ function sumDuration(db, trackIds) {
 // Runs detached so preview/save stay fast, then swaps any wrong duplicate picks
 // in the saved playlist and warms the is_live cache. keepLive: the playlist's
 // Studio / Live split takes live, so live picks stay.
-function scheduleStudioRefine(db, playlistId, trackIds, comment, { keepLive = false } = {}) {
+// A rules playlist with a Library rule only swaps to copies its rules allow
+// (pl_engine.refineScope); every other playlist swaps as it always has.
+async function refineForPlaylist(db, trackIds, { type, config, keepLive }) {
+  const engine = require('./pl_engine');   // inline: pl_engine is only needed here
+  const allow  = type === TYPES.NAVILIST && config ? await engine.refineScope(db, config) : null;
+  return refineStudioPicks(db, trackIds, { keepLive, allow });
+}
+
+function scheduleStudioRefine(db, playlistId, trackIds, comment, { keepLive = false, type = null, config = null } = {}) {
   runDetached(`studio-refine-${playlistId}`, async () => {
-    const refined = await refineStudioPicks(db, trackIds, { keepLive });
+    const refined = await refineForPlaylist(db, trackIds, { type, config, keepLive });
     if (refined.length && refined.some((id, i) => id !== trackIds[i])) {
       await navidrome.replacePlaylistTracks(db, playlistId, refined);
       snapshotPlaylist(db, playlistId, null, comment, refined, null);
@@ -112,9 +120,9 @@ async function publishPlaylist(db, { id = null, name, type = null, config = null
   if (Object.keys(meta).length) await navidrome.updatePlaylist(db, playlistId, meta);
 
   snapshotPlaylist(db, playlistId, name ?? null, comment, trackIds, sumDuration(db, trackIds), { type, config });
-  if (type) scheduleStudioRefine(db, playlistId, trackIds, comment, { keepLive: allowsLive(config) });
+  if (type) scheduleStudioRefine(db, playlistId, trackIds, comment, { keepLive: allowsLive(config), type, config });
 
   return { ok: true, playlistId, created: !id };
 }
 
-module.exports = { publishPlaylist, snapshotPlaylist };
+module.exports = { publishPlaylist, snapshotPlaylist, refineForPlaylist };

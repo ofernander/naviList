@@ -118,8 +118,11 @@ function splitStudioLive(db, ids) {
  * caches to tracks.is_live. Run detached after save so preview/save stay fast.
  * keepLive (a playlist whose Studio / Live split takes live): a live pick was
  * chosen on purpose and is left alone.
+ * allow(origId, candId) (optional): a copy is only a candidate when this says
+ * it may stand in for the original — e.g. a Library playlist only swaps to a
+ * copy its rules would also have picked (pl_engine.refineScope).
  */
-async function refineStudioPicks(db, trackIds, { keepLive = false } = {}) {
+async function refineStudioPicks(db, trackIds, { keepLive = false, allow = null } = {}) {
   if (!trackIds || !trackIds.length) return trackIds;
   const getT = db.prepare('SELECT id, artist, title, album, duration, mbid, is_live FROM tracks WHERE id = ?');
   const sibs = db.prepare('SELECT id, artist, title, album, duration, mbid, is_live FROM tracks WHERE LOWER(artist) = LOWER(?) AND LOWER(title) = LOWER(?)');
@@ -127,7 +130,8 @@ async function refineStudioPicks(db, trackIds, { keepLive = false } = {}) {
   for (const id of trackIds) {
     const t = getT.get(id);
     if (!t || (keepLive && isLiveTrack(t))) { out.push(id); continue; }
-    const cands = sibs.all(t.artist, t.title);
+    let cands = sibs.all(t.artist, t.title);
+    if (allow) cands = cands.filter(c => c.id === id || allow(id, c.id));
     if (cands.length <= 1) { out.push(id); continue; }
     await ensureLiveStatus(db, cands);
     out.push(pickStudioCandidate(db, cands) || id);

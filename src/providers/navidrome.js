@@ -378,7 +378,7 @@ async function getNdTrackCount(db) {
 
 // ── Library sync ──────────────────────────────────────────────────────────────
 
-async function syncFolderPage(db, folderId, offset, upsertMany, seenIds, syncedAt) {
+async function syncFolderPage(db, folderId, offset, upsertMany, seenIds, syncedAt, stagedLibrary) {
   const extra = {
     query: '""',
     songCount: PAGE_SIZE,
@@ -396,6 +396,9 @@ async function syncFolderPage(db, folderId, offset, upsertMany, seenIds, syncedA
 
   if (songs.length > 0) {
     songs.forEach(s => seenIds.add(s.id));
+    // Library membership is staged, not written: it is published with the
+    // library list in one transaction once every folder has synced.
+    if (folderId !== null) songs.forEach(s => stagedLibrary.set(s.id, String(folderId)));
     upsertMany(songs.map(s => ({
       id:         s.id,
       title:      s.title,
@@ -411,7 +414,6 @@ async function syncFolderPage(db, folderId, offset, upsertMany, seenIds, syncedA
       userRating: s.userRating  ?? null,
       bitRate:    s.bitRate     ?? null,
       mbid:       s.musicBrainzId || null,   // OpenSubsonic recording MBID ('' or absent → null)
-      libraryId:  folderId === null ? null : String(folderId),
       syncedAt
     })));
   }
@@ -442,7 +444,12 @@ async function syncLibrary(db) {
   // in (the Library rule). With no folders configured, that is every library the
   // user can see. If the folder list can't be read, this falls back to the old
   // single unscoped pass: tracks still sync, and each keeps the library it was
-  // last tagged with (the upsert never overwrites library_id with null).
+  // last tagged with.
+  //
+  // Track metadata is written page by page, as always. Library data is not: the
+  // library list and every track's library are staged and published together in
+  // one transaction after the last page of the last folder, so a sync that fails
+  // or is interrupted part-way leaves the previous library data exactly as it was.
   const folders = await listMusicFolders(db);
   const targets = folderIds.length > 0 ? folderIds
     : folders?.length ? folders.map(f => String(f.id))
@@ -450,20 +457,13 @@ async function syncLibrary(db) {
   logger.info('navidrome', `library sync started — folders: ${folderIds.length > 0 ? folderIds.join(', ') : 'all'}`);
   if (!folders && !folderIds.length) logger.warn('navidrome', 'library list unavailable — syncing without library tags this run; existing tags are kept');
 
-  if (folders?.length) {
-    const saveLibraries = db.transaction(list => {
-      db.prepare('DELETE FROM libraries').run();
-      const ins = db.prepare('INSERT INTO libraries (id, name, synced_at) VALUES (?, ?, ?)');
-      for (const f of list) ins.run(String(f.id), f.name ?? `Library ${f.id}`, syncedAt);
-    });
-    saveLibraries(folders);
-  }
+  const stagedLibrary = new Map();   // track id → library id, published after the sync
 
   const upsert = db.prepare(`
     INSERT INTO tracks (id, title, artist, artist_id, album, album_id,
-      duration, year, genre, play_count, starred, user_rating, bit_rate, mbid, library_id, synced_at)
+      duration, year, genre, play_count, starred, user_rating, bit_rate, mbid, synced_at)
     VALUES (@id, @title, @artist, @artistId, @album, @albumId,
-      @duration, @year, @genre, @playCount, @starred, @userRating, @bitRate, @mbid, @libraryId, @syncedAt)
+      @duration, @year, @genre, @playCount, @starred, @userRating, @bitRate, @mbid, @syncedAt)
     ON CONFLICT(id) DO UPDATE SET
       title       = excluded.title,
       artist      = excluded.artist,
@@ -478,7 +478,6 @@ async function syncLibrary(db) {
       user_rating = excluded.user_rating,
       bit_rate    = excluded.bit_rate,
       mbid        = COALESCE(excluded.mbid, tracks.mbid),
-      library_id  = COALESCE(excluded.library_id, tracks.library_id),
       synced_at   = excluded.synced_at
   `);
 
@@ -503,7 +502,7 @@ async function syncLibrary(db) {
       let offset = 0;
       if (folderId !== null) logger.info('navidrome', `syncing folder ${folderId}...`);
       while (true) {
-        const count = await syncFolderPage(db, folderId, offset, upsertMany, seenIds, syncedAt);
+        const count = await syncFolderPage(db, folderId, offset, upsertMany, seenIds, syncedAt, stagedLibrary);
         if (count === 0) break;
         total += count;
         offset += PAGE_SIZE;
@@ -516,6 +515,18 @@ async function syncLibrary(db) {
     logger.error('navidrome', `sync failed: ${e.message}`);
     return { ok: false, error: e.message, total, inserted, updated, removed };
   }
+
+  // ── Publish library data (all folders synced) ──────────────────────────────
+  const publishLibraries = db.transaction(() => {
+    if (folders?.length) {
+      db.prepare('DELETE FROM libraries').run();
+      const ins = db.prepare('INSERT INTO libraries (id, name, synced_at) VALUES (?, ?, ?)');
+      for (const f of folders) ins.run(String(f.id), f.name ?? `Library ${f.id}`, syncedAt);
+    }
+    const tag = db.prepare('UPDATE tracks SET library_id = ? WHERE id = ?');
+    for (const [id, lib] of stagedLibrary) tag.run(lib, id);
+  });
+  publishLibraries();
 
   // ── Download artist images (gated on deezer_artist_images setting) ─────────
   const imagesEnabled = settings.deezer_artist_images === 'true';
