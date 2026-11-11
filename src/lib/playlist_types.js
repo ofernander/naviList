@@ -59,7 +59,10 @@ function describeRules(config) {
     const r = b.rule || {};
     const term = String(r.term || '').replace(/_/g, ' ');
     const name = term.charAt(0).toUpperCase() + term.slice(1);
-    const value = canonicalTerm(r.term) === 'rating' ? (RATING_VALUES[r.value] || r.value) : r.value;
+    const term_ = canonicalTerm(r.term);
+    const value = term_ === 'rating' ? (RATING_VALUES[r.value] || r.value)
+      : term_ === 'library' ? (r.options?.name || r.value)
+      : r.value;
     return `${name}: ${value}` + (canonicalTerm(r.term) === 'artist' && r.options?.similar ? ' + similar' : '');
   });
   const shown = blocks.slice(0, 3).join(', ') + (blocks.length > 3 ? ` +${blocks.length - 3} more` : '');

@@ -21,12 +21,13 @@
 const logger = require('../utils/logger');
 const { cleanPool, orderByArtist, mixByPopularity, splitVersions, mixVersions, combineBlocks } = require('./finalize');
 const { similarForArtist } = require('./similar');
+const { songKey } = require('./studio');
 const { CONDITION_USES, SIMILAR_DEPTHS, SIMILAR_SOURCES, canonicalTerm, normalizeRules, shareProblem,
         MIX_TIERS, mixProblem, mixWeights, RATING_VALUES } = require('./playlist_types');
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const SUPPORTED_TERMS = ['artist', 'genre', 'stats', 'decade', 'mood', 'rating'];
+const SUPPORTED_TERMS = ['artist', 'genre', 'stats', 'decade', 'mood', 'rating', 'library'];
 const SUPPORTED_STATS = ['top_played', 'recently_played', 'not_recently_played', 'unplayed', 'starred', 'highly_rated', 'loved', 'disliked', 'top_artists'];
 // Stats values whose result is a meaningful best-first ranking.
 const RANKED_STATS    = ['top_played', 'recently_played', 'top_artists', 'highly_rated'];
@@ -95,6 +96,7 @@ async function resolveRule(db, rule) {
     case 'artist':  return resolveArtist(db, rule);
     case 'mood':    return resolveMood(db, rule);
     case 'rating':  return resolveRating(db, rule);
+    case 'library': return resolveLibrary(db, rule);
     default:
       logger.warn('pl_engine', `unknown term: ${rule.term}`);
       return [];
@@ -123,6 +125,12 @@ async function resolveBlock(db, block, shared = []) {
   if (notConds.length) {
     const excluded = new Set();
     for (const c of notConds) (await resolveRule(db, c)).forEach(id => excluded.add(id));
+    // "Library is not X" can only vouch for tracks whose library is known, so it
+    // also drops untagged ones (not yet in a complete sync, or synced before the
+    // Library rule existed) rather than letting them through.
+    if (notConds.some(c => canonicalTerm(c.term) === 'library')) {
+      db.prepare('SELECT id FROM tracks WHERE library_id IS NULL').all().forEach(r => excluded.add(r.id));
+    }
     pool = pool.filter(id => !excluded.has(id));
   }
   return pool;
@@ -163,10 +171,48 @@ async function generatePlaylist(db, config) {
 
   // A single block's share is ignored — it is the whole playlist.
   const shares = config.blocks.length > 1 ? config.blocks.map(b => b.share) : [undefined];
-  const ids = combineBlocks(lists, shares, limit);
+  const ids = combineBlocks(lists, shares, limit, blockKey(db, config));
   if (!ids.length) logger.info('pl_engine', 'no tracks matched any block');
   logger.info('pl_engine', `generated ${ids.length} tracks from ${config.blocks.length} block(s), ${config.conditions.length} shared condition(s)`);
   return ids;
+}
+
+/**
+ * How combineBlocks tells two picks apart. By track id, as always — except in a
+ * playlist that uses a Library rule, where blocks drawing on different libraries
+ * can hold different copies of one song (same artist and title, different ids):
+ * there it is by song, so the song is used once. The block that reaches it
+ * first takes it and the other moves on to its next song, so shares still hold.
+ */
+const usesLibrary = config => [...config.conditions, ...config.blocks.flatMap(b => [b.rule, ...(b.conditions || [])])]
+  .some(r => r && canonicalTerm(r.term) === 'library');
+
+function blockKey(db, config) {
+  if (!usesLibrary(config)) return id => id;
+  const getSong = db.prepare('SELECT artist, title FROM tracks WHERE id = ?');
+  return id => { const t = getSong.get(id); return t ? songKey(t) : id; };
+}
+
+/**
+ * Which copies the post-save studio tie-break (studio.refineStudioPicks) may
+ * swap a track for, so the published playlist keeps its rules. null for a
+ * playlist without a Library rule: those keep the swap they always had (any copy
+ * of the song). With one, a copy may replace a track only if every block whose
+ * pool held the track also holds the copy — so the swap keeps the block's
+ * library, its other conditions and its share. Disliked copies never qualify.
+ * → null | (origId, candId) => boolean
+ */
+async function refineScope(db, config) {
+  config = normalizeRules(config);
+  if (!config?.blocks?.length || !usesLibrary(config)) return null;
+  const disliked = new Set(db.prepare('SELECT DISTINCT track_id FROM loved_tracks WHERE score = -1').all().map(r => r.track_id));
+  const pools = [];
+  for (const block of config.blocks) pools.push(new Set(await resolveBlock(db, block, config.conditions)));
+  return (origId, candId) => {
+    if (disliked.has(candId)) return false;
+    const holding = pools.filter(p => p.has(origId));
+    return holding.length > 0 && holding.every(p => p.has(candId));
+  };
 }
 
 /**
@@ -468,6 +514,19 @@ function resolveRating(db, rule) {
 }
 
 /**
+ * library — tracks in the given Navidrome library (music folder) id, or any of
+ * several ids. Tracks are tagged with their library at library sync.
+ */
+function resolveLibrary(db, rule) {
+  const ids = (Array.isArray(rule.value) ? rule.value : [rule.value]).map(String);
+  const ph  = ids.map(() => '?').join(', ');
+  const known = new Set(db.prepare('SELECT id FROM libraries').all().map(r => r.id));
+  const gone  = ids.filter(id => !known.has(id));
+  if (known.size && gone.length) logger.warn('pl_engine', `library rule: library ${gone.join(', ')} is no longer in Navidrome — it matches no tracks`);
+  return db.prepare(`SELECT id FROM tracks WHERE library_id IN (${ph})`).all(...ids).map(r => r.id);
+}
+
+/**
  * mood — MusicBrainz mood tags
  * Phase 3: requires artist_tags table
  */
@@ -527,4 +586,4 @@ function windowToCutoff(window) {
 
 // ── Exports ───────────────────────────────────────────────────────────────────
 
-module.exports = { generatePlaylist, resolveRule, validateRules, previewRules };
+module.exports = { generatePlaylist, resolveRule, validateRules, previewRules, blockKey, refineScope };

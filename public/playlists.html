@@ -1055,6 +1055,7 @@
       artist: { label: 'Artist', valueType: 'text', placeholder: 'Artist name' },
       mood:   { label: 'Mood',   valueType: 'text', placeholder: 'e.g. melancholic' },
       rating: { label: 'Rating', valueType: 'rating-select' },    // Navidrome stars; "Rating is not 1 star" drops 1-star tracks
+      library: { label: 'Library', valueType: 'library-select' }, // Navidrome library (music folder) the track is in
       // Not filters — shown as condition rows, at most one of each per block / global:
       popularity: { label: 'Popularity', conditionOnly: true },       // split by popularity tier
       versions:   { label: 'Studio / Live', conditionOnly: true },    // split studio vs live recordings
@@ -1108,8 +1109,10 @@
     let genreList  = [];
     let artistList = [];
     let albumList  = [];
+    let libraryList = [];
     async function loadGenres()  { try { const d = await (await fetch('/playlists/api/genres')).json();  genreList  = d.genres  || []; } catch (e) {} }
     async function loadArtists() { try { const d = await (await fetch('/playlists/api/artists')).json(); artistList = d.artists || []; } catch (e) {} }
+    async function loadLibraries() { try { const d = await (await fetch('/playlists/api/libraries')).json(); libraryList = d.libraries || []; } catch (e) {} }
     async function loadAlbums()  { try { const d = await (await fetch('/playlists/api/albums')).json();  albumList  = d.albums  || []; } catch (e) {} }
 
     // Open the rule builder: a new playlist starts with one Artist block; an
@@ -1122,7 +1125,7 @@
     }
 
     async function openRuleBuilder(playlistName, returnTo, editingId = null) {
-      loadGenres(); loadArtists();
+      loadGenres(); loadArtists(); await loadLibraries();
       rbPlaylistName      = playlistName;
       rbReturnTo          = returnTo;
       rbMode              = editingId ? 'edit' : 'create';
@@ -1626,6 +1629,40 @@
 
         wrap.appendChild(sel); wrap.appendChild(windowSel); wrap.appendChild(periodSel); wrap.appendChild(sourceSel);
         container.appendChild(wrap);
+      } else if (def.valueType === 'library-select') {
+        // A saved rule keeps its library even when that library is gone (removed,
+        // renumbered, or not synced yet): it shows as unavailable and only an
+        // explicit pick changes it. A new rule starts on the first library.
+        const sel = document.createElement('select');
+        sel.setAttribute('aria-label', 'Library');
+        const known = libraryList.find(l => String(l.id) === String(rule.value));
+        if (hasValue(rule.value) && !known) {
+          const opt = document.createElement('option');
+          opt.value = String(rule.value);
+          opt.textContent = `${rule.options?.name || `Library ${rule.value}`} (unavailable)`;
+          opt.dataset.unavailable = '1';
+          sel.appendChild(opt);
+        } else if (!libraryList.length) {
+          const opt = document.createElement('option');
+          opt.value = ''; opt.textContent = 'No libraries yet: run a library sync';
+          sel.appendChild(opt);
+        }
+        libraryList.forEach(l => {
+          const opt = document.createElement('option');
+          opt.value = l.id; opt.textContent = l.name;
+          sel.appendChild(opt);
+        });
+        sel.value = hasValue(rule.value) ? String(rule.value) : (libraryList[0] ? String(libraryList[0].id) : '');
+        const pick = () => {
+          const lib = libraryList.find(l => String(l.id) === sel.value);
+          if (!lib) return;   // the unavailable entry: leave the saved value and name as they are
+          rule.value = sel.value;
+          rule.options = { ...rule.options, name: lib.name };
+        };
+        if (!hasValue(rule.value)) pick();
+        else if (known) rule.options = { ...rule.options, name: known.name };   // follow a rename; the id is unchanged
+        sel.addEventListener('change', () => { pick(); scheduleRuleCountPreview(); });
+        container.appendChild(sel);
       } else if (def.valueType === 'rating-select') {
         const sel = document.createElement('select');
         sel.setAttribute('aria-label', 'Rating');
