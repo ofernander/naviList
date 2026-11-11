@@ -165,13 +165,26 @@ async function generatePlaylist(db, config) {
 
   // A single block's share is ignored — it is the whole playlist.
   const shares = config.blocks.length > 1 ? config.blocks.map(b => b.share) : [undefined];
-  // A song is used once even when two blocks hold different copies of it (e.g.
-  // the same song in two libraries).
-  const getSong = db.prepare('SELECT artist, title FROM tracks WHERE id = ?');
-  const ids = combineBlocks(lists, shares, limit, id => songKey(getSong.get(id) || { title: id }));
+  const ids = combineBlocks(lists, shares, limit, blockKey(db, config));
   if (!ids.length) logger.info('pl_engine', 'no tracks matched any block');
   logger.info('pl_engine', `generated ${ids.length} tracks from ${config.blocks.length} block(s), ${config.conditions.length} shared condition(s)`);
   return ids;
+}
+
+/**
+ * How combineBlocks tells two picks apart. By track id, as always — except in a
+ * playlist that uses a Library rule, where blocks drawing on different libraries
+ * can hold different copies of one song (same artist and title, different ids):
+ * there it is by song, so the song is used once. The block that reaches it
+ * first takes it and the other moves on to its next song, so shares still hold.
+ */
+const usesLibrary = config => [...config.conditions, ...config.blocks.flatMap(b => [b.rule, ...(b.conditions || [])])]
+  .some(r => r && canonicalTerm(r.term) === 'library');
+
+function blockKey(db, config) {
+  if (!usesLibrary(config)) return id => id;
+  const getSong = db.prepare('SELECT artist, title FROM tracks WHERE id = ?');
+  return id => { const t = getSong.get(id); return t ? songKey(t) : id; };
 }
 
 /**
@@ -542,4 +555,4 @@ function windowToCutoff(window) {
 
 // ── Exports ───────────────────────────────────────────────────────────────────
 
-module.exports = { generatePlaylist, resolveRule, validateRules, previewRules };
+module.exports = { generatePlaylist, resolveRule, validateRules, previewRules, blockKey };

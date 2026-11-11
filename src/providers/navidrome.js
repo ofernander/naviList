@@ -57,6 +57,20 @@ async function ping(db) {
   }
 }
 
+// Library sync's view of the folder list: the folders, or null when Navidrome
+// could not be asked (network error, error response), so a failed lookup is
+// never mistaken for "no libraries".
+async function listMusicFolders(db) {
+  try {
+    const res = await request(db, 'getMusicFolders');
+    if (res?.status !== 'ok') throw new Error(res?.error?.message || 'error response');
+    return res?.musicFolders?.musicFolder || [];
+  } catch (e) {
+    logger.warn('navidrome', `getMusicFolders failed: ${e.message}`);
+    return null;
+  }
+}
+
 async function getMusicFolders(db) {
   try {
     const res = await request(db, 'getMusicFolders');
@@ -426,14 +440,17 @@ async function syncLibrary(db) {
 
   // Every library is synced on its own so each track knows which library it is
   // in (the Library rule). With no folders configured, that is every library the
-  // user can see; if the folder list can't be read, fall back to one unscoped pass.
-  const folders = await getMusicFolders(db);
+  // user can see. If the folder list can't be read, this falls back to the old
+  // single unscoped pass: tracks still sync, and each keeps the library it was
+  // last tagged with (the upsert never overwrites library_id with null).
+  const folders = await listMusicFolders(db);
   const targets = folderIds.length > 0 ? folderIds
-    : folders.length > 0 ? folders.map(f => String(f.id))
+    : folders?.length ? folders.map(f => String(f.id))
     : [null];
   logger.info('navidrome', `library sync started — folders: ${folderIds.length > 0 ? folderIds.join(', ') : 'all'}`);
+  if (!folders && !folderIds.length) logger.warn('navidrome', 'library list unavailable — syncing without library tags this run; existing tags are kept');
 
-  if (folders.length > 0) {
+  if (folders?.length) {
     const saveLibraries = db.transaction(list => {
       db.prepare('DELETE FROM libraries').run();
       const ins = db.prepare('INSERT INTO libraries (id, name, synced_at) VALUES (?, ?, ?)');
@@ -461,7 +478,7 @@ async function syncLibrary(db) {
       user_rating = excluded.user_rating,
       bit_rate    = excluded.bit_rate,
       mbid        = COALESCE(excluded.mbid, tracks.mbid),
-      library_id  = excluded.library_id,
+      library_id  = COALESCE(excluded.library_id, tracks.library_id),
       synced_at   = excluded.synced_at
   `);
 
