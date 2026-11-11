@@ -87,7 +87,7 @@ test('a Library rule used only as a shared condition also dedupes by song', () =
 // ── 2. Sync fallback keeps library tags ───────────────────────────────────────
 
 function mockNavidrome(songsByFolder, folderNames) {
-  const state = { folders: 'ok' };   // 'ok' | 'error-response' | 'http-500'
+  const state = { folders: 'ok', songs: songsByFolder };   // folders: 'ok' | 'error-response' | 'http-500'
   const server = http.createServer((req, res) => {
     const u = new URL(req.url, 'http://x');
     const action = u.pathname.split('/').pop();
@@ -100,7 +100,7 @@ function mockNavidrome(songsByFolder, folderNames) {
     } else if (action === 'search3') {
       const f = u.searchParams.get('musicFolderId');
       const off = Number(u.searchParams.get('songOffset'));
-      const all = f ? songsByFolder[f] : Object.values(songsByFolder).flat();
+      const all = f ? state.songs[f] : Object.values(state.songs).flat();
       body.searchResult3 = { song: all.slice(off, off + 500) };
     } else if (action === 'getPlaylists') {
       body.playlists = { playlist: [] };
@@ -323,6 +323,7 @@ function mockWithFailures(songsByFolder, folderNames) {
 const libraryState = db => ({
   libraries: db.prepare('SELECT id, name FROM libraries ORDER BY id').all(),
   tags:      db.prepare('SELECT id, library_id FROM tracks ORDER BY id').all(),
+  tracks:    db.prepare('SELECT id, title, artist, album, play_count, user_rating, synced_at FROM tracks ORDER BY id').all(),
 });
 
 for (const [where, fail] of [['the first page', { folder: '1', offset: 0 }], ['a later page', { folder: '1', offset: 500 }], ['a later folder', { folder: '2', offset: 0 }]]) {
@@ -337,16 +338,16 @@ for (const [where, fail] of [['the first page', { folder: '1', offset: 0 }], ['a
 
       // Navidrome changes: a library is renamed, a new one appears, songs move library.
       state.names = { 1: 'Mine (renamed)', 2: 'Theirs', 3: 'New' };
-      state.songs = { 1: songs('m', 700).concat(songs('t', 5)), 2: songs('t', 10).slice(5), 3: songs('n', 4) };
+      // Every library 1 title changes too (e.g. retagged), so any partial write shows.
+      const retitled = songs('m', 700).map(x => ({ ...x, title: `${x.title} (retagged)` }));
+      state.songs = { 1: retitled.concat(songs('t', 5)), 2: songs('t', 10).slice(5), 3: songs('n', 4) };
       state.fail  = fail;
       const res = await navidrome.syncLibrary(db);
       assert.equal(res.ok, false);
       const after = libraryState(db);
       assert.deepEqual(after.libraries, before.libraries, 'library list unchanged');
-      // New songs may already be in tracks (metadata syncs page by page, as before),
-      // but untagged; every existing song keeps its old library.
-      const old = new Map(before.tags.map(r => [r.id, r.library_id]));
-      for (const r of after.tags) assert.equal(r.library_id, old.has(r.id) ? old.get(r.id) : null, `tag of ${r.id}`);
+      assert.deepEqual(after.tags, before.tags, 'every track keeps its library');
+      assert.deepEqual(after.tracks, before.tracks, 'no track inserted, updated or removed');
 
       state.fail = null;
       assert.equal((await navidrome.syncLibrary(db)).ok, true);
@@ -373,4 +374,91 @@ test('policy: in a Library playlist, same artist + title counts as one song even
     const ids = await engine.generatePlaylist(db, libBlocks(10));
     assert.equal(ids.filter(id => id.startsWith('rec-')).length, 1);
   }
+});
+
+// ── 7. Partial discovery never leaks into Library-filtered playlists ─────────
+
+// Every track, ordered: a block that starts from "Unplayed" (all synced tracks
+// here) with a shared Library exclusion.
+const notLibrary = (id, limit = 500) => ({
+  limit,
+  blocks: [{ rule: { term: 'stats', value: 'unplayed' } }],
+  conditions: [{ term: 'library', value: id, options: { name: `Library ${id}` }, use: 'exclude' }],
+});
+
+test('after a later-folder failure, "Library is not 1" never yields a library 1 track', async () => {
+  const { server, state } = await mockWithFailures({ 1: songs('m', 8), 2: songs('t', 8) }, { 1: 'Mine', 2: 'Theirs' });
+  try {
+    const db = freshDb();
+    configure(db, server.address().port);
+    assert.equal((await navidrome.syncLibrary(db)).ok, true);
+
+    // New songs land in library 1; the next sync reads folder 1 then fails on folder 2.
+    state.songs = { 1: songs('m', 8).concat(songs('mnew', 6)), 2: songs('t', 8) };
+    state.fail  = { folder: '2', offset: 0 };
+    assert.equal((await navidrome.syncLibrary(db)).ok, false);
+
+    const ids = await engine.generatePlaylist(db, notLibrary('1'));
+    assert.ok(ids.length > 0);
+    assert.ok(ids.every(id => id.startsWith('t')), `only library 2 tracks: ${ids.filter(id => !id.startsWith('t'))}`);
+  } finally { server.close(); }
+});
+
+test('untagged tracks (fallback pass, or before the first full sync) never pass "Library is not X"', async () => {
+  const { server, state } = await mockNavidrome({ 1: songs('m', 5), 2: songs('t', 5) }, { 1: 'Mine', 2: 'Theirs' });
+  try {
+    const db = freshDb();
+    configure(db, server.address().port);
+    assert.equal((await navidrome.syncLibrary(db)).ok, true);
+
+    // A song is added to library 1 while the library list is unavailable: the
+    // fallback pass inserts it with no library.
+    state.folders = 'error-response';
+    state.songs   = { 1: songs('m', 5).concat(songs('mnew', 1)), 2: songs('t', 5) };
+    assert.equal((await navidrome.syncLibrary(db)).ok, true);
+    assert.equal(db.prepare("SELECT library_id FROM tracks WHERE id = 'mnew0'").get().library_id, null);
+
+    const ids = await engine.generatePlaylist(db, notLibrary('1'));
+    assert.deepEqual(ids.sort(), songs('t', 5).map(s => s.id).sort());
+
+    // Non-Library playlists still see the new track.
+    const all = await engine.generatePlaylist(db, { limit: 500, blocks: [{ rule: { term: 'stats', value: 'unplayed' } }] });
+    assert.ok(all.includes('mnew0'));
+  } finally { server.close(); }
+});
+
+// ── 8. Stale removal is part of the same publication ─────────────────────────
+
+test('playlists generated while artist images download already see the full new state', async () => {
+  const deezer = require('../src/providers/deezer');
+  const origDownload = deezer.downloadArtistImage;
+  let release, reached;
+  const paused = new Promise(r => { release = r; });
+  const atImages = new Promise(r => { reached = r; });
+  deezer.downloadArtistImage = async () => { reached(); await paused; return false; };
+
+  const { server, state } = await mockWithFailures({ 1: songs('m', 6), 2: songs('t', 6) }, { 1: 'Mine', 2: 'Theirs' });
+  try {
+    const db = freshDb();
+    configure(db, server.address().port);
+    assert.equal((await navidrome.syncLibrary(db)).ok, true);   // images off: no pause
+    db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('deezer_artist_images', 'true')").run();
+
+    // Library 2 is removed from Navidrome; a new artist arrives in library 1.
+    state.names = { 1: 'Mine' };
+    state.songs = { 1: songs('m', 6).concat(songs('fresh', 2)) };
+    const syncing = navidrome.syncLibrary(db);
+    await atImages;   // sync is now paused inside the artist image download
+
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM tracks WHERE id LIKE 't%'").get().n, 0, 'removed library\'s tracks already gone');
+    assert.deepEqual(db.prepare('SELECT id FROM libraries').all(), [{ id: '1' }]);
+    assert.deepEqual(await engine.generatePlaylist(db, { limit: 50, blocks: [{ rule: { term: 'library', value: '2' } }] }), [], 'removed library is not selectable');
+    const mine = await engine.generatePlaylist(db, { limit: 50, blocks: [{ rule: { term: 'library', value: '1' } }] });
+    assert.equal(mine.length, 8, 'new library 1 tracks already selectable');
+
+    release();
+    const res = await syncing;
+    assert.equal(res.ok, true);
+    assert.equal(res.removed, 6);
+  } finally { release(); deezer.downloadArtistImage = origDownload; server.close(); }
 });

@@ -125,6 +125,12 @@ async function resolveBlock(db, block, shared = []) {
   if (notConds.length) {
     const excluded = new Set();
     for (const c of notConds) (await resolveRule(db, c)).forEach(id => excluded.add(id));
+    // "Library is not X" can only vouch for tracks whose library is known, so it
+    // also drops untagged ones (not yet in a complete sync, or synced before the
+    // Library rule existed) rather than letting them through.
+    if (notConds.some(c => canonicalTerm(c.term) === 'library')) {
+      db.prepare('SELECT id FROM tracks WHERE library_id IS NULL').all().forEach(r => excluded.add(r.id));
+    }
     pool = pool.filter(id => !excluded.has(id));
   }
   return pool;
