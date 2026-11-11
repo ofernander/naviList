@@ -97,6 +97,16 @@ router.get('/api/list', async (req, res) => {
   res.json({ ok: true, playlists });
 });
 
+// GET /playlists/api/libraries — Navidrome libraries seen at the last library sync
+router.get('/api/libraries', (req, res) => {
+  const libraries = db.prepare(`
+    SELECT l.id, l.name, COUNT(t.id) AS tracks
+    FROM libraries l LEFT JOIN tracks t ON t.library_id = l.id
+    GROUP BY l.id ORDER BY l.name ASC
+  `).all();
+  res.json({ ok: true, libraries });
+});
+
 // GET /playlists/api/genres — distinct genre list for filter dropdown
 router.get('/api/genres', (req, res) => {
   const genres = db.prepare(`

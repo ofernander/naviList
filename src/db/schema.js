@@ -31,7 +31,15 @@ module.exports = function (db) {
       bit_rate    INTEGER,
       mbid        TEXT,
       is_live     INTEGER,
+      library_id  TEXT,
       synced_at   INTEGER NOT NULL
+    );
+
+    -- Navidrome libraries (music folders), refreshed at library sync
+    CREATE TABLE IF NOT EXISTS libraries (
+      id         TEXT PRIMARY KEY,
+      name       TEXT NOT NULL,
+      synced_at  INTEGER NOT NULL
     );
 
     CREATE INDEX IF NOT EXISTS idx_tracks_artist_id ON tracks(artist_id);
@@ -245,6 +253,8 @@ module.exports = function (db) {
   const trackCols = db.prepare('PRAGMA table_info(tracks)').all().map(c => c.name);
   if (!trackCols.includes('mbid'))    db.exec('ALTER TABLE tracks ADD COLUMN mbid TEXT');
   if (!trackCols.includes('is_live')) db.exec('ALTER TABLE tracks ADD COLUMN is_live INTEGER');
+  // Navidrome library (music folder) the track came from; filled at the next library sync.
+  if (!trackCols.includes('library_id')) db.exec('ALTER TABLE tracks ADD COLUMN library_id TEXT');
   // Popularity within the artist (lib/popularity.js). pop_source NULL = not fetched yet.
   if (!trackCols.includes('pop_score'))      db.exec('ALTER TABLE tracks ADD COLUMN pop_score REAL');
   // Scores were briefly based on listeners (pre-release): rename the column and
@@ -271,6 +281,7 @@ module.exports = function (db) {
 
   // Index created after the ALTER above so the column exists on pre-existing DBs.
   db.exec('CREATE INDEX IF NOT EXISTS idx_tracks_is_live ON tracks(is_live)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_tracks_library_id ON tracks(library_id)');
 
   // Drop the obsolete MB length cache — superseded by per-track mbid/is_live.
   db.exec('DROP TABLE IF EXISTS mb_recordings');

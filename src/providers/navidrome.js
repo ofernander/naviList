@@ -397,6 +397,7 @@ async function syncFolderPage(db, folderId, offset, upsertMany, seenIds, syncedA
       userRating: s.userRating  ?? null,
       bitRate:    s.bitRate     ?? null,
       mbid:       s.musicBrainzId || null,   // OpenSubsonic recording MBID ('' or absent → null)
+      libraryId:  folderId === null ? null : String(folderId),
       syncedAt
     })));
   }
@@ -423,14 +424,29 @@ async function syncLibrary(db) {
     ? settings.music_folder_ids.split(',').map(s => s.trim()).filter(Boolean)
     : [];
 
-  const targets = folderIds.length > 0 ? folderIds : [null];
+  // Every library is synced on its own so each track knows which library it is
+  // in (the Library rule). With no folders configured, that is every library the
+  // user can see; if the folder list can't be read, fall back to one unscoped pass.
+  const folders = await getMusicFolders(db);
+  const targets = folderIds.length > 0 ? folderIds
+    : folders.length > 0 ? folders.map(f => String(f.id))
+    : [null];
   logger.info('navidrome', `library sync started — folders: ${folderIds.length > 0 ? folderIds.join(', ') : 'all'}`);
+
+  if (folders.length > 0) {
+    const saveLibraries = db.transaction(list => {
+      db.prepare('DELETE FROM libraries').run();
+      const ins = db.prepare('INSERT INTO libraries (id, name, synced_at) VALUES (?, ?, ?)');
+      for (const f of list) ins.run(String(f.id), f.name ?? `Library ${f.id}`, syncedAt);
+    });
+    saveLibraries(folders);
+  }
 
   const upsert = db.prepare(`
     INSERT INTO tracks (id, title, artist, artist_id, album, album_id,
-      duration, year, genre, play_count, starred, user_rating, bit_rate, mbid, synced_at)
+      duration, year, genre, play_count, starred, user_rating, bit_rate, mbid, library_id, synced_at)
     VALUES (@id, @title, @artist, @artistId, @album, @albumId,
-      @duration, @year, @genre, @playCount, @starred, @userRating, @bitRate, @mbid, @syncedAt)
+      @duration, @year, @genre, @playCount, @starred, @userRating, @bitRate, @mbid, @libraryId, @syncedAt)
     ON CONFLICT(id) DO UPDATE SET
       title       = excluded.title,
       artist      = excluded.artist,
@@ -445,6 +461,7 @@ async function syncLibrary(db) {
       user_rating = excluded.user_rating,
       bit_rate    = excluded.bit_rate,
       mbid        = COALESCE(excluded.mbid, tracks.mbid),
+      library_id  = excluded.library_id,
       synced_at   = excluded.synced_at
   `);
 

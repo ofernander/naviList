@@ -21,12 +21,13 @@
 const logger = require('../utils/logger');
 const { cleanPool, orderByArtist, mixByPopularity, splitVersions, mixVersions, combineBlocks } = require('./finalize');
 const { similarForArtist } = require('./similar');
+const { songKey } = require('./studio');
 const { CONDITION_USES, SIMILAR_DEPTHS, SIMILAR_SOURCES, canonicalTerm, normalizeRules, shareProblem,
         MIX_TIERS, mixProblem, mixWeights, RATING_VALUES } = require('./playlist_types');
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const SUPPORTED_TERMS = ['artist', 'genre', 'stats', 'decade', 'mood', 'rating'];
+const SUPPORTED_TERMS = ['artist', 'genre', 'stats', 'decade', 'mood', 'rating', 'library'];
 const SUPPORTED_STATS = ['top_played', 'recently_played', 'not_recently_played', 'unplayed', 'starred', 'highly_rated', 'loved', 'disliked', 'top_artists'];
 // Stats values whose result is a meaningful best-first ranking.
 const RANKED_STATS    = ['top_played', 'recently_played', 'top_artists', 'highly_rated'];
@@ -95,6 +96,7 @@ async function resolveRule(db, rule) {
     case 'artist':  return resolveArtist(db, rule);
     case 'mood':    return resolveMood(db, rule);
     case 'rating':  return resolveRating(db, rule);
+    case 'library': return resolveLibrary(db, rule);
     default:
       logger.warn('pl_engine', `unknown term: ${rule.term}`);
       return [];
@@ -163,7 +165,10 @@ async function generatePlaylist(db, config) {
 
   // A single block's share is ignored — it is the whole playlist.
   const shares = config.blocks.length > 1 ? config.blocks.map(b => b.share) : [undefined];
-  const ids = combineBlocks(lists, shares, limit);
+  // A song is used once even when two blocks hold different copies of it (e.g.
+  // the same song in two libraries).
+  const getSong = db.prepare('SELECT artist, title FROM tracks WHERE id = ?');
+  const ids = combineBlocks(lists, shares, limit, id => songKey(getSong.get(id) || { title: id }));
   if (!ids.length) logger.info('pl_engine', 'no tracks matched any block');
   logger.info('pl_engine', `generated ${ids.length} tracks from ${config.blocks.length} block(s), ${config.conditions.length} shared condition(s)`);
   return ids;
@@ -465,6 +470,16 @@ function resolveRating(db, rule) {
   else if (/^max[2-4]$/.test(v))  { where = 'user_rating BETWEEN 1 AND ?'; args = [Number(v.slice(3))]; }
   else { logger.warn('pl_engine', `unknown rating value: ${rule.value}`); return []; }
   return db.prepare(`SELECT id FROM tracks WHERE ${where}`).all(...args).map(r => r.id);
+}
+
+/**
+ * library — tracks in the given Navidrome library (music folder) id, or any of
+ * several ids. Tracks are tagged with their library at library sync.
+ */
+function resolveLibrary(db, rule) {
+  const ids = (Array.isArray(rule.value) ? rule.value : [rule.value]).map(String);
+  const ph  = ids.map(() => '?').join(', ');
+  return db.prepare(`SELECT id FROM tracks WHERE library_id IN (${ph})`).all(...ids).map(r => r.id);
 }
 
 /**
